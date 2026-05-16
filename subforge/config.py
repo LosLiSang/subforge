@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import os
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +20,7 @@ source_lang = "ja"
 target_lang = "zh"
 batch_size = 20
 context_size = 10
+workers = 8
 
 [llm]
 api_key = ""
@@ -27,6 +30,10 @@ model = "gpt-4o"
 [processing]
 concurrency = 2
 output_dir = ""
+
+[logging]
+level = "INFO"
+file = "subforge.log"
 """
 
 
@@ -39,6 +46,7 @@ class Config:
     target_lang: str = "zh"
     batch_size: int = 20
     context_size: int = 10
+    translate_workers: int = 8
     # LLM
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
@@ -46,6 +54,9 @@ class Config:
     # Processing
     concurrency: int = 2
     output_dir: Path | None = None
+    # Logging
+    log_level: str = "INFO"
+    log_file: str = "subforge.log"
     # Paths
     config_path: Path = field(default=DEFAULT_CONFIG_PATH)
     models_dir: Path = field(default=DEFAULT_MODELS_DIR)
@@ -74,6 +85,7 @@ def _apply_env_overrides(cfg: dict) -> None:
         "LLM_API_KEY": ("llm", "api_key"),
         "LLM_BASE_URL": ("llm", "base_url"),
         "LLM_MODEL": ("llm", "model"),
+        "SUBFORGE_LOG_LEVEL": ("logging", "level"),
     }
     for env_var, (section, key) in env_map.items():
         val = os.environ.get(env_var)
@@ -106,10 +118,13 @@ def load_config(
     kwargs["target_lang"] = toml_data.get("translate", {}).get("target_lang", "zh")
     kwargs["batch_size"] = int(toml_data.get("translate", {}).get("batch_size", 20))
     kwargs["context_size"] = int(toml_data.get("translate", {}).get("context_size", 10))
+    kwargs["translate_workers"] = int(toml_data.get("translate", {}).get("workers", 8))
     kwargs["llm_api_key"] = toml_data.get("llm", {}).get("api_key", "")
     kwargs["llm_base_url"] = toml_data.get("llm", {}).get("base_url", "https://api.openai.com/v1")
     kwargs["llm_model"] = toml_data.get("llm", {}).get("model", "gpt-4o")
     kwargs["concurrency"] = int(toml_data.get("processing", {}).get("concurrency", 2))
+    kwargs["log_level"] = toml_data.get("logging", {}).get("level", "INFO")
+    kwargs["log_file"] = toml_data.get("logging", {}).get("file", "subforge.log")
     output_dir = toml_data.get("processing", {}).get("output_dir", "")
     kwargs["output_dir"] = Path(output_dir) if output_dir else None
     kwargs["config_path"] = path
@@ -122,3 +137,48 @@ def load_config(
                 kwargs[key] = val
 
     return Config(**kwargs)
+
+
+class _DEBUGFilter(logging.Filter):
+    """Reject DEBUG messages — used on StreamHandler to keep stderr clean."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno != logging.DEBUG
+
+
+def setup_logging(config: Config) -> None:
+    """Initialize the logging system.
+
+    Configures two handlers:
+    - StreamHandler(sys.stderr): INFO+ (DEBUG filtered out)
+    - FileHandler(config.log_file): all levels
+
+    If the file handler cannot be created, degrades gracefully to stderr-only.
+    """
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
+
+    fmt = logging.Formatter(
+        "%(asctime)s  %(levelname)-7s [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # Clear any pre-existing handlers (e.g. from pytest or other configs)
+    root.handlers.clear()
+
+    # Stream handler — stderr, rejects DEBUG
+    stream_handler = logging.StreamHandler(sys.stderr)
+    stream_handler.setLevel(root.level)
+    stream_handler.addFilter(_DEBUGFilter())
+    stream_handler.setFormatter(fmt)
+    root.addHandler(stream_handler)
+
+    # File handler — all levels
+    try:
+        file_handler = logging.FileHandler(config.log_file, encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(fmt)
+        root.addHandler(file_handler)
+    except OSError as e:
+        root.warning("Cannot create log file %s: %s — logging to stderr only",
+                      config.log_file, e)

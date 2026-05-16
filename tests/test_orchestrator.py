@@ -44,7 +44,7 @@ class TestProcessOne:
                 side_effect=fake_translate,
             ),
         ):
-            await process_one(job, config)
+            await process_one(job, config, pbar_slot=0)
 
         assert job.status == JobStatus.DONE
         assert job.asr_progress == 1.0
@@ -58,7 +58,7 @@ class TestProcessOne:
             "subforge.orchestrator.asr_transcribe",
             side_effect=RuntimeError("ASR crashed"),
         ):
-            await process_one(job, config)
+            await process_one(job, config, pbar_slot=0)
 
         assert job.status == JobStatus.FAILED
         assert "RuntimeError" in (job.error or "")
@@ -79,7 +79,7 @@ class TestProcessOne:
                 side_effect=bad_translate,
             ),
         ):
-            await process_one(job, config)
+            await process_one(job, config, pbar_slot=0)
 
         assert job.status == JobStatus.FAILED
         assert "API down" in (job.error or "")

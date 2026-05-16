@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import sys
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".mp3", ".mp4", ".wav", ".m4a", ".flac"}
 
@@ -20,7 +22,7 @@ def scan_paths(paths: list[Path]) -> list[Path]:
 
     for p in paths:
         if not p.exists():
-            print(f"Skipping: {p} (not found)", file=sys.stderr)
+            logger.warning("Skipping: %s (not found)", p)
             continue
 
         if p.is_file():
@@ -35,7 +37,7 @@ def scan_paths(paths: list[Path]) -> list[Path]:
 
 def _collect_file(file_path: Path, result: list[Path], seen: set[Path]) -> None:
     if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-        print(f"Skipping: {file_path} (unsupported format)", file=sys.stderr)
+        logger.warning("Skipping: %s (unsupported format)", file_path)
         return
     if file_path in seen:
         return

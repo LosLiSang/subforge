@@ -45,7 +45,7 @@ class TestScanPaths:
         assert f1 in result
         assert f2 in result
 
-    def test_unsupported_format_filtered(self, tmp_path, capsys):
+    def test_unsupported_format_filtered(self, tmp_path, caplog):
         mp3 = tmp_path / "keep.mp3"
         txt = tmp_path / "skip.txt"
         png = tmp_path / "skip.png"
@@ -54,8 +54,7 @@ class TestScanPaths:
         png.write_text("")
         result = scan_paths([tmp_path])
         assert result == [mp3]
-        stderr = capsys.readouterr().err
-        assert "unsupported format" in stderr
+        assert "unsupported format" in caplog.text
 
     def test_all_supported_formats(self, tmp_path):
         files = []
@@ -66,11 +65,11 @@ class TestScanPaths:
         result = scan_paths([tmp_path])
         assert len(result) == 5
 
-    def test_not_found(self, tmp_path, capsys):
+    def test_not_found(self, tmp_path, caplog):
         missing = tmp_path / "nope.mp3"
         result = scan_paths([missing])
         assert result == []
-        assert "not found" in capsys.readouterr().err
+        assert "not found" in caplog.text
 
     def test_deduplication(self, tmp_path):
         f = tmp_path / "dup.mp3"

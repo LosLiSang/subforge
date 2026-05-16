@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import sys
+import logging
 import time
 from pathlib import Path
 
+from tqdm import tqdm
+
 from subforge.asr.engine import transcribe as asr_transcribe
+from subforge.asr.model_manager import ensure_model
 from subforge.config import Config
 from subforge.models import Job, JobStatus
 from subforge.timeline import adjust_gaps, merge_short_entries
@@ -13,22 +16,56 @@ from subforge.translate.context import translate_all
 from subforge.translate.llm_client import LLMError, translate_batch
 from subforge.translate.srt_io import write_srt
 
+logger = logging.getLogger(__name__)
 
-async def process_one(job: Job, config: Config) -> None:
+
+class _SlotAllocator:
+    """Manage tqdm position slots so concurrent jobs don't overwrite each other."""
+
+    def __init__(self, num_slots: int) -> None:
+        self._available = asyncio.Queue()
+        for i in range(num_slots):
+            self._available.put_nowait(i)
+
+    async def acquire(self) -> int:
+        return await self._available.get()
+
+    async def release(self, slot: int) -> None:
+        await self._available.put(slot)
+
+
+async def process_one(job: Job, config: Config, pbar_slot: int) -> None:
     """Process a single file: ASR → timeline fix → translate → write output."""
     job.status = JobStatus.ASR_RUNNING
     job.started_at = time.time()
-    print(f"[{job.id}] {job.file_path.name}: ASR started", file=sys.stderr)
+    logger.info("[%s] %s: ASR started", job.id, job.file_path.name)
 
     try:
         # Stage 1: ASR
+        _available, local_only = ensure_model(job.model_size, config.models_dir)
+        asr_bar = tqdm(
+            total=1.0,
+            desc=f"[ASR] {job.file_path.name}",
+            position=pbar_slot,
+            leave=False,
+            unit="",
+            bar_format="{desc}: {percentage:3.0f}%|{bar}| {elapsed}",
+        )
+
+        def _asr_progress(value: float) -> None:
+            asr_bar.n = value
+            asr_bar.refresh()
+
         entries = await asyncio.to_thread(
             asr_transcribe,
             job.file_path,
             model_size=job.model_size,
             language=job.source_lang,
             models_dir=config.models_dir,
+            local_files_only=local_only,
+            progress_callback=_asr_progress,
         )
+        asr_bar.close()
         job.asr_progress = 1.0
 
         if not entries:
@@ -43,13 +80,31 @@ async def process_one(job: Job, config: Config) -> None:
         if config.output_dir:
             source_srt_path = config.output_dir / source_srt_path.name
         write_srt(entries, source_srt_path)
-        print(f"[{job.id}] {job.file_path.name}: Source SRT → {source_srt_path}", file=sys.stderr)
+        logger.info("[%s] %s: Source SRT → %s", job.id, job.file_path.name, source_srt_path)
 
         # Stage 2: Translation
         job.status = JobStatus.TRANSLATING
-        print(f"[{job.id}] {job.file_path.name}: Translation started", file=sys.stderr)
+        logger.info("[%s] %s: Translation started", job.id, job.file_path.name)
 
-        translated = await translate_all(entries, config, translate_batch)
+        total_batches = -(-len(entries) // config.batch_size)  # ceil division
+        translate_bar = tqdm(
+            total=total_batches,
+            desc=f"[Translate] {job.file_path.name}",
+            position=pbar_slot,
+            leave=False,
+            unit="batch",
+            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} batches",
+        )
+
+        def _tl_progress(done: int, _total: int) -> None:
+            translate_bar.n = done
+            translate_bar.refresh()
+
+        translated = await translate_all(
+            entries, config, translate_batch,
+            progress_callback=_tl_progress,
+        )
+        translate_bar.close()
 
         # Write target language SRT
         target_srt_path = job.file_path.parent / f"{job.file_path.stem}_{job.target_lang}.srt"
@@ -57,30 +112,31 @@ async def process_one(job: Job, config: Config) -> None:
             target_srt_path = config.output_dir / target_srt_path.name
         write_srt(translated, target_srt_path)
         job.translate_progress = 1.0
-        print(f"[{job.id}] {job.file_path.name}: Target SRT → {target_srt_path}", file=sys.stderr)
+        logger.info("[%s] %s: Target SRT → %s", job.id, job.file_path.name, target_srt_path)
 
         job.status = JobStatus.DONE
         job.finished_at = time.time()
         elapsed = job.finished_at - job.started_at
-        print(f"[{job.id}] {job.file_path.name}: Done in {elapsed:.1f}s", file=sys.stderr)
+        logger.info("[%s] %s: Done in %.1fs", job.id, job.file_path.name, elapsed)
 
     except LLMError as e:
         job.status = JobStatus.FAILED
         job.error = f"Translation failed: {e}"
         job.finished_at = time.time()
-        print(f"[{job.id}] {job.file_path.name}: FAILED — {e}", file=sys.stderr)
+        logger.error("[%s] %s: FAILED — %s", job.id, job.file_path.name, e)
         # Source SRT was already written, so partial success
 
     except Exception as e:
         job.status = JobStatus.FAILED
         job.error = f"{type(e).__name__}: {e}"
         job.finished_at = time.time()
-        print(f"[{job.id}] {job.file_path.name}: FAILED — {e}", file=sys.stderr)
+        logger.exception("[%s] %s: FAILED", job.id, job.file_path.name)
 
 
 async def _worker(
     queue: asyncio.Queue[Job | None],
     semaphore: asyncio.Semaphore,
+    slots: _SlotAllocator,
     config: Config,
 ) -> None:
     while True:
@@ -89,7 +145,11 @@ async def _worker(
             queue.task_done()
             break
         async with semaphore:
-            await process_one(job, config)
+            slot = await slots.acquire()
+            try:
+                await process_one(job, config, slot)
+            finally:
+                await slots.release(slot)
         queue.task_done()
 
 
@@ -114,13 +174,13 @@ async def process_all(jobs: list[Job], config: Config) -> dict:
         queue.put_nowait(None)
 
     total = len(jobs)
-    print(f"\nProcessing {total} file(s) with concurrency={config.concurrency}\n",
-          file=sys.stderr)
+    logger.info("Processing %d file(s) with concurrency=%d", total, config.concurrency)
 
+    slots = _SlotAllocator(config.concurrency)
     started_at = time.time()
 
     workers = [
-        asyncio.create_task(_worker(queue, semaphore, config))
+        asyncio.create_task(_worker(queue, semaphore, slots, config))
         for _ in range(config.concurrency)
     ]
 
@@ -135,15 +195,14 @@ async def process_all(jobs: list[Job], config: Config) -> dict:
     succeeded = sum(1 for j in jobs if j.status == JobStatus.DONE)
     failed = sum(1 for j in jobs if j.status == JobStatus.FAILED)
 
-    print(f"\n{'='*50}", file=sys.stderr)
-    print(f"Done. Succeeded: {succeeded}, Failed: {failed}, Total time: {total_time:.1f}s",
-          file=sys.stderr)
+    logger.info("Done. Succeeded: %d, Failed: %d, Total time: %.1fs",
+                 succeeded, failed, total_time)
     for j in jobs:
         status = "OK" if j.status == JobStatus.DONE else "FAIL"
         elapsed = ""
         if j.started_at and j.finished_at:
             elapsed = f" ({j.finished_at - j.started_at:.1f}s)"
         error_str = f" — {j.error}" if j.error else ""
-        print(f"  [{status}] {j.file_path.name}{elapsed}{error_str}", file=sys.stderr)
+        logger.info("  [%s] %s%s%s", status, j.file_path.name, elapsed, error_str)
 
     return {"succeeded": succeeded, "failed": failed, "total_time": total_time}

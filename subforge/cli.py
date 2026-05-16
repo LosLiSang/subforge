@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 
 import click
 
 from subforge import __version__
-from subforge.config import load_config
+from subforge.config import load_config, setup_logging
 from subforge.models import Job
 from subforge.orchestrator import process_all
 from subforge.scanner import scan_paths
+
+logger = logging.getLogger(__name__)
 
 
 @click.command(context_settings={"max_content_width": 100})
@@ -66,6 +69,12 @@ from subforge.scanner import scan_paths
     type=click.Path(path_type=Path),
     help="Output directory for SRT files (default: same as source)",
 )
+@click.option(
+    "--log-level",
+    default=None,
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
+    help="Log level (default: INFO)",
+)
 @click.version_option(version=__version__, prog_name="subforge")
 def main(
     inputs: tuple[str, ...],
@@ -78,6 +87,7 @@ def main(
     llm_model: str | None,
     config_path: Path | None,
     output_dir: Path | None,
+    log_level: str | None,
 ) -> None:
     """Generate subtitles from audio/video files.
 
@@ -112,16 +122,19 @@ def main(
         cli_overrides["llm_model"] = llm_model
     if output_dir is not None:
         cli_overrides["output_dir"] = output_dir
+    if log_level is not None:
+        cli_overrides["log_level"] = log_level
 
     # Load configuration
     config = load_config(config_path=config_path, cli_overrides=cli_overrides)
+    setup_logging(config)
 
     # Scan input paths
     paths = [Path(p) for p in inputs]
     files = scan_paths(paths)
 
     if not files:
-        print("Error: No supported media files found.", file=sys.stderr)
+        logger.error("No supported media files found.")
         sys.exit(1)
 
     # Create jobs
@@ -139,7 +152,7 @@ def main(
     try:
         result = asyncio.run(process_all(jobs, config))
     except KeyboardInterrupt:
-        print("\nInterrupted by user.", file=sys.stderr)
+        logger.warning("Interrupted by user.")
         sys.exit(130)
 
     if result["failed"] > 0:

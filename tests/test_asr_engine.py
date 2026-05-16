@@ -24,8 +24,9 @@ def _generate_silent_wav(path: Path, duration_secs: float = 3.0, sample_rate: in
 class TestModelManager:
     def test_ensure_model_creates_dir(self, tmp_path):
         models_dir = tmp_path / "models"
-        result = ensure_model("tiny", models_dir)
-        assert result is True
+        available, local_only = ensure_model("tiny", models_dir)
+        assert available is True
+        assert isinstance(local_only, bool)
         assert models_dir.exists()
 
 

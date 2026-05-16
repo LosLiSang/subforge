@@ -1,19 +1,14 @@
 from __future__ import annotations
 
-import sys
+import logging
 import time
 from typing import Any
 
 import httpx
-from tenacity import (
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_exponential,
-    RetryError,
-)
 
 from subforge.config import Config
+
+logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
 _TIMEOUT = 120  # seconds
@@ -95,8 +90,8 @@ async def translate_batch(
         close_client = True
 
     masked_key = _mask_key(config.llm_api_key)
-    print(f"LLM: calling {config.llm_base_url} model={config.llm_model} key={masked_key}",
-          file=sys.stderr)
+    logger.info("LLM: calling %s model=%s key=%s",
+                 config.llm_base_url, config.llm_model, masked_key)
 
     headers = {
         "Authorization": f"Bearer {config.llm_api_key}",
@@ -133,15 +128,15 @@ async def translate_batch(
                 raise LLMError(f"Non-retryable HTTP error: {status}") from e
             retry_after = _get_retry_after(e)
             wait = retry_after if retry_after else (2 ** (attempt - 1))
-            print(f"LLM: HTTP {status} on attempt {attempt}/{_MAX_RETRIES}, "
-                  f"waiting {wait}s...", file=sys.stderr)
+            logger.warning("LLM: HTTP %d on attempt %d/%d, waiting %ds...",
+                           status, attempt, _MAX_RETRIES, wait)
             time.sleep(wait)
 
         except (httpx.TimeoutException, httpx.NetworkError) as e:
             last_exception = e
             wait = 2 ** (attempt - 1)
-            print(f"LLM: {type(e).__name__} on attempt {attempt}/{_MAX_RETRIES}, "
-                  f"waiting {wait}s...", file=sys.stderr)
+            logger.warning("LLM: %s on attempt %d/%d, waiting %ds...",
+                           type(e).__name__, attempt, _MAX_RETRIES, wait)
             time.sleep(wait)
 
     if close_client:

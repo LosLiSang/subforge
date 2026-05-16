@@ -29,8 +29,9 @@ class TestEnsureDefaultConfig:
 
 
 class TestLoadConfigDefaults:
-    def test_all_defaults(self):
-        config = load_config()
+    def test_all_defaults(self, tmp_path):
+        # Use a non-existent config file to get pure defaults
+        config = load_config(config_path=tmp_path / "nonexistent.toml")
         assert config.model == "medium"
         assert config.source_lang == "ja"
         assert config.target_lang == "zh"
@@ -39,6 +40,9 @@ class TestLoadConfigDefaults:
         assert config.llm_base_url == "https://api.openai.com/v1"
         assert config.llm_model == "gpt-4o"
         assert config.concurrency == 2
+        assert config.translate_workers == 8
+        assert config.log_level == "INFO"
+        assert config.log_file == "subforge.log"
         assert config.output_dir is None
         assert config.models_dir == Path.home() / ".subforge" / "models"
 

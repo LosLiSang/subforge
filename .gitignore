@@ -1,0 +1,9 @@
+.claude
+.vscode
+music
+
+uv.lock
+.venv
+.DS_Store
+.pytest_cache
+__pycache__

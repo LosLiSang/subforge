@@ -1,0 +1,37 @@
+[project]
+name = "subforge"
+version = "0.1.0"
+description = "SubForge — automatic subtitle generation tool with ASR + LLM translation"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "lxtoa" }
+]
+dependencies = [
+    "faster-whisper>=1.0",
+    "httpx>=0.27",
+    "tenacity>=8.0",
+    "tqdm>=4.0",
+    "click>=8.0",
+]
+
+[project.scripts]
+subforge = "subforge.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["subforge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+]

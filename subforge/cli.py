@@ -17,6 +17,17 @@ from subforge.scanner import scan_paths
 
 logger = logging.getLogger(__name__)
 
+_ASMR_PRESET = {
+    "vad_threshold": 0.2,
+    "vad_min_speech_duration_ms": 100,
+    "vad_min_silence_duration_ms": 300,
+    "vad_speech_pad_ms": 600,
+    "vad_max_speech_duration_s": 20.0,
+    "condition_on_previous_text": False,
+    "no_speech_threshold": 0.3,
+    "preprocess_audio": True,
+}
+
 
 @click.command(context_settings={"max_content_width": 100})
 @click.argument("inputs", nargs=-1, required=True, type=click.Path(exists=True))
@@ -24,6 +35,18 @@ logger = logging.getLogger(__name__)
     "--model",
     default=None,
     help="ASR model size: tiny/base/small/medium/large (default: medium)",
+)
+@click.option(
+    "--device",
+    default=None,
+    type=click.Choice(["cpu", "cuda", "auto"]),
+    help="Compute device: cpu / cuda / auto (default: cpu)",
+)
+@click.option(
+    "--compute-type",
+    default=None,
+    type=click.Choice(["default", "auto", "float16", "int8_float16", "int8", "float32"]),
+    help="Compute type: float16 is fastest on GPU, int8 best on CPU (default: default)",
 )
 @click.option(
     "--source-lang",
@@ -70,6 +93,12 @@ logger = logging.getLogger(__name__)
     help="Output directory for SRT files (default: same as source)",
 )
 @click.option(
+    "--asmr",
+    is_flag=True,
+    default=False,
+    help="Apply ASMR-optimized VAD and Whisper parameters for whispered audio",
+)
+@click.option(
     "--log-level",
     default=None,
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
@@ -79,6 +108,8 @@ logger = logging.getLogger(__name__)
 def main(
     inputs: tuple[str, ...],
     model: str | None,
+    device: str | None,
+    compute_type: str | None,
     source_lang: str | None,
     target_lang: str | None,
     concurrency: int | None,
@@ -87,6 +118,7 @@ def main(
     llm_model: str | None,
     config_path: Path | None,
     output_dir: Path | None,
+    asmr: bool,
     log_level: str | None,
 ) -> None:
     """Generate subtitles from audio/video files.
@@ -106,8 +138,17 @@ def main(
 
     # Collect CLI overrides (only non-None values)
     cli_overrides: dict = {}
+
+    # ASMR preset: insert first so explicit CLI flags can override
+    if asmr:
+        cli_overrides.update(_ASMR_PRESET)
+
     if model is not None:
         cli_overrides["model"] = model
+    if device is not None:
+        cli_overrides["device"] = device
+    if compute_type is not None:
+        cli_overrides["compute_type"] = compute_type
     if source_lang is not None:
         cli_overrides["source_lang"] = source_lang
     if target_lang is not None:

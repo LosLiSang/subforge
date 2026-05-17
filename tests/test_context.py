@@ -89,14 +89,14 @@ class TestBuildUserMessage:
         assert "こんにちは" in msg
         assert "元気ですか" in msg
         assert "Entries to translate" in msg
-        assert "Previous translations" not in msg
+        assert "Previous entries" not in msg
 
     def test_with_prev_context(self):
         batch = [SubtitleEntry(index=3, start=4.0, end=5.0, text="New text")]
-        prev = [(SubtitleEntry(index=1, start=0.0, end=2.0, text="Old"), "旧的")]
+        prev = [SubtitleEntry(index=1, start=0.0, end=2.0, text="Old")]
         msg = _build_user_message(batch, prev, [])
-        assert "Previous translations" in msg
-        assert "旧" in msg
+        assert "Previous entries" in msg
+        assert "Old" in msg
         assert "New text" in msg
 
     def test_with_next_context(self):
@@ -109,10 +109,10 @@ class TestBuildUserMessage:
 
     def test_full_context(self):
         batch = [SubtitleEntry(index=2, start=1.0, end=2.0, text="Middle")]
-        prev = [(SubtitleEntry(index=1, start=0.0, end=1.0, text="First"), "第一")]
+        prev = [SubtitleEntry(index=1, start=0.0, end=1.0, text="First")]
         next_entries = [SubtitleEntry(index=3, start=2.0, end=3.0, text="Last")]
         msg = _build_user_message(batch, prev, next_entries)
-        assert "Previous translations" in msg
+        assert "Previous entries" in msg
         assert "Entries to translate" in msg
         assert "Upcoming entries" in msg
 

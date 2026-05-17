@@ -63,6 +63,17 @@ async def process_one(job: Job, config: Config, pbar_slot: int) -> None:
             language=job.source_lang,
             models_dir=config.models_dir,
             local_files_only=local_only,
+            device=config.device,
+            compute_type=config.compute_type,
+            vad_filter=config.vad_filter,
+            vad_threshold=config.vad_threshold,
+            vad_min_speech_duration_ms=config.vad_min_speech_duration_ms,
+            vad_min_silence_duration_ms=config.vad_min_silence_duration_ms,
+            vad_speech_pad_ms=config.vad_speech_pad_ms,
+            vad_max_speech_duration_s=config.vad_max_speech_duration_s,
+            condition_on_previous_text=config.condition_on_previous_text,
+            no_speech_threshold=config.no_speech_threshold,
+            preprocess_audio=config.preprocess_audio,
             progress_callback=_asr_progress,
         )
         asr_bar.close()

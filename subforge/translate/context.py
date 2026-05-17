@@ -24,17 +24,16 @@ in the same order as the input.
 
 def _build_user_message(
     batch: list[SubtitleEntry],
-    prev_context: list[tuple[SubtitleEntry, str]],
+    prev_context: list[SubtitleEntry],
     next_context: list[SubtitleEntry],
 ) -> str:
-    """Build the user message with context and batch entries."""
+    """Build the user message with source-only context and batch entries."""
     parts: list[str] = []
 
     if prev_context:
-        parts.append("=== Previous translations (for context) ===")
-        for entry, translated in prev_context:
-            parts.append(f"[{entry.index}] Original: {entry.text}")
-            parts.append(f"[{entry.index}] Translation: {translated}")
+        parts.append("=== Previous entries (for context) ===")
+        for entry in prev_context:
+            parts.append(f"[{entry.index}] {entry.text}")
         parts.append("")
 
     parts.append("=== Entries to translate ===")
@@ -70,49 +69,6 @@ def _parse_translations(response: str, batch: list[SubtitleEntry]) -> list[str]:
     return translations
 
 
-class _DependencyTracker:
-    """Track which batches are ready to translate based on context dependencies.
-
-    A batch is ready when all batches whose entries appear in its prev_context
-    window have been translated.
-    """
-
-    def __init__(self, total_batches: int, batch_size: int, context_size: int) -> None:
-        self._total = total_batches
-        self._deps: dict[int, set[int]] = {i: set() for i in range(total_batches)}
-        self._dependents: dict[int, set[int]] = {i: set() for i in range(total_batches)}
-        self._done: set[int] = set()
-
-        if context_size <= 0:
-            return  # all batches independent
-
-        for idx in range(total_batches):
-            start = idx * batch_size
-            prev_start = max(0, start - context_size)
-            if prev_start < start:
-                first_batch = prev_start // batch_size
-                last_batch = min((start - 1) // batch_size, idx - 1)
-                for dep_idx in range(first_batch, last_batch + 1):
-                    self._deps[idx].add(dep_idx)
-                    self._dependents[dep_idx].add(idx)
-
-    def initial_ready(self) -> list[int]:
-        """Return batch indices that have no dependencies (ready immediately)."""
-        return [i for i in range(self._total) if not self._deps[i]]
-
-    def mark_done(self, batch_idx: int) -> list[int]:
-        """Mark a batch as done and return any newly-ready batch indices."""
-        self._done.add(batch_idx)
-        newly_ready: list[int] = []
-        for dep_idx in self._dependents.get(batch_idx, set()):
-            if dep_idx not in self._done and self._deps[dep_idx].issubset(self._done):
-                newly_ready.append(dep_idx)
-        return newly_ready
-
-    def all_done(self) -> bool:
-        return len(self._done) == self._total
-
-
 def build_batches(
     entries: list[SubtitleEntry],
     batch_size: int = 20,
@@ -140,26 +96,24 @@ async def translate_all(
     llm_translate_fn,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[SubtitleEntry]:
-    """Translate all subtitle entries with dependency-aware concurrency.
+    """Translate all subtitle entries with full concurrency.
 
-    Uses a DependencyTracker to respect the sliding context window: a batch
-    is only submitted when all batches providing its prev_context are done.
+    All batches are independent — context uses source-language text only
+    (both previous and upcoming entries), so there is no dependency chain.
     Up to config.translate_workers batches may be in-flight concurrently.
     """
     batches = build_batches(entries, config.batch_size, config.context_size)
     if not batches:
         return []
 
-    tracker = _DependencyTracker(len(batches), config.batch_size, config.context_size)
     translated_map: dict[int, str] = {}
     completed_count = 0
 
-    # Ready queue + semaphore for concurrency control
-    ready_queue: asyncio.Queue[int] = asyncio.Queue()
+    queue: asyncio.Queue[int] = asyncio.Queue()
     semaphore = asyncio.Semaphore(config.translate_workers)
 
-    for idx in tracker.initial_ready():
-        ready_queue.put_nowait(idx)
+    for idx in range(len(batches)):
+        queue.put_nowait(idx)
 
     async def _translate_batch(batch_idx: int) -> None:
         nonlocal completed_count
@@ -169,13 +123,7 @@ async def translate_all(
         prev_entries = batch_info["prev_context"]
         next_entries = batch_info["next_context"]
 
-        # Build context from already-translated entries
-        prev_context: list[tuple[SubtitleEntry, str]] = []
-        for entry in prev_entries:
-            if entry.index in translated_map:
-                prev_context.append((entry, translated_map[entry.index]))
-
-        user_msg = _build_user_message(batch, prev_context, next_entries)
+        user_msg = _build_user_message(batch, prev_entries, next_entries)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT.format(
                 source_lang=config.source_lang,
@@ -198,7 +146,7 @@ async def translate_all(
     async def _worker() -> None:
         nonlocal completed_count, first_error
         while True:
-            batch_idx = await ready_queue.get()
+            batch_idx = await queue.get()
             try:
                 try:
                     async with semaphore:
@@ -208,33 +156,26 @@ async def translate_all(
                         first_error = exc
                     raise
             finally:
-                newly_ready = tracker.mark_done(batch_idx)
                 completed_count += 1
-                for new_idx in newly_ready:
-                    ready_queue.put_nowait(new_idx)
                 if progress_callback:
                     progress_callback(completed_count, len(batches))
-                ready_queue.task_done()
+                queue.task_done()
 
-    # Launch workers
     worker_tasks = [
         asyncio.create_task(_worker())
         for _ in range(min(config.translate_workers, len(batches)))
     ]
 
-    await ready_queue.join()
+    await queue.join()
 
-    # If any batch failed, cancel remaining workers and raise
     if first_error is not None:
         for t in worker_tasks:
             t.cancel()
         raise first_error
 
-    # Stop workers
     for t in worker_tasks:
         t.cancel()
 
-    # Reconstruct ordered result
     result: list[SubtitleEntry] = []
     for entry in entries:
         result.append(SubtitleEntry(

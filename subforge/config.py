@@ -12,27 +12,74 @@ DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
 DEFAULT_MODELS_DIR = DEFAULT_CONFIG_DIR / "models"
 
 DEFAULT_CONFIG_TOML = """\
+# ── ASR (Speech Recognition) ────────────────────────────────────────────
 [asr]
+# Whisper model size: tiny / base / small / medium / large-v3
 model = "medium"
+# Source audio language (ISO 639-1 code)
 source_lang = "ja"
+# Compute device: cpu / cuda / auto
+device = "cpu"
+# Compute type: default / auto / float16 / int8_float16 / int8 / float32
+# float16 is fastest on GPU; int8 is best on CPU
+compute_type = "default"
+# Enable Silero VAD to skip non-speech segments
+vad_filter = true
+# VAD speech probability threshold (0.0–1.0). Lower = more sensitive.
+# 0.5 for normal speech; 0.2–0.3 for ASMR / whispered audio.
+vad_threshold = 0.5
+# Minimum speech chunk duration (ms). Lower to keep short gasps / breaths.
+vad_min_speech_duration_ms = 250
+# Minimum silence between chunks (ms). Lower to split sentences more finely.
+vad_min_silence_duration_ms = 2000
+# Padding added before and after each speech segment (ms).
+# Raise to prevent clipping of leading/trailing consonants.
+vad_speech_pad_ms = 400
+# Maximum segment duration in seconds. 0 = no limit.
+# Lower (e.g. 20) to reduce hallucination drift in long monologues.
+vad_max_speech_duration_s = 0
+# Use previous segment text as prompt for next segment.
+# IMPORTANT: set to false for ASMR to prevent hallucination propagation.
+condition_on_previous_text = true
+# Whisper silence detection threshold (0.0–1.0). Lower = less likely to
+# classify quiet speech as silence. 0.3 recommended for ASMR.
+no_speech_threshold = 0.6
+# Run ffmpeg loudnorm + mono conversion before ASR.
+# Essential for whispered / low-volume audio so VAD can detect speech.
+preprocess_audio = false
 
+# ── Translation ─────────────────────────────────────────────────────────
 [translate]
+# Target language for translation (ISO 639-1 code)
 target_lang = "zh"
+# Number of subtitle entries per LLM call
 batch_size = 20
+# Surrounding entries sent to LLM for translation context
 context_size = 10
+# Max parallel LLM translation calls
 workers = 8
 
+# ── LLM API ─────────────────────────────────────────────────────────────
 [llm]
+# OpenAI-compatible API key (or set LLM_API_KEY env var)
 api_key = ""
+# API base URL (OpenAI, DeepSeek, Ollama, Groq, etc.)
 base_url = "https://api.openai.com/v1"
+# Model name
 model = "gpt-4o"
 
+# ── General ─────────────────────────────────────────────────────────────
 [processing]
+# Max audio files processed in parallel
 concurrency = 2
+# Output directory for generated SRT files (empty = same as source)
 output_dir = ""
 
+# ── Logging ─────────────────────────────────────────────────────────────
 [logging]
+# Log level: DEBUG / INFO / WARNING / ERROR
 level = "INFO"
+# Log file name (written to current working directory)
 file = "subforge.log"
 """
 
@@ -42,6 +89,17 @@ class Config:
     # ASR
     model: str = "medium"
     source_lang: str = "ja"
+    device: str = "cpu"
+    compute_type: str = "default"
+    vad_filter: bool = True
+    vad_threshold: float = 0.5
+    vad_min_speech_duration_ms: int = 250
+    vad_min_silence_duration_ms: int = 2000
+    vad_speech_pad_ms: int = 400
+    vad_max_speech_duration_s: float = 0.0  # 0 = no limit (maps to inf)
+    condition_on_previous_text: bool = True
+    no_speech_threshold: float = 0.6
+    preprocess_audio: bool = False
     # Translate
     target_lang: str = "zh"
     batch_size: int = 20
@@ -115,6 +173,18 @@ def load_config(
     kwargs: dict = {}
     kwargs["model"] = toml_data.get("asr", {}).get("model", "medium")
     kwargs["source_lang"] = toml_data.get("asr", {}).get("source_lang", "ja")
+    kwargs["device"] = toml_data.get("asr", {}).get("device", "cpu")
+    kwargs["compute_type"] = toml_data.get("asr", {}).get("compute_type", "default")
+    kwargs["vad_filter"] = toml_data.get("asr", {}).get("vad_filter", True)
+    kwargs["vad_threshold"] = float(toml_data.get("asr", {}).get("vad_threshold", 0.5))
+    kwargs["vad_min_speech_duration_ms"] = int(toml_data.get("asr", {}).get("vad_min_speech_duration_ms", 250))
+    kwargs["vad_min_silence_duration_ms"] = int(toml_data.get("asr", {}).get("vad_min_silence_duration_ms", 2000))
+    kwargs["vad_speech_pad_ms"] = int(toml_data.get("asr", {}).get("vad_speech_pad_ms", 400))
+    _max_speech = float(toml_data.get("asr", {}).get("vad_max_speech_duration_s", 0))
+    kwargs["vad_max_speech_duration_s"] = _max_speech if _max_speech > 0 else float("inf")
+    kwargs["condition_on_previous_text"] = toml_data.get("asr", {}).get("condition_on_previous_text", True)
+    kwargs["no_speech_threshold"] = float(toml_data.get("asr", {}).get("no_speech_threshold", 0.6))
+    kwargs["preprocess_audio"] = toml_data.get("asr", {}).get("preprocess_audio", False)
     kwargs["target_lang"] = toml_data.get("translate", {}).get("target_lang", "zh")
     kwargs["batch_size"] = int(toml_data.get("translate", {}).get("batch_size", 20))
     kwargs["context_size"] = int(toml_data.get("translate", {}).get("context_size", 10))

@@ -1,147 +1,172 @@
 # SubForge
 
-Automatic subtitle generation tool: **ASR (Whisper)** + **LLM translation** → bilingual SRT files.
+同人音声 / 播客 / 视频一键字幕生成：**ASR 语音识别** + **LLM 翻译** → 双语 SRT。
 
-Pipeline: `Audio → faster-whisper ASR → timeline fix → LLM translate → .srt`
-
-## Features
-
-- **ASR** via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with local model caching
-- **Translation** via any OpenAI-compatible LLM API with configurable parallelism
-- **Timeline post-processing**: merge short segments, adjust gaps for readable subtitles
-- Multi-file concurrency (process several audio files in parallel)
-- Progress bars for both ASR and translation stages
-- Structured logging (stderr + file)
-
-## Requirements
-
-- Python 3.11+
-- ~2 GB disk for Whisper medium model (downloaded on first run)
-
-## Installation
-
-```bash
-# From local source (editable, with dev dependencies)
-uv sync
-
-# Install as global tool
-uv tool install .
-
-# From Git
-uv tool install git+https://github.com/<user>/subforge.git
-
-# pip
-pip install .
+```
+Audio → faster-whisper ASR → timeline fix → LLM translate → .srt
 ```
 
-## Quick Start
+## 场景
+
+| 场景 | 痛点 | SubForge 怎么解决 |
+|------|------|------------------|
+| **同人音声 / ASMR** | 耳语、气音被 VAD 当成静音删光 | `--asmr` 一键预设：低阈值 VAD + 响度归一化 + 幻觉抑制 |
+| **日语生肉** | 听不懂，网上找不到字幕 | medium 模型出日字，LLM 翻中文，双语 SRT 一起出 |
+| **批量处理** | 一个作品十几条音轨，手动一条条弄 | 目录扫描 + 多文件并发，扔进去就不用管 |
+| **GPU 加速** | CPU 跑 large-v3 半小时 | `--device auto` 切 GPU，3-5 分钟搞定 |
+| **本地 / 离线** | API 太贵或没网 | 支持 Ollama 本地模型，模型缓存一次永久离线用 |
+
+## 特色
+
+- **ASMR 专优**：`--asmr` 预设解决 VAD 吞耳语、幻觉传播、吞字三大难题
+- **真实并行翻译**：8 worker 并发调 LLM，6000 条字幕 ~4 分钟（修了 v0.2.0 的串行 bug）
+- **音频预处理**：内置 ffmpeg loudnorm，-45dB 耳语自动提到正常音量再送 VAD
+- **多文件并发**：目录扔进去，concurrency 个文件同时跑 ASR + 翻译
+- **模型缓存**：Whisper 模型下载一次，后续完全离线
+- **兼容 OpenAI API**：DeepSeek / Groq / Ollama / 任意 OpenAI 兼容端点
+- **进度条**：ASR 百分比 + 翻译批次双进度条
+
+## 快速启动
+
+### 1. 安装
 
 ```bash
-# Set your LLM API key (once)
-export LLM_API_KEY=sk-...
+git clone https://github.com/<user>/subforge.git
+cd subforge
+uv sync
+```
 
-# Generate subtitles: Japanese audio → Chinese SRT
+或全局安装：
+
+```bash
+uv tool install git+https://github.com/<user>/subforge.git
+```
+
+### 2. 配置 API Key
+
+```bash
+export LLM_API_KEY=sk-your-key
+export LLM_BASE_URL=https://api.deepseek.com/v1   # 可选，默认 OpenAI
+export LLM_MODEL=deepseek-chat                     # 可选
+```
+
+### 3. 跑
+
+```bash
+# 普通音频：日语 → 中文
 subforge audio.mp3
 
-# Batch process a directory, English target
-subforge ./downloads/ --target-lang en --concurrency 4
+# ASMR / 同人音声：一键优化
+subforge audio.m4a --asmr
 
-# Large model for better accuracy, custom API endpoint
-subforge video.mp4 --model large --llm-base-url https://your-api.com/v1
+# GPU 加速
+subforge audio.m4a --asmr --device auto --compute-type float16
+
+# 批量处理整个目录
+subforge ./RJ01499022/ --asmr --device auto
 ```
 
-## Pipeline
+输出：
+- `audio.srt` — 源语言字幕
+- `audio_zh.srt` — 翻译字幕
 
-```
-Audio file → ASR (Whisper) → raw segments
-    → merge short entries (< 300ms)
-    → adjust inter-segment gaps
-    → write source SRT (e.g. video.srt)
-    → LLM translate in parallel batches
-    → write target SRT (e.g. video_zh.srt)
-```
+### 配置文件
 
-## Configuration
-
-SubForge reads from `~/.subforge/config.toml` (auto-created on first run). Priority: **CLI flag > env var > config.toml > default**.
+首次运行自动生成 `~/.subforge/config.toml`（带完整注释）。常用选项：
 
 ```toml
 [asr]
-model = "medium"        # tiny / base / small / medium / large
-source_lang = "ja"
-
-[translate]
-target_lang = "zh"
-batch_size = 20         # entries per LLM call
-context_size = 10       # surrounding entries for context
-workers = 8             # parallel LLM calls
+model = "large-v3"               # 同人音声推荐大模型
+device = "auto"                  # 有 GPU 就 auto
+compute_type = "float16"         # GPU 最快
 
 [llm]
-api_key = ""            # or set LLM_API_KEY env var
-base_url = "https://api.openai.com/v1"
-model = "gpt-4o"
+api_key = ""                     # 或用环境变量 LLM_API_KEY
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-chat"
 
 [processing]
-concurrency = 2         # max parallel files
-output_dir = ""         # default: same as source
-
-[logging]
-level = "INFO"
-file = "subforge.log"
+concurrency = 2                  # 同时处理几个文件
 ```
 
-### Environment variables
-
-| Variable | Config key |
-|----------|-----------|
-| `LLM_API_KEY` | `llm.api_key` |
-| `LLM_BASE_URL` | `llm.base_url` |
-| `LLM_MODEL` | `llm.model` |
-| `SUBFORGE_LOG_LEVEL` | `logging.level` |
-
-### CLI options
+### CLI 速查
 
 ```
-subforge [OPTIONS] INPUTS...
+subforge INPUTS... [OPTIONS]
 
-  --model TEXT          ASR model size (tiny/base/small/medium/large)
-  --source-lang TEXT    Source language code (default: ja)
-  --target-lang TEXT    Target language code (default: zh)
-  --concurrency INT     Max parallel files (default: 2)
-  --llm-api-key TEXT    OpenAI API key
-  --llm-base-url TEXT   OpenAI API base URL
-  --llm-model TEXT      LLM model name
-  --output-dir PATH     Output directory for SRT files
-  --config PATH         Path to config.toml
-  --log-level [DEBUG|INFO|WARNING|ERROR]
+  --model TEXT           tiny / base / small / medium / large-v3
+  --device cpu|cuda|auto
+  --compute-type default|auto|float16|int8_float16|int8|float32
+  --source-lang TEXT     默认 ja
+  --target-lang TEXT     默认 zh
+  --asmr                 ASMR 预设（VAD + 响度 + 幻觉抑制）
+  --llm-api-key TEXT
+  --llm-base-url TEXT
+  --llm-model TEXT
+  --concurrency INT      默认 2
+  --output-dir PATH
 ```
 
-## Supported formats
-
-`.mp3` `.mp4` `.wav` `.m4a` `.flac`
-
-## LLM providers
-
-Any OpenAI-compatible endpoint works:
-
-| Provider | base_url | model example |
-|----------|----------|--------------|
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o` |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
-| Ollama (local) | `http://localhost:11434/v1` | `qwen3:32b` |
-| Groq | `https://api.groq.com/openai/v1` | `llama-3.3-70b` |
-
-## Example
+## 开发调试
 
 ```bash
-# ASMR (Japanese → Chinese) with large model + DeepSeek
-export LLM_API_KEY=sk-xxx
-export LLM_BASE_URL=https://api.deepseek.com/v1
-export LLM_MODEL=deepseek-chat
+# 安装开发依赖
+uv sync
 
-subforge ./RJ01499022.mp3 --model large
+# 跑测试（103 条）
+uv run pytest tests/ -q
+
+# 单文件测试
+uv run pytest tests/test_context.py -v
+
+# 调试日志
+subforge audio.m4a --log-level DEBUG --asmr
+
+# 日志文件
+tail -f subforge.log
 ```
 
-This produces:
-- `RJ01499022.srt` — Japanese subtitles
-- `RJ01499022_zh.srt` — Chinese translation
+### 项目结构
+
+```
+subforge/
+├── cli.py              # Click CLI 入口
+├── config.py           # 配置加载（TOML → dataclass）
+├── models.py           # Job / SubtitleEntry 数据模型
+├── orchestrator.py     # 主流程：ASR → timeline → translate
+├── scanner.py          # 文件扫描（支持目录递归）
+├── timeline.py         # 时间轴后处理（合并短段 / 间距调整）
+├── asr/
+│   ├── engine.py       # faster-whisper 转录封装
+│   └── model_manager.py # 模型缓存检测
+└── translate/
+    ├── context.py      # 批次构建 + 并发翻译调度
+    ├── llm_client.py   # LLM API 客户端（httpx + 重试）
+    └── srt_io.py       # SRT 文件读写
+tests/
+├── test_config.py
+├── test_context.py
+├── test_asr_engine.py
+├── test_orchestrator.py
+├── test_scanner.py
+└── test_e2e.py
+```
+
+### 参数流
+
+```
+config.toml [asr].device → Config field → orchestrator kwarg → engine parameter → WhisperModel(...)
+         CLI override ──────────────────────────────────────────────────────────┘
+         环境变量 ─────────────────────────────────────────────┘
+```
+
+## 后续开发
+
+- [ ] **BatchedInferencePipeline**：faster-whisper 批量推理，GPU 下还能再快 3-5x
+- [ ] **Silero VAD 预处理**：替掉 Whisper 内置 VAD，可单独调 threshold，支持音频分段可视化
+- [ ] **说话人分离 (diarization)**：标注"谁在说话"，多 CV 同人音声刚需
+- [ ] **字幕时间轴编辑**：输出后手动微调界面（Web UI 或 CLI 交互）
+- [ ] **断点续跑**：长音频中断后从上次进度继续
+- [ ] **多目标语言**：一次翻译出 en + zh + ko 多份 SRT
+- [ ] **XML/ASS 格式输出**：支持带样式的高级字幕格式
+- [ ] **Torch/tensorrt 后端**：NVIDIA GPU 上用 TensorRT，速度再翻倍

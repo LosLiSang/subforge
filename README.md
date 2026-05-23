@@ -30,6 +30,8 @@ Audio → faster-whisper ASR → timeline fix → LLM translate → .srt
 
 ### 1. 安装
 
+前置要求：**Python >= 3.11**、**[uv](https://docs.astral.sh/uv/)**、**[ffmpeg](https://ffmpeg.org/)**（`--asmr` 音频预处理必需）
+
 ```bash
 git clone https://github.com/LosLiSang/subforge.git
 cd subforge
@@ -70,6 +72,8 @@ subforge ./RJ01499022/ --asmr --device auto
 - `audio.srt` — 源语言字幕
 - `audio_zh.srt` — 翻译字幕
 
+支持格式：`.mp3` `.mp4` `.wav` `.m4a` `.flac`
+
 ### 配置文件
 
 首次运行自动生成 `~/.subforge/config.toml`（带完整注释）。常用选项：
@@ -88,6 +92,18 @@ model = "deepseek-chat"
 [processing]
 concurrency = 2                  # 同时处理几个文件
 ```
+
+### ASR 模型选型
+
+| 模型 | 显存 / 内存 | 相对速度 | 精度 | 适合场景 |
+|------|------------|---------|------|---------|
+| `tiny` | ~1 GB | 最快 | 一般 | 快速预览、测试 |
+| `base` | ~1 GB | 很快 | 尚可 | 简单对话 |
+| `small` | ~2 GB | 快 | 良好 | 日常使用 |
+| `medium` | ~5 GB | 中等 | 很好 | 默认选择，日语够用 |
+| `large-v3` | ~10 GB | 慢 | 最佳 | ASMR / 低语 / 复杂音频 |
+
+> 首次使用会自动下载模型到 `~/.subforge/models/`，后续完全离线。
 
 ### CLI 速查
 
@@ -167,6 +183,15 @@ config.toml [asr].device → Config field → orchestrator kwarg → engine para
          CLI override ──────────────────────────────────────────────────────────┘
          环境变量 ─────────────────────────────────────────────┘
 ```
+
+## 致谢
+
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — 基于 CTranslate2 的高效 Whisper 推理，SubForge 的 ASR 核心
+- [OpenAI Whisper](https://github.com/openai/whisper) — 语音识别基础模型
+
+## 许可证
+
+MIT License
 
 ## 后续开发
 

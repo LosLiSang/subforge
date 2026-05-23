@@ -31,7 +31,7 @@ Audio → faster-whisper ASR → timeline fix → LLM translate → .srt
 ### 1. 安装
 
 ```bash
-git clone https://github.com/<user>/subforge.git
+git clone https://github.com/LosLiSang/subforge.git
 cd subforge
 uv sync
 ```
@@ -39,7 +39,7 @@ uv sync
 或全局安装：
 
 ```bash
-uv tool install git+https://github.com/<user>/subforge.git
+uv tool install git+https://github.com/LosLiSang/subforge.git
 ```
 
 ### 2. 配置 API Key
@@ -56,7 +56,7 @@ export LLM_MODEL=deepseek-chat                     # 可选
 # 普通音频：日语 → 中文
 subforge audio.mp3
 
-# ASMR / 同人音声：一键优化
+# ASMR：一键优化
 subforge audio.m4a --asmr
 
 # GPU 加速
@@ -76,7 +76,7 @@ subforge ./RJ01499022/ --asmr --device auto
 
 ```toml
 [asr]
-model = "large-v3"               # 同人音声推荐大模型
+model = "large-v3"               # 推荐大模型
 device = "auto"                  # 有 GPU 就 auto
 compute_type = "float16"         # GPU 最快
 
@@ -105,6 +105,8 @@ subforge INPUTS... [OPTIONS]
   --llm-model TEXT
   --concurrency INT      默认 2
   --output-dir PATH
+  --config PATH          配置文件路径（默认 ~/.subforge/config.toml）
+  --log-level DEBUG|INFO|WARNING|ERROR  默认 INFO
 ```
 
 ## 开发调试
@@ -113,7 +115,7 @@ subforge INPUTS... [OPTIONS]
 # 安装开发依赖
 uv sync
 
-# 跑测试（103 条）
+# 跑测试（106 条）
 uv run pytest tests/ -q
 
 # 单文件测试
@@ -144,12 +146,18 @@ subforge/
     ├── llm_client.py   # LLM API 客户端（httpx + 重试）
     └── srt_io.py       # SRT 文件读写
 tests/
+├── conftest.py          # pytest fixtures
 ├── test_config.py
 ├── test_context.py
 ├── test_asr_engine.py
 ├── test_orchestrator.py
 ├── test_scanner.py
-└── test_e2e.py
+├── test_e2e.py
+├── test_llm_client.py
+├── test_models.py
+├── test_srt_io.py
+├── test_timeline.py
+└── test_v02_optimize.py # v0.2 优化相关测试
 ```
 
 ### 参数流

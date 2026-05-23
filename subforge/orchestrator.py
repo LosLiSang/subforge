@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import Path
+
 
 from tqdm import tqdm
 
@@ -78,18 +78,23 @@ async def process_one(job: Job, config: Config, pbar_slot: int) -> None:
         )
         asr_bar.close()
         job.asr_progress = 1.0
+        logger.debug("[%s] DBG: asyncio.to_thread returned, entries=%d", job.id, len(entries))
 
         if not entries:
             raise RuntimeError("ASR produced no segments")
 
         # Stage 1.5: Timeline fine-tuning
+        logger.debug("[%s] DBG: entering merge_short_entries", job.id)
         entries = merge_short_entries(entries)
+        logger.debug("[%s] DBG: merge_short_entries done, %d entries", job.id, len(entries))
         entries = adjust_gaps(entries)
+        logger.debug("[%s] DBG: adjust_gaps done", job.id)
 
         # Write source language SRT
         source_srt_path = job.file_path.with_suffix(".srt")
         if config.output_dir:
             source_srt_path = config.output_dir / source_srt_path.name
+        logger.debug("[%s] DBG: about to write_srt to %s", job.id, source_srt_path)
         write_srt(entries, source_srt_path)
         logger.info("[%s] %s: Source SRT → %s", job.id, job.file_path.name, source_srt_path)
 
@@ -155,13 +160,15 @@ async def _worker(
         if job is None:  # sentinel to stop
             queue.task_done()
             break
-        async with semaphore:
-            slot = await slots.acquire()
-            try:
-                await process_one(job, config, slot)
-            finally:
-                await slots.release(slot)
-        queue.task_done()
+        try:
+            async with semaphore:
+                slot = await slots.acquire()
+                try:
+                    await process_one(job, config, slot)
+                finally:
+                    await slots.release(slot)
+        finally:
+            queue.task_done()
 
 
 async def process_all(jobs: list[Job], config: Config) -> dict:

@@ -216,6 +216,27 @@ class _DEBUGFilter(logging.Filter):
         return record.levelno != logging.DEBUG
 
 
+class _ColorFormatter(logging.Formatter):
+    """Wrap each formatted line in level-specific ANSI color codes.
+
+    Applied only to the console StreamHandler; FileHandler keeps plain text.
+    """
+
+    _RESET = "\x1b[0m"
+    _COLORS = {
+        logging.DEBUG:    "\x1b[37m",     # white
+        logging.INFO:     "\x1b[34m",     # blue
+        logging.WARNING:  "\x1b[33m",     # yellow
+        logging.ERROR:    "\x1b[31m",     # red
+        logging.CRITICAL: "\x1b[1;31m",   # bold red
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        text = super().format(record)
+        color = self._COLORS.get(record.levelno)
+        return f"{color}{text}{self._RESET}" if color else text
+
+
 def setup_logging(config: Config) -> None:
     """Initialize the logging system.
 
@@ -232,15 +253,19 @@ def setup_logging(config: Config) -> None:
         "%(asctime)s  %(levelname)-7s [%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    color_fmt = _ColorFormatter(
+        "%(asctime)s  %(levelname)-7s [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
     # Clear any pre-existing handlers (e.g. from pytest or other configs)
     root.handlers.clear()
 
-    # Stream handler — stderr, rejects DEBUG
+    # Stream handler — stderr, rejects DEBUG, ANSI-colored per level
     stream_handler = logging.StreamHandler(sys.stderr)
     stream_handler.setLevel(root.level)
     stream_handler.addFilter(_DEBUGFilter())
-    stream_handler.setFormatter(fmt)
+    stream_handler.setFormatter(color_fmt)
     root.addHandler(stream_handler)
 
     # File handler — all levels

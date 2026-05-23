@@ -19,7 +19,7 @@ Audio → faster-whisper ASR → timeline fix → LLM translate → .srt
 ## 特色
 
 - **ASMR 专优**：`--asmr` 预设解决 VAD 吞耳语、幻觉传播、吞字三大难题
-- **真实并行翻译**：8 worker 并发调 LLM，6000 条字幕 ~4 分钟（修了 v0.2.0 的串行 bug）
+- **真实并行翻译**：8 worker 并发调 LLM，6000 条字幕 ~4 分钟
 - **音频预处理**：内置 ffmpeg loudnorm，-45dB 耳语自动提到正常音量再送 VAD
 - **多文件并发**：目录扔进去，concurrency 个文件同时跑 ASR + 翻译
 - **模型缓存**：Whisper 模型下载一次，后续完全离线
@@ -162,11 +162,6 @@ config.toml [asr].device → Config field → orchestrator kwarg → engine para
 
 ## 后续开发
 
-- [ ] **BatchedInferencePipeline**：faster-whisper 批量推理，GPU 下还能再快 3-5x
-- [ ] **Silero VAD 预处理**：替掉 Whisper 内置 VAD，可单独调 threshold，支持音频分段可视化
-- [ ] **说话人分离 (diarization)**：标注"谁在说话"，多 CV 同人音声刚需
-- [ ] **字幕时间轴编辑**：输出后手动微调界面（Web UI 或 CLI 交互）
 - [ ] **断点续跑**：长音频中断后从上次进度继续
 - [ ] **多目标语言**：一次翻译出 en + zh + ko 多份 SRT
-- [ ] **XML/ASS 格式输出**：支持带样式的高级字幕格式
-- [ ] **Torch/tensorrt 后端**：NVIDIA GPU 上用 TensorRT，速度再翻倍
+

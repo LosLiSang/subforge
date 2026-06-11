@@ -7,10 +7,12 @@ import time
 
 from tqdm import tqdm
 
+from subforge.asr.deepgram import transcribe as deepgram_transcribe
 from subforge.asr.engine import transcribe as asr_transcribe
 from subforge.asr.model_manager import ensure_model
 from subforge.config import Config
 from subforge.models import Job, JobStatus
+from subforge.resume import ResumeStore, read_reusable_srt
 from subforge.timeline import adjust_gaps, merge_short_entries
 from subforge.translate.context import translate_all
 from subforge.translate.llm_client import LLMError, translate_batch
@@ -34,30 +36,10 @@ class _SlotAllocator:
         await self._available.put(slot)
 
 
-async def process_one(job: Job, config: Config, pbar_slot: int) -> None:
-    """Process a single file: ASR → timeline fix → translate → write output."""
-    job.status = JobStatus.ASR_RUNNING
-    job.started_at = time.time()
-    logger.info("[%s] %s: ASR started", job.id, job.file_path.name)
-
-    try:
-        # Stage 1: ASR
+def _run_asr(job: Job, config: Config, progress_callback) -> list:
+    if config.asr_provider == "local":
         _available, local_only = ensure_model(job.model_size, config.models_dir)
-        asr_bar = tqdm(
-            total=1.0,
-            desc=f"[ASR] {job.file_path.name}",
-            position=pbar_slot,
-            leave=False,
-            unit="",
-            bar_format="{desc}: {percentage:3.0f}%|{bar}| {elapsed}",
-        )
-
-        def _asr_progress(value: float) -> None:
-            asr_bar.n = value
-            asr_bar.refresh()
-
-        entries = await asyncio.to_thread(
-            asr_transcribe,
+        return asr_transcribe(
             job.file_path,
             model_size=job.model_size,
             language=job.source_lang,
@@ -74,11 +56,98 @@ async def process_one(job: Job, config: Config, pbar_slot: int) -> None:
             condition_on_previous_text=config.condition_on_previous_text,
             no_speech_threshold=config.no_speech_threshold,
             preprocess_audio=config.preprocess_audio,
-            progress_callback=_asr_progress,
+            progress_callback=progress_callback,
         )
-        asr_bar.close()
-        job.asr_progress = 1.0
-        logger.debug("[%s] DBG: asyncio.to_thread returned, entries=%d", job.id, len(entries))
+    if config.asr_provider == "deepgram":
+        return deepgram_transcribe(
+            job.file_path,
+            api_key=config.deepgram_api_key,
+            model=config.deepgram_model,
+            language=job.source_lang,
+            keyterms=config.deepgram_keyterms,
+            progress_callback=progress_callback,
+        )
+    raise ValueError(f"Unsupported ASR provider: {config.asr_provider}")
+
+
+async def process_one(job: Job, config: Config, pbar_slot: int) -> None:
+    """Process a single file: ASR → timeline fix → translate → write output."""
+    job.started_at = time.time()
+
+    try:
+        source_srt_path = job.file_path.with_suffix(".srt")
+        if config.output_dir:
+            source_srt_path = config.output_dir / source_srt_path.name
+        target_srt_path = job.file_path.parent / f"{job.file_path.stem}_{job.target_lang}.srt"
+        if config.output_dir:
+            target_srt_path = config.output_dir / target_srt_path.name
+
+        store = ResumeStore(config.jobs_dir)
+        if config.force:
+            logger.info("[%s] %s: --force enabled, ignoring existing SRT files and resume state",
+                        job.id, job.file_path.name)
+            state = store.create(job, config, source_srt_path, target_srt_path)
+            store.save(state)
+        else:
+            state = store.load(job, config)
+            if state is None:
+                state = store.create(job, config, source_srt_path, target_srt_path)
+                store.save(state)
+
+            if target_srt_path.exists():
+                target_entries = read_reusable_srt(target_srt_path)
+                if target_entries is not None:
+                    job.asr_progress = 1.0
+                    job.translate_progress = 1.0
+                    job.status = JobStatus.DONE
+                    job.finished_at = time.time()
+                    logger.info("[%s] %s: Target SRT already complete, skipping file",
+                                job.id, job.file_path.name)
+                    return
+
+        entries = None
+        if not config.force:
+            if source_srt_path.exists():
+                entries = read_reusable_srt(source_srt_path)
+                if entries is not None:
+                    job.asr_progress = 1.0
+                    logger.info("[%s] %s: Reusing existing source SRT → %s",
+                                job.id, job.file_path.name, source_srt_path)
+            elif state.asr.get("status") == "done":
+                state_source = Path(state.paths.get("source_srt", source_srt_path))
+                entries = read_reusable_srt(state_source)
+                if entries is not None:
+                    source_srt_path = state_source
+                    job.asr_progress = 1.0
+                    logger.info("[%s] %s: Reusing resumed source SRT → %s",
+                                job.id, job.file_path.name, source_srt_path)
+
+        # Stage 1: ASR
+        if entries is None:
+            job.status = JobStatus.ASR_RUNNING
+            logger.info("[%s] %s: ASR started", job.id, job.file_path.name)
+            asr_bar = tqdm(
+                total=1.0,
+                desc=f"[ASR] {job.file_path.name}",
+                position=pbar_slot,
+                leave=False,
+                unit="",
+                bar_format="{desc}: {percentage:3.0f}%|{bar}| {elapsed}",
+            )
+
+            def _asr_progress(value: float) -> None:
+                asr_bar.n = value
+                asr_bar.refresh()
+
+            entries = await asyncio.to_thread(
+                _run_asr,
+                job,
+                config,
+                _asr_progress,
+            )
+            asr_bar.close()
+            job.asr_progress = 1.0
+            logger.debug("[%s] DBG: asyncio.to_thread returned, entries=%d", job.id, len(entries))
 
         if not entries:
             raise RuntimeError("ASR produced no segments")
@@ -91,11 +160,9 @@ async def process_one(job: Job, config: Config, pbar_slot: int) -> None:
         logger.debug("[%s] DBG: adjust_gaps done", job.id)
 
         # Write source language SRT
-        source_srt_path = job.file_path.with_suffix(".srt")
-        if config.output_dir:
-            source_srt_path = config.output_dir / source_srt_path.name
         logger.debug("[%s] DBG: about to write_srt to %s", job.id, source_srt_path)
         write_srt(entries, source_srt_path)
+        store.mark_asr_done(state)
         logger.info("[%s] %s: Source SRT → %s", job.id, job.file_path.name, source_srt_path)
 
         # Stage 2: Translation
@@ -119,14 +186,14 @@ async def process_one(job: Job, config: Config, pbar_slot: int) -> None:
         translated = await translate_all(
             entries, config, translate_batch,
             progress_callback=_tl_progress,
+            resume_state=state,
+            resume_store=store,
         )
         translate_bar.close()
 
         # Write target language SRT
-        target_srt_path = job.file_path.parent / f"{job.file_path.stem}_{job.target_lang}.srt"
-        if config.output_dir:
-            target_srt_path = config.output_dir / target_srt_path.name
         write_srt(translated, target_srt_path)
+        store.mark_translation_done(state)
         job.translate_progress = 1.0
         logger.info("[%s] %s: Target SRT → %s", job.id, job.file_path.name, target_srt_path)
 

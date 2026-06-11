@@ -10,10 +10,13 @@ from pathlib import Path
 DEFAULT_CONFIG_DIR = Path.home() / ".subforge"
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
 DEFAULT_MODELS_DIR = DEFAULT_CONFIG_DIR / "models"
+DEFAULT_JOBS_DIR = DEFAULT_CONFIG_DIR / "jobs"
 
 DEFAULT_CONFIG_TOML = """\
 # ── ASR (Speech Recognition) ────────────────────────────────────────────
 [asr]
+# ASR provider: local / deepgram
+provider = "local"
 # Whisper model size: tiny / base / small / medium / large-v3
 model = "medium"
 # Source audio language (ISO 639-1 code)
@@ -68,6 +71,15 @@ base_url = "https://api.openai.com/v1"
 # Model name
 model = "gpt-4o"
 
+# ── Deepgram ASR ────────────────────────────────────────────────────────
+[deepgram]
+# Deepgram API key (or set DEEPGRAM_API_KEY env var)
+api_key = ""
+# Deepgram ASR model
+model = "nova-3"
+# Key terms to improve recognition of names / domain words
+keyterms = []
+
 # ── General ─────────────────────────────────────────────────────────────
 [processing]
 # Max audio files processed in parallel
@@ -87,6 +99,7 @@ file = "subforge.log"
 @dataclass
 class Config:
     # ASR
+    asr_provider: str = "local"
     model: str = "medium"
     source_lang: str = "ja"
     device: str = "cpu"
@@ -109,15 +122,21 @@ class Config:
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o"
+    # Deepgram ASR
+    deepgram_api_key: str = ""
+    deepgram_model: str = "nova-3"
+    deepgram_keyterms: list[str] = field(default_factory=list)
     # Processing
     concurrency: int = 2
     output_dir: Path | None = None
+    force: bool = False
     # Logging
     log_level: str = "INFO"
     log_file: str = "subforge.log"
     # Paths
     config_path: Path = field(default=DEFAULT_CONFIG_PATH)
     models_dir: Path = field(default=DEFAULT_MODELS_DIR)
+    jobs_dir: Path = field(default=DEFAULT_JOBS_DIR)
 
 
 def _ensure_default_config(config_path: Path) -> None:
@@ -143,6 +162,7 @@ def _apply_env_overrides(cfg: dict) -> None:
         "LLM_API_KEY": ("llm", "api_key"),
         "LLM_BASE_URL": ("llm", "base_url"),
         "LLM_MODEL": ("llm", "model"),
+        "DEEPGRAM_API_KEY": ("deepgram", "api_key"),
         "SUBFORGE_LOG_LEVEL": ("logging", "level"),
     }
     for env_var, (section, key) in env_map.items():
@@ -171,6 +191,7 @@ def load_config(
 
     # 3. Build merged kwargs dict
     kwargs: dict = {}
+    kwargs["asr_provider"] = toml_data.get("asr", {}).get("provider", "local")
     kwargs["model"] = toml_data.get("asr", {}).get("model", "medium")
     kwargs["source_lang"] = toml_data.get("asr", {}).get("source_lang", "ja")
     kwargs["device"] = toml_data.get("asr", {}).get("device", "cpu")
@@ -192,13 +213,19 @@ def load_config(
     kwargs["llm_api_key"] = toml_data.get("llm", {}).get("api_key", "")
     kwargs["llm_base_url"] = toml_data.get("llm", {}).get("base_url", "https://api.openai.com/v1")
     kwargs["llm_model"] = toml_data.get("llm", {}).get("model", "gpt-4o")
+    kwargs["deepgram_api_key"] = toml_data.get("deepgram", {}).get("api_key", "")
+    kwargs["deepgram_model"] = toml_data.get("deepgram", {}).get("model", "nova-3")
+    keyterms = toml_data.get("deepgram", {}).get("keyterms", [])
+    kwargs["deepgram_keyterms"] = [str(v) for v in keyterms] if isinstance(keyterms, list) else []
     kwargs["concurrency"] = int(toml_data.get("processing", {}).get("concurrency", 2))
     kwargs["log_level"] = toml_data.get("logging", {}).get("level", "INFO")
     kwargs["log_file"] = toml_data.get("logging", {}).get("file", "subforge.log")
     output_dir = toml_data.get("processing", {}).get("output_dir", "")
     kwargs["output_dir"] = Path(output_dir) if output_dir else None
+    kwargs["force"] = False
     kwargs["config_path"] = path
     kwargs["models_dir"] = DEFAULT_MODELS_DIR
+    kwargs["jobs_dir"] = DEFAULT_JOBS_DIR
 
     # 4. Apply CLI overrides (highest priority)
     if cli_overrides:

@@ -3,7 +3,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from subforge.config import Config
-from subforge.models import SubtitleEntry
+from subforge.models import Job, SubtitleEntry
+from subforge.resume import ResumeStore
 from subforge.translate.context import (
     _build_user_message,
     _parse_translations,
@@ -190,3 +191,66 @@ class TestTranslateAll:
 
         assert len(result) == 25
         assert mock_translate.call_count == 3
+
+    async def test_resume_skips_completed_batch(self, config, tmp_path):
+        entries = make_entries(25)
+        media = tmp_path / "audio.m4a"
+        media.write_text("audio", encoding="utf-8")
+        store = ResumeStore(tmp_path / "jobs")
+        job = Job(file_path=media)
+        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        store.save_batch(
+            state,
+            0,
+            [SubtitleEntry(index=i, start=float(i), end=float(i) + 0.5, text=f"cached{i}") for i in range(1, 11)],
+            total_batches=3,
+        )
+
+        mock_translate = AsyncMock()
+        mock_translate.side_effect = [
+            "\n".join(f"[{i}] live{i}" for i in range(11, 21)),
+            "\n".join(f"[{i}] live{i}" for i in range(21, 26)),
+        ]
+
+        result = await translate_all(entries, config, mock_translate, resume_state=state, resume_store=store)
+
+        assert mock_translate.call_count == 2
+        assert result[0].text == "cached1"
+        assert result[10].text == "live11"
+        assert result[24].text == "live25"
+
+    async def test_resume_all_batches_completed_calls_no_llm(self, config, tmp_path):
+        entries = make_entries(5)
+        media = tmp_path / "audio.m4a"
+        media.write_text("audio", encoding="utf-8")
+        store = ResumeStore(tmp_path / "jobs")
+        job = Job(file_path=media)
+        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        store.save_batch(
+            state,
+            0,
+            [SubtitleEntry(index=i, start=float(i), end=float(i) + 0.5, text=f"cached{i}") for i in range(1, 6)],
+            total_batches=1,
+        )
+
+        mock_translate = AsyncMock()
+
+        result = await translate_all(entries, config, mock_translate, resume_state=state, resume_store=store)
+
+        mock_translate.assert_not_called()
+        assert [entry.text for entry in result] == [f"cached{i}" for i in range(1, 6)]
+
+    async def test_resume_saves_new_batch(self, config, tmp_path):
+        entries = make_entries(5)
+        media = tmp_path / "audio.m4a"
+        media.write_text("audio", encoding="utf-8")
+        store = ResumeStore(tmp_path / "jobs")
+        job = Job(file_path=media)
+        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        mock_translate = AsyncMock(return_value="\n".join(f"[{i}] live{i}" for i in range(1, 6)))
+
+        await translate_all(entries, config, mock_translate, resume_state=state, resume_store=store)
+        loaded = store.load(job, config)
+
+        assert loaded is not None
+        assert loaded.translation["completed_batches"]["0"][0]["text"] == "live1"

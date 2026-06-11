@@ -11,11 +11,12 @@ from subforge.translate.llm_client import LLMError
 
 
 @pytest.fixture
-def config():
+def config(tmp_path):
     return Config(
         source_lang="ja",
         target_lang="zh",
         concurrency=2,
+        jobs_dir=tmp_path / "jobs",
     )
 
 
@@ -51,6 +52,61 @@ class TestProcessOne:
         assert job.translate_progress == 1.0
         assert job.error is None
 
+    async def test_default_local_provider_uses_local_asr(self, config, sample_entries, tmp_path):
+        job = Job(file_path=tmp_path / "test.mp3")
+
+        async def fake_translate(msgs, cfg):
+            return "[1] 你好\n[2] 世界"
+
+        with (
+            patch("subforge.orchestrator.asr_transcribe", return_value=sample_entries) as mock_local,
+            patch("subforge.orchestrator.deepgram_transcribe") as mock_deepgram,
+            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.DONE
+        assert mock_local.call_count == 1
+        mock_deepgram.assert_not_called()
+
+    async def test_deepgram_provider_uses_deepgram_asr(self, config, sample_entries, tmp_path):
+        job = Job(file_path=tmp_path / "test.mp3")
+        config.asr_provider = "deepgram"
+        config.deepgram_api_key = "dg-test"
+        config.deepgram_model = "nova-3"
+        config.deepgram_keyterms = ["社長"]
+
+        async def fake_translate(msgs, cfg):
+            return "[1] 你好\n[2] 世界"
+
+        with (
+            patch("subforge.orchestrator.ensure_model") as mock_ensure_model,
+            patch("subforge.orchestrator.asr_transcribe") as mock_local,
+            patch("subforge.orchestrator.deepgram_transcribe", return_value=sample_entries) as mock_deepgram,
+            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.DONE
+        mock_ensure_model.assert_not_called()
+        mock_local.assert_not_called()
+        assert mock_deepgram.call_count == 1
+        _, kwargs = mock_deepgram.call_args
+        assert kwargs["api_key"] == "dg-test"
+        assert kwargs["model"] == "nova-3"
+        assert kwargs["language"] == "ja"
+        assert kwargs["keyterms"] == ["社長"]
+
+    async def test_deepgram_missing_key_fails_file(self, config, tmp_path):
+        job = Job(file_path=tmp_path / "test.mp3")
+        config.asr_provider = "deepgram"
+        config.deepgram_api_key = ""
+
+        await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.FAILED
+        assert "DeepgramAuthError" in (job.error or "")
+
     async def test_asr_failure(self, config, tmp_path):
         job = Job(file_path=tmp_path / "broken.mp3")
 
@@ -85,6 +141,182 @@ class TestProcessOne:
         assert "API down" in (job.error or "")
         source_srt = tmp_path / "test.srt"
         assert source_srt.exists()
+
+    async def test_existing_target_srt_skips_whole_file(self, config, sample_entries, tmp_path):
+        from subforge.translate.srt_io import write_srt
+
+        job = Job(file_path=tmp_path / "test.mp3")
+        job.file_path.write_text("audio", encoding="utf-8")
+        write_srt(sample_entries, tmp_path / "test_zh.srt")
+
+        with (
+            patch("subforge.orchestrator.asr_transcribe") as mock_asr,
+            patch("subforge.orchestrator.translate_batch", new_callable=AsyncMock) as mock_translate,
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.DONE
+        assert job.asr_progress == 1.0
+        assert job.translate_progress == 1.0
+        mock_asr.assert_not_called()
+        mock_translate.assert_not_called()
+
+    async def test_existing_source_srt_skips_asr(self, config, sample_entries, tmp_path):
+        from subforge.translate.srt_io import write_srt
+
+        job = Job(file_path=tmp_path / "test.mp3")
+        job.file_path.write_text("audio", encoding="utf-8")
+        write_srt(sample_entries, tmp_path / "test.srt")
+
+        async def fake_translate(msgs, cfg):
+            return "[1] 你好\n[2] 世界"
+
+        with (
+            patch("subforge.orchestrator.asr_transcribe") as mock_asr,
+            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.DONE
+        mock_asr.assert_not_called()
+        assert (tmp_path / "test_zh.srt").exists()
+
+    async def test_existing_source_srt_skips_deepgram(self, config, sample_entries, tmp_path):
+        from subforge.translate.srt_io import write_srt
+
+        job = Job(file_path=tmp_path / "test.mp3")
+        job.file_path.write_text("audio", encoding="utf-8")
+        config.asr_provider = "deepgram"
+        config.deepgram_api_key = "dg-test"
+        write_srt(sample_entries, tmp_path / "test.srt")
+
+        async def fake_translate(msgs, cfg):
+            return "[1] 你好\n[2] 世界"
+
+        with (
+            patch("subforge.orchestrator.deepgram_transcribe") as mock_deepgram,
+            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.DONE
+        mock_deepgram.assert_not_called()
+
+    async def test_force_ignores_existing_srt_files(self, config, sample_entries, tmp_path):
+        from subforge.translate.srt_io import write_srt
+
+        job = Job(file_path=tmp_path / "test.mp3")
+        job.file_path.write_text("audio", encoding="utf-8")
+        config.force = True
+        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test.srt")
+        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test_zh.srt")
+
+        async def fake_translate(msgs, cfg):
+            return "[1] 你好\n[2] 世界"
+
+        with (
+            patch("subforge.orchestrator.asr_transcribe", return_value=sample_entries) as mock_asr,
+            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.DONE
+        assert mock_asr.call_count == 1
+
+    async def test_force_with_deepgram_calls_deepgram(self, config, sample_entries, tmp_path):
+        from subforge.translate.srt_io import write_srt
+
+        job = Job(file_path=tmp_path / "test.mp3")
+        job.file_path.write_text("audio", encoding="utf-8")
+        config.force = True
+        config.asr_provider = "deepgram"
+        config.deepgram_api_key = "dg-test"
+        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test.srt")
+        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test_zh.srt")
+
+        async def fake_translate(msgs, cfg):
+            return "[1] 你好\n[2] 世界"
+
+        with (
+            patch("subforge.orchestrator.deepgram_transcribe", return_value=sample_entries) as mock_deepgram,
+            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.DONE
+        assert mock_deepgram.call_count == 1
+
+    async def test_translation_failure_preserves_completed_batch(self, config, tmp_path):
+        from subforge.resume import ResumeStore
+
+        config.batch_size = 10
+        config.context_size = 0
+        config.translate_workers = 1
+        job = Job(file_path=tmp_path / "test.mp3")
+        job.file_path.write_text("audio", encoding="utf-8")
+        entries = [
+            SubtitleEntry(index=i, start=float(i), end=float(i) + 0.5, text=f"src{i}")
+            for i in range(1, 16)
+        ]
+
+        async def flaky_translate(msgs, cfg):
+            user_msg = msgs[-1]["content"]
+            if "[11]" in user_msg:
+                raise LLMError("batch failed")
+            return "\n".join(f"[{i}] ok{i}" for i in range(1, 11))
+
+        with (
+            patch("subforge.orchestrator.asr_transcribe", return_value=entries),
+            patch("subforge.orchestrator.translate_batch", side_effect=flaky_translate),
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.FAILED
+        store = ResumeStore(config.jobs_dir)
+        loaded = store.load(job, config)
+        assert loaded is not None
+        assert loaded.translation["completed_batches"]["0"][0]["text"] == "ok1"
+        assert "1" not in loaded.translation["completed_batches"]
+
+    async def test_second_run_processes_only_remaining_batch(self, config, tmp_path):
+        from subforge.resume import ResumeStore
+        from subforge.translate.srt_io import read_srt, write_srt
+
+        config.batch_size = 10
+        config.translate_workers = 1
+        job = Job(file_path=tmp_path / "test.mp3")
+        job.file_path.write_text("audio", encoding="utf-8")
+        entries = [
+            SubtitleEntry(index=i, start=float(i), end=float(i) + 0.5, text=f"src{i}")
+            for i in range(1, 16)
+        ]
+        write_srt(entries, tmp_path / "test.srt")
+
+        store = ResumeStore(config.jobs_dir)
+        state = store.create(job, config, tmp_path / "test.srt", tmp_path / "test_zh.srt")
+        store.save_batch(
+            state,
+            0,
+            [SubtitleEntry(index=i, start=float(i), end=float(i) + 0.5, text=f"cached{i}") for i in range(1, 11)],
+            total_batches=2,
+        )
+
+        async def translate_remaining(msgs, cfg):
+            assert "[1]" not in msgs[-1]["content"].split("=== Entries to translate ===")[-1]
+            return "\n".join(f"[{i}] live{i}" for i in range(11, 16))
+
+        with (
+            patch("subforge.orchestrator.asr_transcribe") as mock_asr,
+            patch("subforge.orchestrator.translate_batch", side_effect=translate_remaining) as mock_translate,
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.DONE
+        mock_asr.assert_not_called()
+        assert mock_translate.call_count == 1
+        target_entries = read_srt(tmp_path / "test_zh.srt")
+        assert target_entries[0].text == "cached1"
+        assert target_entries[-1].text == "live15"
 
 
 class TestProcessAll:

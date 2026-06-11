@@ -37,6 +37,12 @@ _ASMR_PRESET = {
     help="ASR model size: tiny/base/small/medium/large (default: medium)",
 )
 @click.option(
+    "--asr-provider",
+    default=None,
+    type=click.Choice(["local", "deepgram"]),
+    help="ASR provider: local / deepgram (default: local)",
+)
+@click.option(
     "--device",
     default=None,
     type=click.Choice(["cpu", "cuda", "auto"]),
@@ -80,6 +86,16 @@ _ASMR_PRESET = {
     help="LLM model name (env: LLM_MODEL)",
 )
 @click.option(
+    "--deepgram-api-key",
+    default=None,
+    help="Deepgram API key (env: DEEPGRAM_API_KEY)",
+)
+@click.option(
+    "--deepgram-model",
+    default=None,
+    help="Deepgram ASR model name (default: nova-3)",
+)
+@click.option(
     "--config",
     "config_path",
     default=None,
@@ -99,6 +115,12 @@ _ASMR_PRESET = {
     help="Apply ASMR-optimized VAD and Whisper parameters for whispered audio",
 )
 @click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Ignore existing SRT files and saved resume state, then process from ASR",
+)
+@click.option(
     "--log-level",
     default=None,
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
@@ -108,6 +130,7 @@ _ASMR_PRESET = {
 def main(
     inputs: tuple[str, ...],
     model: str | None,
+    asr_provider: str | None,
     device: str | None,
     compute_type: str | None,
     source_lang: str | None,
@@ -116,9 +139,12 @@ def main(
     llm_api_key: str | None,
     llm_base_url: str | None,
     llm_model: str | None,
+    deepgram_api_key: str | None,
+    deepgram_model: str | None,
     config_path: Path | None,
     output_dir: Path | None,
     asmr: bool,
+    force: bool,
     log_level: str | None,
 ) -> None:
     """Generate subtitles from audio/video files.
@@ -127,13 +153,13 @@ def main(
     .mp3, .mp4, .wav, .m4a, .flac
 
     \b
-    Pipeline: Scan → ASR (faster-whisper) → Timeline fix → LLM Translate → SRT
+    Pipeline: Scan -> ASR (faster-whisper) -> Timeline fix -> LLM Translate -> SRT
 
     \b
     Examples:
-      base-auto-subtitle audio.mp3
-      base-auto-subtitle *.mp3 --target-lang en --concurrency 4
-      base-auto-subtitle ./downloads/ --model large --source-lang ja
+      subforge audio.mp3
+      subforge *.mp3 --target-lang en --concurrency 4
+      subforge ./downloads/ --model large --source-lang ja
     """
 
     # Collect CLI overrides (only non-None values)
@@ -145,6 +171,8 @@ def main(
 
     if model is not None:
         cli_overrides["model"] = model
+    if asr_provider is not None:
+        cli_overrides["asr_provider"] = asr_provider
     if device is not None:
         cli_overrides["device"] = device
     if compute_type is not None:
@@ -161,8 +189,14 @@ def main(
         cli_overrides["llm_base_url"] = llm_base_url
     if llm_model is not None:
         cli_overrides["llm_model"] = llm_model
+    if deepgram_api_key is not None:
+        cli_overrides["deepgram_api_key"] = deepgram_api_key
+    if deepgram_model is not None:
+        cli_overrides["deepgram_model"] = deepgram_model
     if output_dir is not None:
         cli_overrides["output_dir"] = output_dir
+    if force:
+        cli_overrides["force"] = True
     if log_level is not None:
         cli_overrides["log_level"] = log_level
 

@@ -50,6 +50,9 @@ uv tool install git+https://github.com/LosLiSang/subforge.git
 export LLM_API_KEY=sk-your-key
 export LLM_BASE_URL=https://api.deepseek.com/v1   # 可选，默认 OpenAI
 export LLM_MODEL=deepseek-chat                     # 可选
+
+# 可选：使用 Deepgram 云端 ASR
+export DEEPGRAM_API_KEY=dg-your-key
 ```
 
 ### 3. 跑
@@ -64,8 +67,14 @@ subforge audio.m4a --asmr
 # GPU 加速
 subforge audio.m4a --asmr --device auto --compute-type float16
 
+# Deepgram 云端 ASR（默认 nova-3）
+subforge audio.m4a --asr-provider deepgram
+
 # 批量处理整个目录
 subforge ./RJ01499022/ --asmr --device auto
+
+# 忽略已有字幕和断点，从头重新处理
+subforge audio.m4a --force
 ```
 
 输出：
@@ -74,12 +83,22 @@ subforge ./RJ01499022/ --asmr --device auto
 
 支持格式：`.mp3` `.mp4` `.wav` `.m4a` `.flac`
 
+### 断点续跑
+
+SubForge 默认启用断点续跑，状态文件统一保存在 `~/.subforge/jobs/`：
+
+- 如果已存在完整的 `audio_zh.srt`，再次处理时会跳过整个文件。
+- 如果已存在有效的 `audio.srt`，会跳过 ASR，只继续翻译。
+- 翻译阶段按批次保存进度，中断或失败后重跑时只提交未完成批次给 LLM。
+- 使用 `--force` 可忽略已有 SRT 和断点状态，从 ASR 阶段重新开始。
+
 ### 配置文件
 
 首次运行自动生成 `~/.subforge/config.toml`（带完整注释）。常用选项：
 
 ```toml
 [asr]
+provider = "local"                 # local / deepgram
 model = "large-v3"               # 推荐大模型
 device = "auto"                  # 有 GPU 就 auto
 compute_type = "float16"         # GPU 最快
@@ -89,9 +108,16 @@ api_key = ""                     # 或用环境变量 LLM_API_KEY
 base_url = "https://api.deepseek.com/v1"
 model = "deepseek-chat"
 
+[deepgram]
+api_key = ""                     # 或用环境变量 DEEPGRAM_API_KEY
+model = "nova-3"
+keyterms = ["気付け", "布団", "性癖"]  # 可选，提升专有词/易错词识别
+
 [processing]
 concurrency = 2                  # 同时处理几个文件
 ```
+
+> Deepgram 是云端 ASR，会上传音频到 Deepgram 并产生 API 费用。涉及隐私或大文件批量处理前，先确认账号额度和数据策略。
 
 ### ASR 模型选型
 
@@ -111,6 +137,7 @@ concurrency = 2                  # 同时处理几个文件
 subforge INPUTS... [OPTIONS]
 
   --model TEXT           tiny / base / small / medium / large-v3
+  --asr-provider local|deepgram  默认 local
   --device cpu|cuda|auto
   --compute-type default|auto|float16|int8_float16|int8|float32
   --source-lang TEXT     默认 ja
@@ -119,8 +146,11 @@ subforge INPUTS... [OPTIONS]
   --llm-api-key TEXT
   --llm-base-url TEXT
   --llm-model TEXT
+  --deepgram-api-key TEXT
+  --deepgram-model TEXT  默认 nova-3
   --concurrency INT      默认 2
   --output-dir PATH
+  --force                忽略已有 SRT 和断点，从 ASR 重新开始
   --config PATH          配置文件路径（默认 ~/.subforge/config.toml）
   --log-level DEBUG|INFO|WARNING|ERROR  默认 INFO
 ```
@@ -197,4 +227,3 @@ MIT License
 
 - [ ] **断点续跑**：长音频中断后从上次进度继续
 - [ ] **多目标语言**：一次翻译出 en + zh + ko 多份 SRT
-

@@ -42,6 +42,23 @@ def runner():
 class TestE2EWithMockedASRandLLM:
     """Full pipeline test with mocked ASR and LLM."""
 
+    def test_help_includes_deepgram_options(self, runner):
+        result = runner.invoke(main, ["--help"])
+
+        assert result.exit_code == 0
+        assert "--asr-provider" in result.output
+        assert "--deepgram-api-key" in result.output
+        assert "--deepgram-model" in result.output
+
+    def test_invalid_asr_provider_rejected(self, runner, tmp_path):
+        audio = tmp_path / "test.mp3"
+        _generate_silent_wav(audio)
+
+        result = runner.invoke(main, [str(audio), "--asr-provider", "bad"])
+
+        assert result.exit_code != 0
+        assert "Invalid value for '--asr-provider'" in result.output
+
     def test_single_file_flow(self, runner, tmp_path):
         """Test the complete flow: CLI → scan → ASR(mock) → translate(mock) → output."""
         audio_path = tmp_path / "test.mp3"
@@ -135,6 +152,7 @@ class TestE2EWithMockedASRandLLM:
             result = runner.invoke(main, [
                 str(audio),
                 "--model", "tiny",
+                "--asr-provider", "local",
                 "--source-lang", "ja",
                 "--target-lang", "en",
                 "--concurrency", "1",

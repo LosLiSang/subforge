@@ -6,6 +6,7 @@ from typing import Callable
 
 from subforge.config import Config
 from subforge.models import SubtitleEntry
+from subforge.resume import ResumeState, ResumeStore
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,8 @@ async def translate_all(
     config: Config,
     llm_translate_fn,
     progress_callback: Callable[[int, int], None] | None = None,
+    resume_state: ResumeState | None = None,
+    resume_store: ResumeStore | None = None,
 ) -> list[SubtitleEntry]:
     """Translate all subtitle entries with full concurrency.
 
@@ -108,12 +111,38 @@ async def translate_all(
 
     translated_map: dict[int, str] = {}
     completed_count = 0
+    completed_batches = {}
+    if resume_state is not None:
+        completed_batches = resume_state.translation.get("completed_batches", {})
 
     queue: asyncio.Queue[int] = asyncio.Queue()
     semaphore = asyncio.Semaphore(config.translate_workers)
 
     for idx in range(len(batches)):
-        queue.put_nowait(idx)
+        cached_entries = completed_batches.get(str(idx))
+        if cached_entries:
+            for cached in cached_entries:
+                translated_map[int(cached["index"])] = str(cached["text"])
+            completed_count += 1
+        else:
+            queue.put_nowait(idx)
+
+    if completed_count:
+        logger.info("Translation resume: skipping %d/%d completed batch(es)",
+                    completed_count, len(batches))
+        if progress_callback:
+            progress_callback(completed_count, len(batches))
+
+    if completed_count == len(batches):
+        return [
+            SubtitleEntry(
+                index=entry.index,
+                start=entry.start,
+                end=entry.end,
+                text=translated_map.get(entry.index, entry.text),
+            )
+            for entry in entries
+        ]
 
     async def _translate_batch(batch_idx: int) -> None:
         nonlocal completed_count
@@ -135,8 +164,23 @@ async def translate_all(
         response = await llm_translate_fn(messages, config)
         translations = _parse_translations(response, batch)
 
+        translated_entries: list[SubtitleEntry] = []
         for entry, trans in zip(batch, translations):
             translated_map[entry.index] = trans
+            translated_entries.append(SubtitleEntry(
+                index=entry.index,
+                start=entry.start,
+                end=entry.end,
+                text=trans,
+            ))
+
+        if resume_state is not None and resume_store is not None:
+            resume_store.save_batch(
+                resume_state,
+                batch_idx,
+                translated_entries,
+                len(batches),
+            )
 
         logger.debug("Batch %d/%d complete (%d entries)",
                       batch_idx + 1, len(batches), len(batch))
@@ -148,13 +192,14 @@ async def translate_all(
         while True:
             batch_idx = await queue.get()
             try:
-                try:
+                if first_error is None:
                     async with semaphore:
                         await _translate_batch(batch_idx)
-                except Exception as exc:
-                    if first_error is None:
-                        first_error = exc
-                    raise
+                else:
+                    logger.debug("Skipping batch %d because an earlier batch failed", batch_idx)
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
             finally:
                 completed_count += 1
                 if progress_callback:

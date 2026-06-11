@@ -1,6 +1,6 @@
 [project]
 name = "subforge"
-version = "0.2.0"
+version = "0.4.0"
 description = "SubForge — automatic subtitle generation tool with ASR + LLM translation"
 requires-python = ">=3.11"
 license = { text = "MIT" }

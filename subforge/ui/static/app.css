@@ -23,6 +23,7 @@ dialog.profile-dialog{background:var(--panel);color:#e6edf3;border:1px solid var
 .works-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(230px,100%),1fr));gap:16px}
 .work-card{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line-strong);border-radius:10px;overflow:hidden;color:#e6edf3;transition:border-color .15s,transform .15s,box-shadow .15s;min-width:0}.work-card:hover{border-color:#58a6ff;transform:translateY(-2px);box-shadow:0 6px 24px rgba(0,0,0,.35)}
 .work-cover{position:relative;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;font-size:3rem;font-weight:800;letter-spacing:.05em;overflow:hidden}
+.work-cover-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .cover-rj{background:linear-gradient(135deg,#2a3b5c 0%,#1f2d3d 55%,#3b2a5c 100%)}.cover-rj .work-kind{color:#71b7ff;text-shadow:0 0 24px rgba(113,183,255,.5)}
 .cover-stream{background:linear-gradient(135deg,#2c4a3b 0%,#1d2f26 55%,#3b2a5c 100%)}.cover-stream .work-kind{color:#5dd7a9;text-shadow:0 0 24px rgba(93,215,169,.5)}
 .work-kind{position:absolute;font-size:1.4rem;font-weight:800;letter-spacing:.12em}
@@ -35,7 +36,7 @@ dialog.profile-dialog{background:var(--panel);color:#e6edf3;border:1px solid var
 .status-waiting{color:var(--fg-dim);background:#1f2630;border:1px solid var(--line-strong)}.status-queued{color:#d2a8ff;background:#2b1f3d;border:1px solid #a371f740}.status-running{color:#71b7ff;background:#1c2b40;border:1px solid #539bf540}.status-completed{color:#3fb950;background:#12291d;border:1px solid #2ea04340}.status-playable{color:#5dd7a9;background:#123029;border:1px solid #32bc8840}.status-failed{color:#ff7b72;background:#2d1416;border:1px solid #f8514940}
 /* ─── 作品详情 ─── */
 .back-link{display:inline-block;margin-bottom:16px;color:var(--fg-dim);font-size:.9rem}.back-link:hover{color:#e6edf3}
-.work-hero{display:flex;gap:22px;align-items:flex-start;margin-bottom:24px;flex-wrap:wrap}.work-hero-cover{width:min(240px,100%);aspect-ratio:1/1;border-radius:12px;position:relative;overflow:hidden;flex:none;display:flex;align-items:center;justify-content:center}
+.work-hero{display:flex;gap:22px;align-items:flex-start;margin-bottom:24px;flex-wrap:wrap}.work-hero-cover{width:min(240px,100%);aspect-ratio:1/1;border-radius:12px;position:relative;overflow:hidden;flex:none;display:flex;align-items:center;justify-content:center}.work-hero-cover .work-cover-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .work-hero-info{flex:1;min-width:260px}.work-hero-info h1{margin:0 0 10px;font-size:1.5rem;font-weight:650;line-height:1.35;letter-spacing:-.01em}
 /* ─── 音轨行 ─── */
 .track-row{background:var(--panel);border:1px solid var(--line-strong);border-radius:10px;padding:16px 18px;margin:0 0 14px;min-width:0;overflow-wrap:anywhere}

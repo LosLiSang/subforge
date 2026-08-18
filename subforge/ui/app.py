@@ -15,7 +15,7 @@ from jinja2 import Environment, PackageLoader, select_autoescape
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -24,6 +24,7 @@ from subforge.config import DEFAULT_MODELS_DIR
 from subforge.library import ImportRequest, ItemKind, LibraryStore
 from subforge.translate.srt_io import read_srt
 from subforge.ui.checks import check_model_configuration, test_profile_connection
+from subforge.ui.covers import cover_for_item
 from subforge.ui.picker import FilePicker
 from subforge.ui.profiles import LlmProfileStore, mask_secret
 from subforge.ui.settings import UiSettingsStore
@@ -133,7 +134,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         error = await _authorize_write(request, runtime)
         if error:
             return error
-        selected = await asyncio.to_thread(deps.picker.choose_directory)
+        # tkinter 对话框必须在主线程运行（Tcl 非线程安全）
+        selected = deps.picker.choose_directory()
         if selected is None:
             return RedirectResponse("/", status_code=303)
         if runtime.tasks is not None:
@@ -156,7 +158,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         error = await _authorize_write(request, runtime)
         if error:
             return error
-        selected = await asyncio.to_thread(deps.picker.choose_directory)
+        # tkinter 对话框必须在主线程运行（Tcl 非线程安全）
+        selected = deps.picker.choose_directory()
         if selected is None:
             return JSONResponse({"cancelled": True})
         selection_id = uuid4().hex
@@ -167,7 +170,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         error = await _authorize_write(request, runtime)
         if error:
             return error
-        selected = await asyncio.to_thread(deps.picker.choose_audio)
+        # tkinter 对话框必须在主线程运行（Tcl 非线程安全）
+        selected = deps.picker.choose_audio()
         if selected is None:
             return JSONResponse({"cancelled": True})
         selection_id = uuid4().hex
@@ -389,6 +393,26 @@ def create_app(deps: UiDependencies) -> Starlette:
             return Response("Not found", status_code=404)
         return _range_response(path, request.headers.get("range"))
 
+    async def item_cover(request: Request) -> Response:
+        """按需提取并返回作品第一音轨的内嵌封面（缓存到 .subforge/covers/）。"""
+        library = runtime.open_active_library()
+        if library is None:
+            return Response("Not found", status_code=404)
+        try:
+            item = library.get_item(request.path_params["item_id"])
+        except KeyError:
+            return Response("Not found", status_code=404)
+        media_path = None
+        if item.tracks:
+            try:
+                media_path = library.track_media_path(item.tracks[0].track_id)
+            except KeyError:
+                media_path = None
+        cover_path = cover_for_item(library.root, item.item_id, media_path)
+        if cover_path is None:
+            return Response("Not found", status_code=404)
+        return FileResponse(cover_path, media_type="image/jpeg")
+
     async def track_subtitles(request: Request) -> Response:
         library = runtime.open_active_library()
         if library is None:
@@ -492,6 +516,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/items/import", import_item, methods=["POST"]),
         Route("/items/{item_id}", item_detail),
         Route("/items/{item_id}/trash", trash_item, methods=["POST"]),
+        Route("/covers/{item_id}", item_cover),
         Route("/settings", settings_page, methods=["GET", "POST"]),
         Route("/settings/deepgram/delete-key", delete_deepgram_key, methods=["POST"]),
         Route("/profiles", profiles_page, methods=["GET", "POST"]),

@@ -17,6 +17,7 @@
 
 <section class="works-grid">{% for item in items %}<a class="work-card" href="/items/{{ item.item_id }}">
 <div class="work-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}">
+  <img class="work-cover-img" src="/covers/{{ item.item_id }}" alt="" loading="lazy" onerror="this.remove()">
   <span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span>
   {% if item.tracks %}<span class="work-size">{{ (item.tracks[0].size / 1048576)|round(1) }} MB</span>{% endif %}
 </div>

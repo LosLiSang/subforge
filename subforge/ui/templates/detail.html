@@ -2,6 +2,7 @@
 <a class="back-link" href="/">← 返回作品库</a>
 <section class="work-hero">
   <div class="work-hero-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}">
+    <img class="work-cover-img" src="/covers/{{ item.item_id }}" alt="" loading="lazy" onerror="this.remove()">
     <span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span>
   </div>
   <div class="work-hero-info">

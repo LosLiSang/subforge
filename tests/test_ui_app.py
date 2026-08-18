@@ -346,3 +346,62 @@ def test_detail_renders_track_rows_with_status_badges(tmp_path):
     assert 'name="llm_profile_id"' in html
     assert 'name="mode"' in html
     assert "/process" in html
+
+
+def test_cover_route_returns_extracted_image(tmp_path):
+    """作品页路由 /covers/{item_id}：带内嵌封面时返回 JPEG，无封面 404。"""
+    import shutil
+    import subprocess as sp
+    if shutil.which("ffmpeg") is None:
+        import pytest
+        pytest.skip("ffmpeg not available")
+
+    # 生成带 attached pic 封面的 m4a
+    from pathlib import Path as _P
+    media = tmp_path / "cover.m4a"
+    sp.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+         "-i", "anullsrc=r=16000:cl=mono:d=1",
+         "-f", "lavfi", "-i", "color=c=red:s=320x240:d=1",
+         "-map", "0:a", "-map", "1:v", "-c:a", "aac", "-c:v", "mjpeg",
+         "-disposition:v:0", "attached_pic", "-shortest", str(media)],
+        check=True, capture_output=True,
+    )
+
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, audio=media, library=library)
+    store = LibraryStore.open(library)
+    imported = store.import_audio(ImportRequest(
+        source=media, kind=ItemKind.STREAM_ARCHIVE, title="带封面作品", author="miyadi",
+    ))
+    store.close()
+
+    # 首页卡片引用 /covers/{item_id}
+    page = client.get("/")
+    assert f"/covers/{imported.item_id}" in page.text
+
+    # 封面端点返回 JPEG
+    cover = client.get(f"/covers/{imported.item_id}")
+    assert cover.status_code == 200
+    assert cover.headers["content-type"] == "image/jpeg"
+    assert cover.content[:2] == b"\xff\xd8"  # JPEG magic
+    assert len(cover.content) > 100
+
+    # 缓存已写入
+    assert (library / ".subforge" / "covers" / f"{imported.item_id}.jpg").exists()
+
+    # 无封面作品 → 404
+    no_cover = tmp_path / "plain.mp3"
+    no_cover.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x00not really audio")
+    no_cover_item = _import_audio(tmp_path, library, no_cover)
+    assert client.get(f"/covers/{no_cover_item}").status_code == 404
+
+
+def _import_audio(tmp_path, library, media) -> str:
+    client, headers = _authenticated_client(tmp_path, audio=media, library=library)
+    store = LibraryStore.open(library)
+    imported = store.import_audio(ImportRequest(
+        source=media, kind=ItemKind.STREAM_ARCHIVE, title=media.stem, author="x",
+    ))
+    store.close()
+    return imported.item_id

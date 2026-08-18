@@ -10,7 +10,7 @@
 
 <dialog id="import-dialog" class="import-dialog">
 <form method="post" action="/items/import" data-secure>
-  <header class="dialog-head"><h2>导入音频</h2><button type="button" class="ghost small" data-close-dialog>✕</button></header>
+  <header class="dialog-head"><div><h2>导入音频</h2><div class="dialog-sub">选择本地音频，加入作品库</div></div><button type="button" class="ghost small" data-close-dialog>✕</button></header>
   <input type="hidden" name="selection_id" id="selection-id">
   <p id="selected-name" class="selected-name"></p>
   <label>类型<select name="kind" id="kind" data-kind-select><option value="rj_work">RJ 作品</option><option value="stream_archive">直播归档</option></select></label>

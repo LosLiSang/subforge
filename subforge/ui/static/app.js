@@ -73,7 +73,7 @@ if (urlImportForm) {
       if (resp.redirected) { window.location.href = resp.url; return; }
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || data.error) {
-        errEl.textContent = data.error || `下载失败（HTTP ${resp.status}）`;
+        errEl.textContent = data.error || `下载失败（HTTP ${resp.status}），请稍后重试`;
         errEl.hidden = false;
       }
     } catch (err) {

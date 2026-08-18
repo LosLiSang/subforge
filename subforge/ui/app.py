@@ -757,8 +757,8 @@ def _download_and_import(
         raise ValueError("yt-dlp 未安装：请先安装 yt-dlp 或 pip install yt-dlp")
     tmp_dir = Path(_tf.mkdtemp(prefix="subforge-dl-"))
     try:
-        # Bilibili 反爬：412 Precondition Failed。模拟浏览器 UA + referer + cookie 直通
-        # （yt-dlp 对 bilibili 需要 referer 与 UA 才放行元数据请求）。
+        # Bilibili 反爬：元数据 API 间歇性返回 412/403/405。模拟浏览器 UA + referer
+        # + 浏览器 cookie（--cookies-from-browser）提高通过率；cookie 缺失时降级重试。
         cmd = [
             ytdlp,
             "--no-playlist",
@@ -769,10 +769,20 @@ def _download_and_import(
             "--referer", "https://www.bilibili.com/",
             "--add-header", "Origin:https://www.bilibili.com",
             "--no-check-certificates",
+            "--retries", "3",
+            "--fragment-retries", "3",
             "-o", str(tmp_dir / "%(title)s.%(ext)s"),
             url,
         ]
         result = _sp.run(cmd, capture_output=True, text=True, timeout=600)
+        # Bilibili 反爬间歇性（412/403/405）：重试原始命令（短延时错开频控）
+        if result.returncode != 0 and "bilibili.com" in url.lower():
+            import time as _time
+            for _ in range(2):
+                _time.sleep(2)
+                result = _sp.run(cmd, capture_output=True, text=True, timeout=600)
+                if result.returncode == 0:
+                    break
         if result.returncode != 0:
             raise ValueError(f"yt-dlp 下载失败：{result.stderr.strip()[-300:] or '未知错误'}")
         audio_files = [p for p in tmp_dir.iterdir() if p.is_file() and p.suffix.lower() in {".m4a", ".mp3", ".opus", ".wav", ".flac"}]

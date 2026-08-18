@@ -111,7 +111,7 @@
     const safeTitle = (st.title || '播放中').replace(/"/g, '&quot;');
     bar.innerHTML = `
       <img class="player-bar-cover" src="/covers/${st.itemId || ''}" alt="" onerror="this.remove()">
-      <a class="player-bar-title" href="/tracks/${st.trackId}/play" title="${safeTitle}">${safeTitle}</a>
+      <a class="player-bar-title" href="/tracks/${st.trackId}/play" target="content-frame" title="${safeTitle}">${safeTitle}</a>
       <input type="range" class="player-bar-seek" data-role="seek" min="0" max="${st.duration || 0}" step="0.1" value="${st.currentTime || 0}" aria-label="进度">
       <span class="player-bar-time" data-role="time">${fmtT(st.currentTime)}</span>
       <button type="button" class="ghost small" data-role="toggle" aria-label="播放/暂停">▶</button>
@@ -120,7 +120,12 @@
     const toggleBtn = bar.querySelector('[data-role="toggle"]');
     const seekInput = bar.querySelector('[data-role="seek"]');
     bar.querySelector('[data-role="toggle"]').addEventListener('click', () => player.toggle());
-    bar.querySelector('[data-role="open"]').addEventListener('click', () => { window.location.href = `/tracks/${st.trackId}/play`; });
+    // iframe 外壳：打开播放页 = iframe 内导航（顶层外壳保持不变）
+    bar.querySelector('[data-role="open"]').addEventListener('click', () => {
+      const frame = document.getElementById('content-frame');
+      if (frame) { frame.src = `/tracks/${st.trackId}/play`; }
+      else { window.location.href = `/tracks/${st.trackId}/play`; }
+    });
     seekInput.addEventListener('input', () => { player.seek(parseFloat(seekInput.value)); });
     const syncUI = () => {
       bar.querySelector('[data-role="time"]').textContent = fmtT(player.currentTime);

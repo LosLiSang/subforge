@@ -36,3 +36,20 @@ if (window.parent !== window) {
     window.parent.postMessage({ __navPath: window.location.pathname }, window.location.origin);
   } catch (e) {}
 }
+
+/* 就地播放：点击 data-play-track 时在底部条中开始播放（不跳转页面）。
+ * 按钮在内容页（iframe 内），播放条在顶层——驱动 window.top 的全局播放器。 */
+for (const btn of document.querySelectorAll('[data-play-track]')) {
+  btn.addEventListener('click', () => {
+    const url = btn.dataset.playTrack;
+    const trackId = url.split('/').filter(Boolean).slice(-2)[0];
+    const row = btn.closest('.track-row');
+    const title = row?.querySelector('h2')?.textContent || '播放中';
+    const player = window.top.SubForgePlayer || window.SubForgePlayer;
+    if (!player) return;
+    player.setTrack(trackId, title, '');
+    player.play(); // 切换音轨后直接播放（此刻有用户手势，自动播放放行）
+    const topBar = window.top.document?.getElementById('player-bar');
+    if (topBar) topBar.hidden = false;
+  });
+}

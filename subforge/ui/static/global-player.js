@@ -73,8 +73,13 @@
       if (!a.paused) return true;
       try { await a.play(); return true; } catch { return false; }
     },
-    /* 设置当前播放（就地播放按钮用） */
+    /* 设置当前播放（就地播放按钮用）：切换音轨时释放旧 iframe 重建 */
     setTrack(trackId, title, itemId) {
+      if (this.frame && this.state && this.state.trackId !== trackId) {
+        this.frame.remove();
+        this.frame = null;
+        this.audio = null;
+      }
       this.state = { trackId, title, itemId, currentTime: 0, duration: 0, playing: false };
       write(this.state);
       renderBar();
@@ -143,20 +148,3 @@
 
   renderBar();
 })();
-
-/* 就地播放：点击 data-play-track 时在底部条中开始播放（不跳转页面）。 */
-for (const btn of document.querySelectorAll('[data-play-track]')) {
-  btn.addEventListener('click', () => {
-    const url = btn.dataset.playTrack;
-    const trackId = url.split('/').filter(Boolean).slice(-2)[0];
-    const row = btn.closest('.track-row');
-    const title = row?.querySelector('h2')?.textContent || '播放中';
-    // iframe 外壳：播放条在顶层窗口，就地播放需驱动顶层播放器
-    const player = window.top.SubForgePlayer || window.SubForgePlayer;
-    if (!player) return;
-    player.setTrack(trackId, title, '');
-    player.toggle();
-    const topBar = window.top.document?.getElementById('player-bar');
-    if (topBar) topBar.hidden = false;
-  });
-}

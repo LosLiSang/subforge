@@ -1,10 +1,20 @@
 .claude
+.codegraph/
 .vscode
 music
+tmp/
+dist/
 
 uv.lock
 .venv
 .DS_Store
+.mypy_cache/
 .pytest_cache
 __pycache__
 *.log
+
+# QA screenshots & tooling
+.layout-qa/
+node_modules/
+package.json
+package-lock.json

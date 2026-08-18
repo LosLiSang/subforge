@@ -56,8 +56,8 @@ flowchart TD
     "llm_model": "deepseek-chat"
   },
   "paths": {
-    "source_srt": "C:/abs/audio.srt",
-    "target_srt": "C:/abs/audio_zh.srt"
+    "source_srt": "C:/abs/audio.ja.srt",
+    "target_srt": "C:/abs/audio.zh.srt"
   },
   "asr": {
     "status": "pending|done"

@@ -76,19 +76,19 @@ SubForge 面向长音频和批量音轨处理，ASR 与 LLM 翻译都可能耗�
 
 ### S1. 已有源 SRT 时默认跳过 ASR ← R2.1, R5.1
 
-- **Given** 一个媒体文件 `audio.m4a` 和同目录下已存在的 `audio.srt`
+- **Given** 一个媒体文件 `audio.m4a` 和同目录下已存在的 `audio.ja.srt`
 - **When** 用户再次执行处理命令且未启用强制从头开始
-- **Then** 系统复用 `audio.srt`，不执行 ASR，并继续进入翻译阶段
+- **Then** 系统复用 `audio.ja.srt`，不执行 ASR，并继续进入翻译阶段
 
 ### S2. 完整目标 SRT 默认跳过整个文件 ← R3.1, R3.3
 
-- **Given** 一个媒体文件 `audio.m4a` 和同目录下已存在完整的 `audio_zh.srt`
+- **Given** 一个媒体文件 `audio.m4a` 和同目录下已存在完整的 `audio.zh.srt`
 - **When** 用户再次执行处理命令且未启用强制从头开始
 - **Then** 系统跳过该文件的 ASR 与翻译阶段，并提示该文件已完成
 
 ### S3. 强制从头开始忽略旧结果 ← R4.1, R4.2, R6.3
 
-- **Given** 一个媒体文件已有 `audio.srt`、`audio_zh.srt` 和断点状态
+- **Given** 一个媒体文件已有 `audio.ja.srt`、`audio.zh.srt` 和断点状态
 - **When** 用户执行处理命令并启用强制从头开始选项
 - **Then** 系统忽略已有产物和断点状态，从 ASR 阶段重新处理
 

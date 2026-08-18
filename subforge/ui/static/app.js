@@ -70,9 +70,19 @@ if (urlImportForm) {
     btn.textContent = '下载中…';
     try {
       const resp = await fetch(urlImportForm.action, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-      if (resp.redirected) { window.location.href = resp.url; return; }
       const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || data.error) {
+      if (resp.status === 202 && data.task_id) {
+        // 异步：轮询后台下载状态，完成后跳转到作品页
+        btn.textContent = '下载中…';
+        for (;;) {
+          await new Promise(r => setTimeout(r, 1500));
+          const st = await fetch(`/api/imports/${data.task_id}`).then(r => r.json()).catch(() => null);
+          if (!st) continue;
+          if (st.status === 'done' && st.item_id) { window.location.href = `/items/${st.item_id}`; return; }
+          if (st.status === 'error') { errEl.textContent = st.message || '下载失败'; errEl.hidden = false; break; }
+          btn.textContent = st.message || '下载中…';
+        }
+      } else if (!resp.ok || data.error) {
         errEl.textContent = data.error || `下载失败（HTTP ${resp.status}），请稍后重试`;
         errEl.hidden = false;
       }

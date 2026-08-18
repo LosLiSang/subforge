@@ -1,4 +1,5 @@
 import re
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -534,3 +535,56 @@ def test_import_url_downloads_and_imports(tmp_path, monkeypatch):
     assert result.created is True
     items = LibraryStore.open(library).list_items()
     assert any(it.title == "下载作品" for it in items)
+
+
+def test_import_url_returns_accepted_async(tmp_path):
+    """import-url 异步：立即 202 返回，不阻塞等下载；后台任务最终完成并入库。"""
+    import subprocess as sp
+    import tempfile as _tf
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+
+    fake_audio = tmp_path / "dl.m4a"
+    fake_audio.write_bytes(b"\x00" * 2048)
+    fake_thumb = tmp_path / "dl.jpg"
+    fake_thumb.write_bytes(b"\xff\xd8fakejpeg")
+
+    real_mkdtemp = _tf.mkdtemp
+
+    def fake_mkdtemp(*a, **k):
+        d = real_mkdtemp(*a, **k)
+        shutil.copy(str(fake_audio), str(Path(d) / "视频.m4a"))
+        shutil.copy(str(fake_thumb), str(Path(d) / "视频.jpg"))
+        return d
+
+    def fake_run(cmd, **kwargs):
+        # 模拟 yt-dlp：直接成功
+        return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    import subforge.ui.app as app_mod
+    from unittest.mock import patch
+    with (
+        patch.object(app_mod.shutil, "which", lambda n: "yt-dlp" if n == "yt-dlp" else app_mod.shutil.which(n)),
+        patch.object(_tf, "mkdtemp", fake_mkdtemp),
+        patch.object(sp, "run", fake_run),
+    ):
+        resp = client.post("/items/import-url", headers=headers, data={
+            "url": "https://www.bilibili.com/video/BV1x", "kind": "stream_archive",
+            "title": "异步作品", "author": "作者",
+        })
+        assert resp.status_code == 202
+        data = resp.json()
+        assert "task_id" in data
+        # 后台任务在 patch 上下文中运行：等待完成
+        import time
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            status = client.get(f"/api/imports/{data['task_id']}").json()
+            if status.get("status") == "done":
+                break
+            time.sleep(0.2)
+        assert status.get("status") == "done", status
+    items = LibraryStore.open(library).list_items()
+    assert any(it.title == "异步作品" for it in items)
+    item = next(it for it in items if it.title == "异步作品")
+    assert (library / ".subforge" / "covers" / f"{item.item_id}.jpg").exists()

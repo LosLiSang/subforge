@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import mimetypes
 import secrets
 import shutil
@@ -50,6 +51,7 @@ class UiRuntime:
         self.deps = deps
         self.sessions: dict[str, str] = {}
         self.selections: dict[str, Path] = {}
+        self.imports: dict[str, dict] = {}  # 后台 URL 下载导入任务状态
         self.library: LibraryStore | None = None
         self.tasks: TaskManager | None = None
         self.templates = Environment(
@@ -211,7 +213,12 @@ def create_app(deps: UiDependencies) -> Starlette:
         return RedirectResponse(f"/items/{result.item_id}", status_code=303)
 
     async def import_item_url(request: Request) -> Response:
-        """yt-dlp 下载（YouTube/Bilibili）→ 提取音频 → 导入库。"""
+        """yt-dlp 下载（YouTube/Bilibili）→ 提取音频 → 导入库。
+
+        异步：立即返回 202 + task_id，下载/导入在后台任务执行；
+        前端轮询 /api/imports/{task_id} 获取进度，完成后自动刷新。
+        同时抓取视频封面写入 .subforge/covers/。
+        """
         error = await _authorize_write(request, runtime)
         if error:
             return error
@@ -223,18 +230,26 @@ def create_app(deps: UiDependencies) -> Starlette:
         if not url:
             return JSONResponse({"error": "url is required"}, status_code=400)
         kind = ItemKind(form.get("kind", "stream_archive"))
-        try:
-            result = await asyncio.to_thread(
-                _download_and_import,
-                library, url,
-                kind=kind,
-                rj_code=form.get("rj_code") or None,
-                title=form.get("title") or None,
-                author=form.get("author") or None,
-            )
-        except (ValueError, OSError) as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return RedirectResponse(f"/items/{result.item_id}", status_code=303)
+        task_id = uuid4().hex
+        runtime.imports[task_id] = {
+            "task_id": task_id, "status": "running",
+            "message": "开始下载…", "item_id": None,
+        }
+        await _run_url_import(
+            runtime, library, url, task_id,
+            kind=kind,
+            rj_code=form.get("rj_code") or None,
+            title=form.get("title") or None,
+            author=form.get("author") or None,
+        )
+        return JSONResponse({"task_id": task_id, "status": "running"}, status_code=202)
+
+    async def import_status(request: Request) -> Response:
+        """查询后台下载导入任务状态（前端轮询）。"""
+        task = runtime.imports.get(request.path_params["task_id"])
+        if task is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(task)
 
     async def item_detail(request: Request) -> Response:
         library = runtime.open_active_library()
@@ -593,6 +608,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/picker/directory", choose_directory, methods=["POST"]),
         Route("/items/import", import_item, methods=["POST"]),
         Route("/items/import-url", import_item_url, methods=["POST"]),
+        Route("/api/imports/{task_id}", import_status),
         Route("/items/{item_id}", item_detail),
         Route("/items/{item_id}/trash", trash_item, methods=["POST"]),
         Route("/covers/{item_id}", item_cover),
@@ -707,6 +723,9 @@ def _range_response(path: Path, range_header: str | None) -> Response:
     return StreamingResponse(chunk(), status_code=206, media_type=content_type, headers=headers)
 
 
+logger = logging.getLogger(__name__)
+
+
 def _quiet_proactor_reset_noise() -> None:
     """Silence known asyncio Proactor noise on Windows.
 
@@ -732,6 +751,43 @@ def _quiet_proactor_reset_noise() -> None:
         loop_.default_exception_handler(context)
 
     loop.set_exception_handler(handler)
+
+
+async def _run_url_import(
+    runtime: "UiRuntime",
+    library: LibraryStore,
+    url: str,
+    task_id: str,
+    *,
+    kind: ItemKind,
+    rj_code: str | None,
+    title: str | None,
+    author: str | None,
+) -> None:
+    """后台执行 URL 下载+导入。
+
+    用独立线程而非 asyncio 任务：下载/导入是 IO 密集，且线程不依赖
+    事件循环存活（TestClient 每请求可能新 loop，任务会被遇弃）。
+    """
+    import threading
+
+    def _set(status: str, message: str, item_id: str | None = None) -> None:
+        task = runtime.imports.get(task_id)
+        if task:
+            task.update(status=status, message=message, item_id=item_id)
+
+    def _worker() -> None:
+        try:
+            _set("running", "下载中…")
+            result = _download_and_import(
+                library, url,
+                kind=kind, rj_code=rj_code, title=title, author=author,
+            )
+            _set("done", "导入完成", result.item_id)
+        except (ValueError, OSError) as exc:
+            _set("error", str(exc))
+
+    threading.Thread(target=_worker, daemon=True, name=f"url-import-{task_id[:8]}").start()
 
 
 def _download_and_import(
@@ -765,6 +821,8 @@ def _download_and_import(
             "--extract-audio",
             "--audio-format", "m4a",
             "--audio-quality", "0",
+            "--write-thumbnail",
+            "--convert-thumbnails", "jpg",
             "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
             "--referer", "https://www.bilibili.com/",
             "--add-header", "Origin:https://www.bilibili.com",
@@ -785,18 +843,32 @@ def _download_and_import(
                     break
         if result.returncode != 0:
             raise ValueError(f"yt-dlp 下载失败：{result.stderr.strip()[-300:] or '未知错误'}")
+        logger.info("yt-dlp downloaded files: %s", [p.name for p in tmp_dir.iterdir()])
         audio_files = [p for p in tmp_dir.iterdir() if p.is_file() and p.suffix.lower() in {".m4a", ".mp3", ".opus", ".wav", ".flac"}]
         if not audio_files:
             raise ValueError("yt-dlp 未提取到音频文件")
         media = audio_files[0]
         fallback_title = title or media.stem
-        return library.import_audio(ImportRequest(
+        result = library.import_audio(ImportRequest(
             source=media,
             kind=kind,
             title=fallback_title,
             rj_code=rj_code,
             author=author,
         ))
+        # 抓取到的封面 → 库封面缓存（.subforge/covers/{item_id}.jpg）
+        # 无论新建还是去重复用：目标封面不存在就写入
+        thumbs = [p for p in tmp_dir.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}]
+        if thumbs:
+            from subforge.ui.covers import covers_dir
+            covers_dir(library.root).mkdir(parents=True, exist_ok=True)
+            dst = covers_dir(library.root) / f"{result.item_id}.jpg"
+            if not dst.exists():
+                try:
+                    shutil.copy(thumbs[0], dst)
+                except OSError:
+                    pass
+        return result
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

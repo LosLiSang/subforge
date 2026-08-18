@@ -57,3 +57,9 @@ dialog.profile-dialog{background:var(--panel);color:#e6edf3;border:1px solid var
 /* ─── 字幕模式选择 ─── */
 .subtitle-mode{display:flex;gap:4px;margin:14px 0 0}.subtitle-mode button{background:transparent;border:1px solid var(--line-strong);color:var(--fg-dim);padding:5px 14px;border-radius:99px;font-size:.85rem;cursor:pointer}.subtitle-mode button.active{background:#1c2b40;border-color:#539bf560;color:#71b7ff}.subtitle-mode button:hover{color:#e6edf3}
 body{padding-bottom:56px}
+
+/* ─── iframe 外壳布局 ─── */
+body{display:flex;flex-direction:column;min-height:100vh;padding-bottom:0}
+#content-frame{flex:1;width:100%;border:none;min-height:0}
+.frame-main{padding:28px clamp(18px,5vw,64px) 56px;width:min(880px,100%);margin:auto}
+@media(max-width:700px){.frame-main{padding:20px 16px 48px}}

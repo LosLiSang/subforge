@@ -31,6 +31,17 @@ def _authenticated_client(tmp_path, *, audio=None, library=None, worker=None):
     assert response.status_code == 303
     csrf = client.get("/api/session").json()["csrf_token"]
     headers = {"x-csrf-token": csrf, "origin": "http://testserver"}
+    # 真实浏览器中页面由外壳 iframe 加载（Sec-Fetch-Dest: iframe），
+    # 测试模拟 iframe 内请求以断言内页内容而非顶层外壳。
+    _frame_headers = {"sec-fetch-dest": "iframe"}
+    original_get = client.get
+
+    def _get(url, **kwargs):
+        kwargs.setdefault("headers", {})
+        kwargs["headers"] = {**_frame_headers, **kwargs["headers"]}
+        return original_get(url, **kwargs)
+
+    client.get = _get
     return client, headers
 
 

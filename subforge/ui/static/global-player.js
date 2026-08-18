@@ -146,10 +146,12 @@ for (const btn of document.querySelectorAll('[data-play-track]')) {
     const trackId = url.split('/').filter(Boolean).slice(-2)[0];
     const row = btn.closest('.track-row');
     const title = row?.querySelector('h2')?.textContent || '播放中';
-    const player = window.SubForgePlayer;
+    // iframe 外壳：播放条在顶层窗口，就地播放需驱动顶层播放器
+    const player = window.top.SubForgePlayer || window.SubForgePlayer;
     if (!player) return;
     player.setTrack(trackId, title, '');
-    player.toggle(); // 创建 iframe 并播放（此刻有用户手势，自动播放放行）
-    window.scrollTo({ top: document.body.scrollHeight });
+    player.toggle();
+    const topBar = window.top.document?.getElementById('player-bar');
+    if (topBar) topBar.hidden = false;
   });
 }

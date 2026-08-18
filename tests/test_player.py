@@ -43,6 +43,16 @@ def _player_client(tmp_path):
     ))
     client = TestClient(app)
     client.get("/?token=token")
+    # 模拟 iframe 外壳内请求（内页内容断言）
+    _frame_headers = {"sec-fetch-dest": "iframe"}
+    original_get = client.get
+
+    def _get(url, **kwargs):
+        kwargs.setdefault("headers", {})
+        kwargs["headers"] = {**_frame_headers, **kwargs["headers"]}
+        return original_get(url, **kwargs)
+
+    client.get = _get
     return client, imported.track_id
 
 
@@ -118,12 +128,17 @@ def test_player_page_has_subtitle_mode_selector(tmp_path):
 
 
 def test_every_page_has_global_player_bar(tmp_path):
-    """每个页面底部都有全局播放条容器（任何页面可播放）。"""
+    """顶层外壳固定播放条；内页（iframe 内容）不含播放条（外壳持有）。"""
     client, track_id = _player_client(tmp_path)
-    for url in ("/", f"/tracks/{track_id}/play"):
-        page = client.get(url).text
-        assert 'id="player-bar"' in page
-        assert "/static/global-player.js" in page
+    # 顶层外壳（无 Sec-Fetch-Dest: iframe）→ 含播放条 + 内容 iframe
+    shell = client.get("/", headers={"sec-fetch-dest": "document"}).text
+    assert 'id="player-bar"' in shell
+    assert "/static/global-player.js" in shell
+    assert 'id="content-frame"' in shell
+    # 内页（iframe 内）→ 不含播放条（由外壳统一持有）
+    inner = client.get(f"/tracks/{track_id}/play").text
+    assert 'id="player-bar"' not in inner
+    assert "/static/global-player.js" not in inner
 
 
 def test_player_embed_mode_renders_bare_audio(tmp_path):

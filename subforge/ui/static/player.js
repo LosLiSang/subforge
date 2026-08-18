@@ -5,7 +5,7 @@ const embed=root.dataset.embed==='1';
 const STORAGE_KEY='sf.playback';
 let source=[],target=[],sourceIndex=0,targetIndex=0;
 let lastTranscriptInteract=0;
-let player=window.SubForgePlayer;
+let player=window.top.SubForgePlayer||window.SubForgePlayer;
 
 /* 播放器音频源：统一用全局单例（iframe 内 audio），播放页不再自建 <audio>。 */
 let audio=null;
@@ -86,10 +86,10 @@ function loadTranscripts(){
 
 if(!embed){
   /* 等待全局播放器（global-player.js，base.html 末尾加载）就绪后初始化 */
-  const init=()=>{player=window.SubForgePlayer;bindPlayerAudio();};
-  if(window.SubForgePlayer){init();}else{
+  const init=()=>{player=window.top.SubForgePlayer||window.SubForgePlayer;bindPlayerAudio();};
+  if(window.top.SubForgePlayer||window.SubForgePlayer){init();}else{
     let tries=0;
-    const iv=setInterval(()=>{tries++;if(window.SubForgePlayer||tries>50){clearInterval(iv);if(window.SubForgePlayer)init();}},100);
+    const iv=setInterval(()=>{tries++;if(window.top.SubForgePlayer||window.SubForgePlayer||tries>50){clearInterval(iv);if(window.top.SubForgePlayer||window.SubForgePlayer)init();}},100);
   }
   loadTranscripts();
   applySubtitleMode();

@@ -84,9 +84,12 @@ class UiRuntime:
         session_id = request.cookies.get("subforge_session")
         if session_id:
             csrf = self.sessions.get(session_id)
+        # iframe 外壳：内页请求（iframe 加载）只渲染内容块，不渲染顶层外壳
+        is_frame = request.headers.get("sec-fetch-dest") == "iframe"
         html = self.templates.get_template(name).render(
             request=request,
             csrf_token=csrf,
+            is_frame=is_frame,
             **context,
         )
         return HTMLResponse(html)

@@ -463,3 +463,74 @@ def test_shell_sidebar_contains_all_nav_entries(tmp_path):
     for entry in ("作品库", "翻译配置", "设置", "统计", "下载管理", "关于"):
         assert entry in shell
     assert 'id="content-frame"' in shell
+
+
+def test_import_dialog_has_dual_tabs(tmp_path):
+    """导入弹窗：本地文件 / 从链接下载 双标签；本地标签点按钮才弹文件选择。"""
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+    page = client.get("/").text
+    assert 'id="import-dialog"' in page
+    assert 'data-import-tab="local"' in page
+    assert 'data-import-tab="url"' in page
+    assert 'data-pick-import-file' in page  # 本地 tab 内选择文件按钮
+    assert 'name="url"' in page             # 下载 tab 的 URL 输入
+    # 点击导入按钮不应直接触发文件选择——由 tab 内按钮触发
+    assert 'id="pick-audio"' in page
+
+
+def test_import_url_rejects_missing_url(tmp_path):
+    """import-url 端点：无 URL / 无授权返回错误。"""
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+    resp = client.post("/items/import-url", headers=headers, data={"url": ""})
+    assert resp.status_code == 400
+    # 未授权
+    client2 = TestClient(create_app(UiDependencies(
+        settings=UiSettingsStore(tmp_path / "ui2.json"),
+        picker=FakeFilePicker(), profiles=LlmProfileStore(tmp_path / "p.json"),
+        worker=FakeWorkerAdapter([]), startup_token="t2", open_browser=False,
+        allowed_hosts={"testserver"},
+    )))
+    assert client2.post("/items/import-url", data={"url": "https://youtu.be/x"}).status_code == 401
+
+
+def test_import_url_downloads_and_imports(tmp_path, monkeypatch):
+    """import-url：mock yt-dlp 下载产物 → 入库成功。"""
+    import subprocess as sp
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+
+    fake_audio = tmp_path / "downloaded.m4a"
+    fake_audio.write_bytes(b"\x00" * 2048)
+
+    def fake_run(cmd, **kwargs):
+        # 模拟 yt-dlp：把 fake_audio 复制到输出目录
+        out = Path([a for a in cmd if str(a).startswith(str(tmp_path))][0] if any(str(a).startswith(str(tmp_path)) for a in cmd) else "")
+        return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    # 直接调用 helper 验证：yt-dlp 输出目录里放一个 m4a
+    from subforge.ui.app import _download_and_import
+    import shutil
+    monkeypatch.setattr("shutil.which", lambda name: "yt-dlp" if name == "yt-dlp" else shutil.which(name))
+    # 用真实 temp dir 模拟：替换 mkdtemp 返回可控目录
+    import tempfile
+    real_mkdtemp = tempfile.mkdtemp
+    captured = {}
+    def fake_mkdtemp(*a, **k):
+        d = real_mkdtemp(*a, **k)
+        shutil.copy(fake_audio, Path(d) / "video.m4a")
+        captured["dir"] = d
+        return d
+    monkeypatch.setattr("tempfile.mkdtemp", fake_mkdtemp)
+
+    store = LibraryStore.open(library)
+    result = _download_and_import(
+        store, "https://www.youtube.com/watch?v=test",
+        kind=ItemKind.STREAM_ARCHIVE, rj_code=None, title="下载作品", author="测试",
+    )
+    store.close()
+    assert result.created is True
+    items = LibraryStore.open(library).list_items()
+    assert any(it.title == "下载作品" for it in items)

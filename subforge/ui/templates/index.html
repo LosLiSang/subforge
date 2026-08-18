@@ -9,16 +9,35 @@
 </section>
 
 <dialog id="import-dialog" class="import-dialog">
-<form method="post" action="/items/import" data-secure>
-  <header class="dialog-head"><div><h2>导入音频</h2><div class="dialog-sub">选择本地音频，加入作品库</div></div><button type="button" class="ghost small" data-close-dialog>✕</button></header>
-  <input type="hidden" name="selection_id" id="selection-id">
-  <p id="selected-name" class="selected-name"></p>
-  <label>类型<select name="kind" id="kind" data-kind-select><option value="rj_work">RJ 作品</option><option value="stream_archive">直播归档</option></select></label>
-  <label data-rj-field>RJ 号<input name="rj_code" placeholder="RJ01546796"></label>
-  <label>标题<input name="title" required></label>
-  <label>作者/博主<input name="author"></label>
-  <footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button>导入</button></footer>
-</form>
+  <header class="dialog-head"><div><h2>导入音频</h2><div class="dialog-sub">选择本地文件，或从链接下载</div></div><button type="button" class="ghost small" data-close-dialog>✕</button></header>
+  <div class="import-tabs" role="tablist">
+    <button type="button" class="import-tab active" data-import-tab="local" role="tab" aria-selected="true">本地文件</button>
+    <button type="button" class="import-tab" data-import-tab="url" role="tab" aria-selected="false">从链接下载</button>
+  </div>
+
+  <div data-import-panel="local">
+    <form method="post" action="/items/import" data-secure>
+      <input type="hidden" name="selection_id" id="selection-id">
+      <p id="selected-name" class="selected-name"></p>
+      <button type="button" class="ghost" data-pick-import-file>选择音频文件</button>
+      <label>类型<select name="kind" id="kind" data-kind-select><option value="rj_work">RJ 作品</option><option value="stream_archive">直播归档</option></select></label>
+      <label data-rj-field>RJ 号<input name="rj_code" placeholder="RJ01546796"></label>
+      <label>标题<input name="title" required></label>
+      <label>作者/博主<input name="author"></label>
+      <footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button>导入</button></footer>
+    </form>
+  </div>
+
+  <div data-import-panel="url" hidden>
+    <form method="post" action="/items/import-url" data-secure>
+      <label>视频链接<input name="url" required placeholder="https://www.youtube.com/watch?v=… 或 https://www.bilibili.com/video/…"></label>
+      <label>类型<select name="kind" data-kind-select><option value="stream_archive">直播归档</option><option value="rj_work">RJ 作品</option></select></label>
+      <label data-rj-field>RJ 号<input name="rj_code" placeholder="RJ01546796"></label>
+      <label>标题<input name="title" placeholder="留空用视频标题"></label>
+      <label>作者/博主<input name="author"></label>
+      <footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button>下载并导入</button></footer>
+    </form>
+  </div>
 </dialog>
 
 <section class="works-grid">{% for item in items %}<a class="work-card" href="/items/{{ item.item_id }}">

@@ -5,6 +5,7 @@ import hmac
 import json
 import mimetypes
 import secrets
+import shutil
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -204,6 +205,32 @@ def create_app(deps: UiDependencies) -> Starlette:
                     rj_code=form.get("rj_code") or None,
                     author=form.get("author") or None,
                 ),
+            )
+        except (ValueError, OSError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return RedirectResponse(f"/items/{result.item_id}", status_code=303)
+
+    async def import_item_url(request: Request) -> Response:
+        """yt-dlp 下载（YouTube/Bilibili）→ 提取音频 → 导入库。"""
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse({"error": "Library is not configured"}, status_code=409)
+        form = await _read_form(request)
+        url = form.get("url", "").strip()
+        if not url:
+            return JSONResponse({"error": "url is required"}, status_code=400)
+        kind = ItemKind(form.get("kind", "stream_archive"))
+        try:
+            result = await asyncio.to_thread(
+                _download_and_import,
+                library, url,
+                kind=kind,
+                rj_code=form.get("rj_code") or None,
+                title=form.get("title") or None,
+                author=form.get("author") or None,
             )
         except (ValueError, OSError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -565,6 +592,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/picker/audio", choose_audio, methods=["POST"]),
         Route("/picker/directory", choose_directory, methods=["POST"]),
         Route("/items/import", import_item, methods=["POST"]),
+        Route("/items/import-url", import_item_url, methods=["POST"]),
         Route("/items/{item_id}", item_detail),
         Route("/items/{item_id}/trash", trash_item, methods=["POST"]),
         Route("/covers/{item_id}", item_cover),
@@ -704,6 +732,57 @@ def _quiet_proactor_reset_noise() -> None:
         loop_.default_exception_handler(context)
 
     loop.set_exception_handler(handler)
+
+
+def _download_and_import(
+    library: LibraryStore,
+    url: str,
+    *,
+    kind: ItemKind,
+    rj_code: str | None,
+    title: str | None,
+    author: str | None,
+) -> ImportResult:
+    """Download audio from a YouTube/Bilibili URL via yt-dlp and import it.
+
+    Runs in a worker thread (network + ffmpeg). yt-dlp extracts audio to
+    m4a (--extract-audio) in a temp dir, then library.import_audio copies
+    it into the library with the usual checksum/dedupe logic.
+    """
+    import subprocess as _sp
+    import tempfile as _tf
+
+    ytdlp = shutil.which("yt-dlp")
+    if ytdlp is None:
+        raise ValueError("yt-dlp 未安装：请先安装 yt-dlp 或 pip install yt-dlp")
+    tmp_dir = Path(_tf.mkdtemp(prefix="subforge-dl-"))
+    try:
+        cmd = [
+            ytdlp,
+            "--no-playlist",
+            "--extract-audio",
+            "--audio-format", "m4a",
+            "--audio-quality", "0",
+            "-o", str(tmp_dir / "%(title)s.%(ext)s"),
+            url,
+        ]
+        result = _sp.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            raise ValueError(f"yt-dlp 下载失败：{result.stderr.strip()[-300:] or '未知错误'}")
+        audio_files = [p for p in tmp_dir.iterdir() if p.is_file() and p.suffix.lower() in {".m4a", ".mp3", ".opus", ".wav", ".flac"}]
+        if not audio_files:
+            raise ValueError("yt-dlp 未提取到音频文件")
+        media = audio_files[0]
+        fallback_title = title or media.stem
+        return library.import_audio(ImportRequest(
+            source=media,
+            kind=kind,
+            title=fallback_title,
+            rj_code=rj_code,
+            author=author,
+        ))
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _resolve_selected_path(runtime: UiRuntime, form: dict[str, str], field: str) -> Path | None:

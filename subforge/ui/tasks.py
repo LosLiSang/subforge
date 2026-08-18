@@ -1,0 +1,367 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import sys
+import tempfile
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import AsyncIterator, Protocol
+from uuid import uuid4
+
+from subforge.library import LibraryStore
+from subforge.presets import ASMR_PRESET
+
+logger = logging.getLogger(__name__)
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+@dataclass(frozen=True)
+class ProcessingSnapshot:
+    asr_provider: str
+    scene: str
+    whisper_model: str
+    llm_profile_id: str
+
+
+@dataclass
+class TaskRecord:
+    task_id: str
+    track_id: str
+    status: str
+    stage: str | None = None
+    progress: float = 0.0
+    completed: int | None = None
+    total: int | None = None
+    message: str | None = None
+    config_snapshot: dict | None = None
+
+
+class WorkerAdapter(Protocol):
+    async def events(self, task: TaskRecord, request: dict) -> AsyncIterator[dict]: ...
+    async def cancel(self, task_id: str) -> None: ...
+
+
+class FakeWorkerAdapter:
+    def __init__(self, events: list[dict], wait_forever: bool = False) -> None:
+        self._events = events
+        self._wait_forever = wait_forever
+        self._cancelled = asyncio.Event()
+
+    async def events(self, task: TaskRecord, request: dict) -> AsyncIterator[dict]:
+        for event in self._events:
+            await asyncio.sleep(0)
+            yield {"job_id": task.task_id, **event}
+        if self._wait_forever:
+            await self._cancelled.wait()
+
+    async def cancel(self, task_id: str) -> None:
+        self._cancelled.set()
+
+
+class SubprocessWorkerAdapter:
+    def __init__(self, config_path: Path | None = None) -> None:
+        self.config_path = config_path
+        self._processes: dict[str, asyncio.subprocess.Process] = {}
+        self._requests: dict[str, Path] = {}
+        self._stderr: dict[str, asyncio.subprocess.Process] = {}
+
+    def _stderr_log_path(self, library_root: Path | str, task_id: str) -> Path:
+        """Worker stderr 落盘位置：<library_root>/.subforge/logs/worker-<task_id>.log"""
+        safe_id = "".join(c for c in task_id if c.isalnum() or c in "-_")[:64]
+        return Path(library_root) / ".subforge" / "logs" / f"worker-{safe_id}.log"
+
+    async def events(self, task: TaskRecord, request: dict) -> AsyncIterator[dict]:
+        request = dict(request)
+        llm_api_key = str(request.pop("llm_api_key", ""))
+        deepgram_api_key = str(request.pop("deepgram_api_key", ""))
+        proxy_url = str(request.pop("proxy_url", ""))
+        request_root = Path(tempfile.gettempdir()) / "subforge-worker"
+        request_root.mkdir(parents=True, exist_ok=True)
+        request_path = request_root / f"{task.task_id}.request.json"
+        request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+        env = os.environ.copy()
+        if llm_api_key:
+            env["SUBFORGE_WORKER_LLM_API_KEY"] = llm_api_key
+        if deepgram_api_key:
+            env["SUBFORGE_WORKER_DEEPGRAM_API_KEY"] = deepgram_api_key
+        if proxy_url:
+            env["HTTP_PROXY"] = proxy_url
+            env["HTTPS_PROXY"] = proxy_url
+            env["ALL_PROXY"] = proxy_url
+        self._requests[task.task_id] = request_path
+        # stderr 落盘：原生崩溃（如 0xC0000409 栈溢出）不走 Python 异常，
+        # 只有 stderr 能留下现场。写到库目录 .subforge/logs/，崩溃后仍保留。
+        library_root = str(request.get("library_root") or ".")
+        stderr_path = self._stderr_log_path(library_root, task.task_id)
+        stderr_path.parent.mkdir(parents=True, exist_ok=True)
+        stderr_file = open(stderr_path, "wb")
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "subforge.worker",
+            "--request",
+            str(request_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=stderr_file,
+            env=env,
+        )
+        self._processes[task.task_id] = process
+        assert process.stdout is not None
+        try:
+            while line := await process.stdout.readline():
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning("Ignoring malformed worker event")
+            code = await process.wait()
+            stderr_file.close()
+            if code and process.returncode not in (-15, 1):
+                crash_hint = ""
+                if code >= 0x80000000:
+                    crash_hint = (f" (0x{code & 0xFFFFFFFF:08X})；崩溃现场已保存到 {stderr_path}")
+                yield {
+                    "type": "task_failed",
+                    "stage": "worker",
+                    "error_type": "WorkerExit",
+                    "message": f"Worker exited with code {code}{crash_hint}",
+                }
+        finally:
+            self._processes.pop(task.task_id, None)
+            self._requests.pop(task.task_id, None)
+            if not stderr_file.closed:
+                stderr_file.close()
+            request_path.unlink(missing_ok=True)
+
+    async def cancel(self, task_id: str) -> None:
+        process = self._processes.get(task_id)
+        if process is None or process.returncode is not None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+
+
+class TaskManager:
+    def __init__(
+        self,
+        library: LibraryStore,
+        worker: WorkerAdapter,
+        media_concurrency: int = 1,
+        profile_resolver=None,
+        deepgram_key_resolver=None,
+        proxy_resolver=None,
+        models_dir_resolver=None,
+        direct_model_resolver=None,
+    ) -> None:
+        if media_concurrency < 1:
+            raise ValueError("media_concurrency must be at least 1")
+        self.library = library
+        self.worker = worker
+        self._semaphore = asyncio.Semaphore(media_concurrency)
+        self._profile_resolver = profile_resolver
+        self._deepgram_key_resolver = deepgram_key_resolver
+        self._proxy_resolver = proxy_resolver
+        self._models_dir_resolver = models_dir_resolver
+        self._direct_model_resolver = direct_model_resolver
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._subscribers: dict[str, set[asyncio.Queue]] = {}
+        self._mark_running_interrupted()
+
+    def _mark_running_interrupted(self) -> None:
+        with self.library._db_lock, self.library._db:
+            self.library._db.execute(
+                "UPDATE tasks SET status='interrupted', updated_at=? WHERE status IN ('queued','running')",
+                (_now(),),
+            )
+        for item in self.library.list_items():
+            for track in item.tracks:
+                if track.status in {"queued", "processing"}:
+                    self.library.update_track_status(track.track_id, "interrupted")
+
+    async def enqueue(
+        self,
+        track_id: str,
+        snapshot: ProcessingSnapshot,
+        mode: str = "continue",
+    ) -> TaskRecord:
+        self.library.get_track(track_id)
+        self.library.prepare_processing(track_id, mode)
+        task = TaskRecord(
+            task_id=uuid4().hex,
+            track_id=track_id,
+            status="queued",
+            stage="queue",
+            config_snapshot=asdict(snapshot),
+        )
+        self._save(task)
+        self.library.update_track_status(track_id, "queued")
+        self._tasks[task.task_id] = asyncio.create_task(self._run(task))
+        return task
+
+    async def _run(self, task: TaskRecord) -> None:
+        try:
+            async with self._semaphore:
+                task.status = "running"
+                self._save(task)
+                self.library.update_track_status(task.track_id, "processing")
+                request = self._build_request(task)
+                async for event in self.worker.events(task, request):
+                    self._apply_event(task, event)
+                    self._save(task)
+                    self._publish(task.task_id, event)
+                if task.status == "running":
+                    task.status = "failed"
+                    task.stage = "worker"
+                    task.message = "Worker ended without a final event"
+                    self._save(task)
+                    self.library.update_track_status(task.track_id, "failed")
+        except asyncio.CancelledError:
+            if task.status != "cancelled":
+                task.status = "interrupted"
+                self._save(task)
+            raise
+        except Exception as exc:
+            task.status = "failed"
+            task.stage = "worker"
+            task.message = str(exc)
+            self._save(task)
+            self.library.update_track_status(task.track_id, "failed")
+
+    def _build_request(self, task: TaskRecord) -> dict:
+        item, track = self.library.get_track(task.track_id)
+        snapshot = task.config_snapshot or {}
+        resume_dir = self.library.track_resume_dir(task.track_id)
+        output_dir = self.library.root / item.directory / "subtitles"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        profile = self._profile_resolver(snapshot.get("llm_profile_id")) if self._profile_resolver else None
+        model_name = snapshot.get("whisper_model", "medium")
+        model_path = self._direct_model_resolver(model_name) if self._direct_model_resolver else None
+        models_dir = self._models_dir_resolver() if self._models_dir_resolver else None
+        overrides = {
+            "asr_provider": snapshot.get("asr_provider", "local"),
+            "model": model_name,
+            "device": "auto",
+            "compute_type": "auto",
+            "output_dir": str(output_dir),
+            "models_dir": str(Path(models_dir).resolve()) if models_dir else None,
+            "jobs_dir": str(resume_dir),
+            "llm_base_url": profile.base_url if profile else None,
+            "llm_model": profile.model if profile else None,
+            "llm_proxy_url": profile.proxy_url if profile else "",
+            "llm_verify_tls": profile.verify_tls if profile else True,
+            "llm_ca_bundle": profile.ca_bundle if profile else "",
+        }
+        if snapshot.get("scene") == "asmr":
+            overrides.update(ASMR_PRESET)
+        deepgram_api_key = self._deepgram_key_resolver() if self._deepgram_key_resolver else ""
+        proxy_url = self._proxy_resolver() if self._proxy_resolver else ""
+        return {
+            "job_id": task.task_id,
+            "track_id": task.track_id,
+            "library_root": str(self.library.root),
+            "media_path": str(self.library.track_media_path(task.track_id)),
+            "source_lang": track.source_language,
+            "target_lang": track.target_language,
+            "model": snapshot.get("whisper_model", "medium"),
+            "resume_dir": str(resume_dir),
+            "config_overrides": overrides,
+            "llm_api_key": profile.api_key if profile else "",
+            "deepgram_api_key": deepgram_api_key,
+            "proxy_url": proxy_url,
+            "model_path": str(Path(model_path).resolve()) if model_path else "",
+        }
+
+    def _apply_event(self, task: TaskRecord, event: dict) -> None:
+        event_type = event.get("type")
+        if event.get("stage") is not None:
+            task.stage = event["stage"]
+        if event.get("progress") is not None:
+            task.progress = float(event["progress"])
+        if event.get("completed") is not None:
+            task.completed = int(event["completed"])
+        if event.get("total") is not None:
+            task.total = int(event["total"])
+        if event.get("message") is not None:
+            task.message = event["message"]
+        if event_type == "task_completed":
+            task.status = "completed"
+            self.library.update_track_status(task.track_id, "playable")
+        elif event_type == "task_failed":
+            task.status = "failed"
+            self.library.update_track_status(task.track_id, "failed")
+
+    async def cancel(self, task_id: str) -> None:
+        task = self.get_task(task_id)
+        await self.worker.cancel(task_id)
+        running = self._tasks.get(task_id)
+        if running:
+            running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
+        task.status = "cancelled"
+        task.stage = "cancelled"
+        self._save(task)
+        self.library.update_track_status(task.track_id, "waiting")
+        self._publish(task_id, {"type": "task_cancelled", "stage": "cancelled"})
+
+    def get_task(self, task_id: str) -> TaskRecord:
+        with self.library._db_lock:
+            row = self.library._db.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        return TaskRecord(
+            task_id=row["task_id"], track_id=row["track_id"], status=row["status"],
+            stage=row["stage"], progress=row["progress"], completed=row["completed"],
+            total=row["total"], message=row["message"],
+            config_snapshot=json.loads(row["config_snapshot"]) if row["config_snapshot"] else None,
+        )
+
+    def latest_for_track(self, track_id: str) -> TaskRecord | None:
+        with self.library._db_lock:
+            row = self.library._db.execute(
+                "SELECT task_id FROM tasks WHERE track_id=? ORDER BY updated_at DESC LIMIT 1", (track_id,)
+            ).fetchone()
+        return self.get_task(row["task_id"]) if row else None
+
+    def _save(self, task: TaskRecord) -> None:
+        with self.library._db_lock, self.library._db:
+            self.library._db.execute(
+                """INSERT OR REPLACE INTO tasks
+                   (task_id,track_id,status,stage,progress,completed,total,message,config_snapshot,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    task.task_id, task.track_id, task.status, task.stage, task.progress,
+                    task.completed, task.total, task.message,
+                    json.dumps(task.config_snapshot) if task.config_snapshot else None, _now(),
+                ),
+            )
+
+    async def subscribe(self, task_id: str) -> AsyncIterator[dict]:
+        queue: asyncio.Queue = asyncio.Queue()
+        self._subscribers.setdefault(task_id, set()).add(queue)
+        try:
+            while True:
+                yield await queue.get()
+        finally:
+            self._subscribers.get(task_id, set()).discard(queue)
+
+    def _publish(self, task_id: str, event: dict) -> None:
+        for queue in self._subscribers.get(task_id, set()):
+            queue.put_nowait(event)
+
+    async def close(self) -> None:
+        for task_id, task in list(self._tasks.items()):
+            if not task.done():
+                await self.worker.cancel(task_id)
+                task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks.values(), return_exceptions=True)

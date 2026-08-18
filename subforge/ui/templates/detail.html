@@ -1,0 +1,35 @@
+{% extends "base.html" %}{% block title %}{{ item.title }} · SubForge{% endblock %}{% block content %}
+<a class="back-link" href="/">← 返回作品库</a>
+<section class="work-hero">
+  <div class="work-hero-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}">
+    <span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span>
+  </div>
+  <div class="work-hero-info">
+    <h1>{{ item.title }}</h1>
+    <div class="work-meta">
+      {% if item.rj_code %}<span class="chip chip-rj">{{ item.rj_code }}</span>{% endif %}
+      {% if item.author %}<span class="chip">{{ item.author }}</span>{% endif %}
+      <span class="chip">{{ item.tracks|length }} 音轨</span>
+    </div>
+  </div>
+</section>
+
+{% for track in item.tracks %}<article class="track-row">
+  <div class="track-row-main">
+    <h2>{{ track.media.split('/')[-1] }}</h2>
+    <span class="status-badge status-{{ track.status }}">{{ track.status }}</span>
+    <span class="chip">{{ (track.size / 1048576)|round(1) }} MB</span>
+  </div>
+  {% set task = task_by_track[track.track_id] %}{% if task %}<div class="task-box {{ 'task-error' if task.status == 'failed' else '' }}" id="task-{{ task.task_id }}" data-task-id="{{ task.task_id }}"><p>任务：<span class="task-status">{{ task.status }}</span> / <span class="task-stage">{{ task.stage }}</span> / <span class="task-progress">{{ (task.progress*100)|round|int }}</span>% <span class="task-batches">{% if task.total is not none %}（{{ task.completed or 0 }}/{{ task.total }} 批次）{% endif %}</span></p>{% if task.status == 'failed' %}<strong>任务失败</strong><pre>{{ task.message or '没有错误详情' }}</pre>{% if task.stage == 'model' %}<p>模型下载失败：请在“设置”中配置模型下载代理、选择已缓存模型或配置直接模型目录。</p>{% elif task.stage == 'translation' %}<p>翻译连接失败：请检查所选翻译配置的 Base URL、API Key、独立代理与 TLS/CA 设置。模型下载代理不会自动用于 LLM。</p>{% elif task.stage == 'worker' %}<p>Worker 进程异常退出（多为原生崩溃，如显存/内存耗尽、栈溢出）。崩溃现场已保存到库目录 <code>.subforge/logs/worker-{{ task.task_id }}.log</code>。</p>{% else %}<p>请根据上方错误详情检查当前阶段配置。</p>{% endif %}{% endif %}{% if task.status in ['queued','running'] %}<form method="post" action="/tasks/{{ task.task_id }}/cancel" data-secure><button class="secondary small">取消任务</button></form>{% endif %}</div>{% endif %}
+
+  <details class="track-actions"><summary>处理设置</summary>
+  <form method="post" action="/tracks/{{ track.track_id }}/process" data-secure class="settings">
+  <label>ASR<select name="asr_provider"><option value="local" {% if not latest_snapshot or latest_snapshot.asr_provider == 'local' %}selected{% endif %}>本地</option><option value="deepgram" {% if latest_snapshot and latest_snapshot.asr_provider == 'deepgram' %}selected{% endif %}>Deepgram</option></select></label>
+  <label>场景<select name="scene"><option value="asmr" {% if not latest_snapshot or latest_snapshot.scene == 'asmr' %}selected{% endif %}>ASMR</option><option value="normal" {% if latest_snapshot and latest_snapshot.scene == 'normal' %}selected{% endif %}>普通语音</option></select></label>
+  <label>Whisper<select name="whisper_model">{% for model in models %}<option value="{{ model }}" {% if model == default_model %}selected{% endif %}>{{ model }}{% if model in direct_models %}（直接目录）{% elif model in cached_models %}（已缓存）{% else %}（需下载）{% endif %}</option>{% endfor %}</select></label>
+  <label>翻译配置<select name="llm_profile_id">{% for p in profiles %}<option value="{{ p.profile_id }}" {% if latest_snapshot and latest_snapshot.llm_profile_id == p.profile_id %}selected{% endif %}>{{ p.name }} / {{ p.model }}</option>{% endfor %}</select></label><label>操作<select name="mode"><option value="continue">继续处理（沿用原配置）</option><option value="retranslate">重新翻译（可换翻译配置）</option><option value="from_scratch">从头处理（应用 ASR 设置）</option></select></label><button {% if not profiles %}disabled{% endif %}>开始处理</button></form>
+  </details>
+  {% if track.status == 'playable' %}<a class="button" href="/tracks/{{ track.track_id }}/play">▶ 播放结果</a>{% endif %}
+</article>{% endfor %}
+<form method="post" action="/items/{{ item.item_id }}/trash" data-secure data-confirm="移出 Library？归档副本将进入 .trash。"><button class="danger ghost">移出 Library</button></form>
+{% endblock %}

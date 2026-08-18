@@ -1,0 +1,88 @@
+{% extends "base.html" %}{% block content %}
+<div class="page-head">
+  <div>
+    <h1>设置</h1>
+    <p class="page-sub">模型、网络与处理能力</p>
+  </div>
+</div>
+
+<nav class="tab-bar" role="tablist" aria-label="设置分区">
+  <button type="button" class="tab active" data-tab="models" role="tab" aria-selected="true">模型</button>
+  <button type="button" class="tab" data-tab="network" role="tab" aria-selected="false">网络与密钥</button>
+  <button type="button" class="tab" data-tab="concurrency" role="tab" aria-selected="false">处理能力</button>
+</nav>
+
+<form method="post" action="/settings" data-secure class="settings-dashboard">
+
+  <section id="settings-models" class="dash-section tab-panel active" data-tab-panel="models">
+    <div class="field-list">
+      <div class="field">
+        <div class="field-label">模型缓存/下载目录</div>
+        <div class="path-picker">
+          <input name="models_dir" value="{{ models_dir }}">
+          <input type="hidden" name="models_dir_selection">
+          <button type="button" class="ghost" data-pick-directory data-field="models_dir">选择</button>
+        </div>
+        <small>缺失模型会下载到这个 Hugging Face 缓存根目录。</small>
+      </div>
+      <div class="field">
+        <div class="field-label">medium 直接模型目录</div>
+        <div class="path-picker">
+          <input name="direct_medium" value="{{ direct_medium or '' }}" placeholder="（未设置，从缓存加载）">
+          <input type="hidden" name="direct_medium_selection">
+          <button type="button" class="ghost" data-pick-directory data-field="direct_medium">选择</button>
+        </div>
+        <div class="field-inline">
+          <small>设置后完全从此目录加载，不访问 Hugging Face。清空表示取消覆盖。</small>
+          <span class="field-check"><button type="button" class="ghost small" data-test-endpoint="/settings/models/medium/check">检查</button><output class="check-result"></output></span>
+        </div>
+      </div>
+      <div class="field">
+        <div class="field-label">large-v3 直接模型目录</div>
+        <div class="path-picker">
+          <input name="direct_large-v3" value="{{ direct_large_v3 or '' }}" placeholder="（未设置，从缓存加载）">
+          <input type="hidden" name="direct_large-v3_selection">
+          <button type="button" class="ghost" data-pick-directory data-field="direct_large-v3">选择</button>
+        </div>
+        <div class="field-inline">
+          <small>设置后完全从此目录加载，不访问 Hugging Face。清空表示取消覆盖。</small>
+          <span class="field-check"><button type="button" class="ghost small" data-test-endpoint="/settings/models/large-v3/check">检查</button><output class="check-result"></output></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="settings-network" class="dash-section tab-panel" data-tab-panel="network">
+    <div class="field-list">
+      <div class="field">
+        <div class="field-label">Deepgram API Key <span class="badge ok">{{ deepgram_key_masked }}</span></div>
+        <input type="password" name="deepgram_api_key" placeholder="留空不修改">
+        <small>用于云端语音识别。</small>
+      </div>
+      <div class="field">
+        <div class="field-label">网络代理</div>
+        <input name="proxy_url" value="{{ proxy_url }}" placeholder="http://127.0.0.1:7890">
+        <small>用于 Worker 下载 Whisper 模型及访问外部 API。</small>
+      </div>
+    </div>
+  </section>
+
+  <section id="settings-concurrency" class="dash-section tab-panel" data-tab-panel="concurrency">
+    <div class="field-list">
+      <div class="field">
+        <div class="field-label">同时处理媒体数</div>
+        <input class="narrow" type="number" name="media_concurrency" min="1" value="{{ media_concurrency }}">
+        <small>提高并发会为每个本地 ASR Worker 单独加载模型，可能耗尽内存或显存。重启 UI 后生效。</small>
+      </div>
+    </div>
+  </section>
+
+  <div class="dash-actions">
+    <button class="primary">保存设置</button>
+  </div>
+</form>
+
+<form method="post" action="/settings/deepgram/delete-key" data-secure data-confirm="删除 Deepgram API Key？">
+  <button class="danger ghost small">删除 Deepgram Key</button>
+</form>
+{% endblock %}

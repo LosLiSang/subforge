@@ -1,0 +1,33 @@
+{% extends "base.html" %}{% block content %}
+<section class="works-head">
+  <h1>作品库</h1>
+  <div class="works-actions">
+    <input id="work-search" class="works-search" type="search" placeholder="搜索标题 / RJ 号 / 作者…" aria-label="搜索作品">
+    <button id="pick-audio">＋ 导入音频</button>
+    <form method="post" action="/library/rescan" data-secure><button class="ghost">重新扫描</button></form>
+  </div>
+</section>
+
+<section id="import-panel" hidden class="panel">
+<form method="post" action="/items/import" data-secure>
+<input type="hidden" name="selection_id" id="selection-id"><p id="selected-name"></p>
+<label>类型<select name="kind" id="kind"><option value="rj_work">RJ 作品</option><option value="stream_archive">直播归档</option></select></label>
+<label>标题<input name="title" required></label><label>RJ 号<input name="rj_code" placeholder="RJ01546796"></label><label>作者/博主<input name="author"></label><button>复制并导入</button>
+</form></section>
+
+<section class="works-grid">{% for item in items %}<a class="work-card" href="/items/{{ item.item_id }}">
+<div class="work-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}">
+  <span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span>
+  {% if item.tracks %}<span class="work-size">{{ (item.tracks[0].size / 1048576)|round(1) }} MB</span>{% endif %}
+</div>
+<div class="work-body">
+  <h2>{{ item.title }}</h2>
+  <div class="work-meta">
+    {% if item.rj_code %}<span class="chip chip-rj">{{ item.rj_code }}</span>{% endif %}
+    {% if item.author %}<span class="chip">{{ item.author }}</span>{% endif %}
+  </div>
+  {% set first = item.tracks[0] if item.tracks else none %}
+  {% if first %}<span class="status-badge status-{{ first.status }}">{{ first.status }}</span>{% else %}<span class="status-badge status-waiting">waiting</span>{% endif %}
+</div>
+</a>{% else %}<p class="empty">Library 为空，先导入一个音频。</p>{% endfor %}</section>
+{% endblock %}

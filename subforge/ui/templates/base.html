@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}SubForge Library{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="/"><span class="brand-mark">S</span>SubForge</a>
+  <nav>
+    <a href="/">作品库</a>
+    <a href="/profiles">翻译配置</a>
+    <a href="/settings">设置</a>
+  </nav>
+</header>
+<main>{% block content %}{% endblock %}</main>
+<script>window.SUBFORGE_CSRF={{ csrf_token|tojson }};</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

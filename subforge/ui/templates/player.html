@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% block title %}播放 · {{ item.title }}{% endblock %}{% block content %}
+<a class="back-link" href="/items/{{ item.item_id }}">← 返回作品</a>
+<section class="player" id="player" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}">
+<div class="work-hero">
+  <div class="work-hero-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}">
+    <span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span>
+  </div>
+  <div class="work-hero-info">
+    <h1>{{ track.media.split('/')[-1] }}</h1>
+    <div class="work-meta">
+      {% if item.rj_code %}<span class="chip chip-rj">{{ item.rj_code }}</span>{% endif %}
+      {% if item.author %}<span class="chip">{{ item.author }}</span>{% endif %}
+    </div>
+  </div>
+</div>
+<audio id="audio" controls preload="metadata" src="/tracks/{{ track.track_id }}/media"></audio>
+<div class="subtitles"><div><small>{{ track.source_language }}</small><p id="source-subtitle">正在加载源字幕…</p></div><div><small>{{ track.target_language }}</small><p id="target-subtitle">正在加载翻译字幕…</p></div></div>
+<details class="track-actions"><summary>全部字幕</summary><div id="transcript"></div></details></section>
+<script src="/static/player.js"></script>
+{% endblock %}

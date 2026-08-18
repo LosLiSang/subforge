@@ -8,12 +8,18 @@
   </div>
 </section>
 
-<section id="import-panel" hidden class="panel">
+<dialog id="import-dialog" class="import-dialog">
 <form method="post" action="/items/import" data-secure>
-<input type="hidden" name="selection_id" id="selection-id"><p id="selected-name"></p>
-<label>类型<select name="kind" id="kind"><option value="rj_work">RJ 作品</option><option value="stream_archive">直播归档</option></select></label>
-<label>标题<input name="title" required></label><label>RJ 号<input name="rj_code" placeholder="RJ01546796"></label><label>作者/博主<input name="author"></label><button>复制并导入</button>
-</form></section>
+  <header class="dialog-head"><h2>导入音频</h2><button type="button" class="ghost small" data-close-dialog>✕</button></header>
+  <input type="hidden" name="selection_id" id="selection-id">
+  <p id="selected-name" class="selected-name"></p>
+  <label>类型<select name="kind" id="kind" data-kind-select><option value="rj_work">RJ 作品</option><option value="stream_archive">直播归档</option></select></label>
+  <label data-rj-field>RJ 号<input name="rj_code" placeholder="RJ01546796"></label>
+  <label>标题<input name="title" required></label>
+  <label>作者/博主<input name="author"></label>
+  <footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button>导入</button></footer>
+</form>
+</dialog>
 
 <section class="works-grid">{% for item in items %}<a class="work-card" href="/items/{{ item.item_id }}">
 <div class="work-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}">

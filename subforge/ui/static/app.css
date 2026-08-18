@@ -61,8 +61,6 @@ body{padding-bottom:56px}
 /* ─── iframe 外壳布局 ─── */
 body{display:flex;flex-direction:column;min-height:100vh;padding-bottom:0}
 #content-frame{flex:1;width:100%;border:none;min-height:0}
-.frame-main{padding:28px clamp(18px,5vw,64px) 56px;width:min(880px,100%);margin:auto}
-@media(max-width:700px){.frame-main{padding:20px 16px 48px}}
 
 /* ─── 侧边导航外壳 ─── */
 body{flex-direction:row;min-height:100vh}
@@ -90,3 +88,8 @@ body{flex-direction:row;min-height:100vh}
   .side-nav a{justify-content:center;padding:10px 0;font-size:0}
   .side-nav a::after{content:attr(data-nav);font-size:.7rem}
 }
+
+/* ─── 导入弹窗 ─── */
+dialog.import-dialog{background:var(--panel);color:#e6edf3;border:1px solid var(--line-strong);border-radius:12px;padding:0;width:min(420px,92vw);box-shadow:0 16px 48px rgba(0,0,0,.5)}dialog.import-dialog form{padding:0 18px 18px}dialog.import-dialog label{display:grid;gap:5px;margin:12px 0 0;min-width:0;font-size:.92rem;font-weight:550}.selected-name{color:var(--fg-dim);font-size:.85rem;margin:8px 0 0;overflow-wrap:anywhere}
+/* ─── 全宽内容区 + 顶部对齐 ─── */
+.frame-main{padding:28px 28px 56px;width:100%;margin:0;max-width:none}@media(max-width:700px){.frame-main{padding:20px 16px 48px}}

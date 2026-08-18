@@ -133,33 +133,33 @@ class TestTranscribe:
 class TestWindowsGpuCrashWorkaround:
     def test_cuda_temperature_zero_disables_fallback(self, tmp_path):
         """Windows GPU 下 ctranslate2 温度回退导致 0xC0000409 崩溃（上游 issue #71）。
-        device=cuda 时必须显式 temperature=0 禁用回退。"""
+        CUDA 可用时必须显式 temperature=0 禁用回退（含 device=auto 解析到 GPU）。"""
         audio_path = tmp_path / "test-temp.wav"
         _generate_silent_wav(audio_path)
 
         mock_model = MagicMock()
         mock_model.transcribe.return_value = ([], MagicMock())
 
-        with patch(
-            "faster_whisper.WhisperModel",
-            return_value=mock_model,
+        with (
+            patch("faster_whisper.WhisperModel", return_value=mock_model),
+            patch("subforge.asr.engine._cuda_available", return_value=True),
         ):
-            transcribe(audio_path, model_size="tiny", language="ja", device="cuda")
+            transcribe(audio_path, model_size="tiny", language="ja", device="auto")
 
         call_kwargs = mock_model.transcribe.call_args.kwargs
         assert call_kwargs["temperature"] == 0.0
 
     def test_cpu_keeps_temperature_fallback(self, tmp_path):
-        """CPU 无崩溃风险，保留默认温度回退以维持识别质量。"""
+        """无 CUDA 无崩溃风险，保留默认温度回退以维持识别质量。"""
         audio_path = tmp_path / "test-temp-cpu.wav"
         _generate_silent_wav(audio_path)
 
         mock_model = MagicMock()
         mock_model.transcribe.return_value = ([], MagicMock())
 
-        with patch(
-            "faster_whisper.WhisperModel",
-            return_value=mock_model,
+        with (
+            patch("faster_whisper.WhisperModel", return_value=mock_model),
+            patch("subforge.asr.engine._cuda_available", return_value=False),
         ):
             transcribe(audio_path, model_size="tiny", language="ja", device="cpu")
 

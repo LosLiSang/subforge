@@ -135,6 +135,15 @@ def _merge_stereo_sides(
     ]
 
 
+def _cuda_available() -> bool:
+    """Detect whether ctranslate2 can use CUDA (device=auto resolves to GPU)."""
+    try:
+        import ctranslate2
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        return False
+
+
 def _is_stereo(input_path: Path) -> bool:
     """Detect whether the audio has more than one channel (needs ffprobe)."""
     ffprobe = shutil.which("ffprobe") or str(Path(_FFMPEG).with_name("ffprobe"))
@@ -252,8 +261,9 @@ def transcribe(
             }
             # Windows GPU 下 ctranslate2 的温度回退会在模型释放时触发 __fastfail
             # （0xC0000409 / 退出码 3221226505，上游 issue SYSTRAN/faster-whisper#71）。
-            # GPU 禁回退防崩溃；CPU 保留默认回退保证识别质量。
-            if device == "cuda":
+            # 只要 CUDA 可用（含 device=auto 解析到 GPU）就禁回退防崩溃；
+            # 纯 CPU 保留默认回退保证识别质量。
+            if _cuda_available():
                 transcribe_kwargs["temperature"] = 0.0
             if vad_filter:
                 transcribe_kwargs["vad_parameters"] = {

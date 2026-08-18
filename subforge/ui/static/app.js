@@ -3,8 +3,8 @@ const originalFetch=window.fetch;window.fetch=(input,init={})=>{init.headers=new
 const picker=document.getElementById('pick-audio');if(picker)picker.addEventListener('click',async()=>{const dialog=document.getElementById('import-dialog');if(!dialog)return;dialog.showModal();});
 /* 导入弹窗：本地 tab 内点按钮才触发文件选择 */
 const pickImportFile=document.querySelector('[data-pick-import-file]');if(pickImportFile)pickImportFile.addEventListener('click',async()=>{const response=await fetch('/picker/audio',{method:'POST'});if(!response.ok)return;const data=await response.json();if(data.cancelled)return;document.getElementById('selection-id').value=data.selection_id;document.getElementById('selected-name').textContent=data.filename;});
-/* 导入弹窗：本地/链接 双标签切换 */
-for(const tab of document.querySelectorAll('[data-import-tab]')){tab.addEventListener('click',()=>{const name=tab.dataset.importTab;for(const t of document.querySelectorAll('[data-import-tab]')){t.classList.toggle('active',t===tab);t.setAttribute('aria-selected',t===tab?'true':'false')}for(const p of document.querySelectorAll('[data-import-panel]'))p.hidden=p.dataset.importPanel!==name;syncKindFields();});}
+/* 导入弹窗：本地/链接 下拉切换 */
+const importSelect=document.querySelector('[data-import-select]');if(importSelect)importSelect.addEventListener('change',()=>{const name=importSelect.value;for(const p of document.querySelectorAll('[data-import-panel]'))p.hidden=p.dataset.importPanel!==name;syncKindFields();});
 /* 导入弹窗：类型切换控制 RJ 号字段显隐（仅 RJ 作品有 RJ 号） */
 function syncKindFields(){for(const sel of document.querySelectorAll('[data-kind-select]')){const panel=sel.closest('[data-import-panel]');const rjField=panel?.querySelector('[data-rj-field]');if(rjField)rjField.style.display=sel.value==='rj_work'?'':'none';}}
 for(const sel of document.querySelectorAll('[data-kind-select]')){sel.addEventListener('change',syncKindFields);}syncKindFields();

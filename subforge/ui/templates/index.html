@@ -10,9 +10,8 @@
 
 <dialog id="import-dialog" class="import-dialog">
   <header class="dialog-head"><div><h2>导入音频</h2><div class="dialog-sub">选择本地文件，或从链接下载</div></div><button type="button" class="ghost small" data-close-dialog>✕</button></header>
-  <div class="import-tabs" role="tablist">
-    <button type="button" class="import-tab active" data-import-tab="local" role="tab" aria-selected="true">本地文件</button>
-    <button type="button" class="import-tab" data-import-tab="url" role="tab" aria-selected="false">从链接下载</button>
+  <div class="import-mode">
+    <label>导入方式<select data-import-select aria-label="导入方式"><option value="local">本地文件</option><option value="url">从链接下载</option></select></label>
   </div>
 
   <div data-import-panel="local">

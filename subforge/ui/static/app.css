@@ -93,3 +93,6 @@ body{flex-direction:row;min-height:100vh}
 dialog.import-dialog{background:#0f131a;color:#e6edf3;border:1px solid var(--line-strong);border-radius:12px;padding:0;width:min(420px,92vw);box-shadow:0 16px 48px rgba(0,0,0,.5)}dialog.import-dialog form{padding:0 18px 18px}dialog.import-dialog label{display:grid;gap:5px;margin:12px 0 0;min-width:0;font-size:.92rem;font-weight:550}.selected-name{color:var(--fg-dim);font-size:.85rem;margin:8px 0 0;overflow-wrap:anywhere}
 /* ─── 全宽内容区 + 顶部对齐 ─── */
 .frame-main{padding:28px 28px 56px;width:100%;margin:0;max-width:none}@media(max-width:700px){.frame-main{padding:20px 16px 48px}}
+
+/* 导入方式下拉 */
+.import-mode{padding:12px 18px 0;border-bottom:1px solid var(--line);margin-bottom:6px}.import-mode label{display:flex;align-items:center;gap:10px;font-size:.9rem}.import-mode select{width:auto;flex:1}

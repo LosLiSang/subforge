@@ -466,16 +466,16 @@ def test_shell_sidebar_contains_all_nav_entries(tmp_path):
 
 
 def test_import_dialog_has_dual_tabs(tmp_path):
-    """导入弹窗：本地文件 / 从链接下载 双标签；本地标签点按钮才弹文件选择。"""
+    """导入弹窗：导入方式下拉（本地文件 / 从链接下载），本地选项点按钮才弹文件选择。"""
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
     page = client.get("/").text
     assert 'id="import-dialog"' in page
-    assert 'data-import-tab="local"' in page
-    assert 'data-import-tab="url"' in page
-    assert 'data-pick-import-file' in page  # 本地 tab 内选择文件按钮
-    assert 'name="url"' in page             # 下载 tab 的 URL 输入
-    # 点击导入按钮不应直接触发文件选择——由 tab 内按钮触发
+    assert 'data-import-select' in page        # 导入方式下拉
+    assert 'value="local"' in page             # 本地文件
+    assert 'value="url"' in page               # 从链接下载
+    assert 'data-pick-import-file' in page      # 本地面板内选择文件按钮
+    assert 'name="url"' in page                # 下载面板 URL 输入
     assert 'id="pick-audio"' in page
 
 

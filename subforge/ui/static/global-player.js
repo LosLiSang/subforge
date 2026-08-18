@@ -1,6 +1,6 @@
 /* 全局底部播放条：任何页面就地播放，跨页不中断。
- * 音频放在同源隐藏 iframe 中（页面导航不会销毁 iframe），
- * 播放状态经 localStorage 同步，各页面底部显示控制条。 */
+ * 音频放在同源隐藏 iframe 中；播放状态经 localStorage 同步。
+ * 退出播放页 → 自动续播；被浏览器自动播放策略拦截时显示「继续播放」提示。 */
 (() => {
   const bar = document.getElementById('player-bar');
   const KEY = 'sf.playback';
@@ -23,6 +23,7 @@
     <img class="player-bar-cover" src="/covers/${state.itemId || ''}" alt="" onerror="this.remove()">
     <a class="player-bar-title" href="/tracks/${state.trackId}/play" title="${safeTitle}">${safeTitle}</a>
     <span class="player-bar-time" data-role="time">--:--</span>
+    <button type="button" class="ghost small" data-role="resume" hidden>▶ 继续播放</button>
     <button type="button" class="ghost small" data-role="toggle" aria-label="播放/暂停">▶</button>
     <button type="button" class="ghost small" data-role="open" aria-label="打开播放页">⛶</button>
     <button type="button" class="ghost small" data-role="close" aria-label="关闭">✕</button>
@@ -30,6 +31,8 @@
 
   let frame = null;
   let audio = null;
+  const resumeBtn = bar.querySelector('[data-role="resume"]');
+  const toggleBtn = bar.querySelector('[data-role="toggle"]');
 
   function ensureFrame() {
     if (frame && frame.contentWindow) return frame;
@@ -42,6 +45,11 @@
     return frame;
   }
 
+  function showResumeHint() {
+    resumeBtn.hidden = false;
+    resumeBtn.textContent = '▶ 继续播放';
+  }
+
   function bindAudio() {
     const doc = frame?.contentDocument;
     audio = doc ? doc.getElementById('audio') : null;
@@ -50,16 +58,13 @@
     if (now && now.currentTime && isFinite(now.currentTime) && audio.duration) {
       audio.currentTime = Math.min(now.currentTime, audio.duration);
     }
-    if (now?.playing && audio.paused) {
-      audio.play().catch(() => {});
-    }
     audio.addEventListener('timeupdate', () => {
       const s = read();
       if (s) { s.currentTime = audio.currentTime; s.duration = audio.duration || s.duration; write(s); }
       bar.querySelector('[data-role="time"]').textContent = fmtT(audio.currentTime);
     });
-    audio.addEventListener('play', () => { const s = read(); if (s) { s.playing = true; write(s); } bar.querySelector('[data-role="toggle"]').textContent = '⏸'; });
-    audio.addEventListener('pause', () => { const s = read(); if (s) { s.playing = false; write(s); } bar.querySelector('[data-role="toggle"]').textContent = '▶'; });
+    audio.addEventListener('play', () => { const s = read(); if (s) { s.playing = true; write(s); } toggleBtn.textContent = '⏸'; resumeBtn.hidden = true; });
+    audio.addEventListener('pause', () => { const s = read(); if (s) { s.playing = false; write(s); } toggleBtn.textContent = '▶'; });
     audio.addEventListener('loadedmetadata', () => {
       const s = read();
       if (s && s.currentTime && isFinite(s.currentTime)) {
@@ -77,10 +82,29 @@
     return audio;
   }
 
-  bar.querySelector('[data-role="toggle"]').addEventListener('click', async () => {
+  async function tryResume() {
+    const a = await ensureBound();
+    if (!a) return false;
+    if (!a.paused) return true;
+    try {
+      await a.play();
+      return true;
+    } catch {
+      showResumeHint(); // 浏览器自动播放策略拦截 → 提示用户点击续播
+      return false;
+    }
+  }
+
+  toggleBtn.addEventListener('click', async () => {
     const a = await ensureBound();
     if (!a) return;
     if (a.paused) await a.play().catch(() => {}); else a.pause();
+  });
+  // 被拦截后的「继续播放」：此刻有用户手势，play() 必然成功
+  resumeBtn.addEventListener('click', async () => {
+    const a = await ensureBound();
+    if (!a) return;
+    await a.play().catch(() => {});
   });
   bar.querySelector('[data-role="open"]').addEventListener('click', () => { window.location.href = `/tracks/${state.trackId}/play`; });
   bar.querySelector('[data-role="close"]').addEventListener('click', () => {
@@ -90,11 +114,9 @@
     bar.hidden = true;
   });
 
-  // 跨页恢复：之前正在播放或有进度 → 自动重建 iframe 续播（有播放许可时自动开始）
+  // 跨页恢复：之前正在播放或有进度 → 自动重建 iframe 并尝试续播
   if (state.playing || (state.currentTime && state.currentTime > 1)) {
-    ensureBound().then(a => {
-      if (a && a.paused && state.playing) a.play().catch(() => {});
-    });
+    tryResume();
   }
 })();
 

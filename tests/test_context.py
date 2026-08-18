@@ -4,7 +4,7 @@ import pytest
 
 from subforge.config import Config
 from subforge.models import Job, SubtitleEntry
-from subforge.resume import ResumeStore
+from subforge.resume import ResumeState, ResumeStore
 from subforge.translate.context import (
     _build_user_message,
     _parse_translations,
@@ -142,6 +142,20 @@ class TestParseTranslations:
 
 
 class TestTranslateAll:
+    async def test_failed_batch_does_not_increment_completed_progress(self, config):
+        config.batch_size = 2
+        config.translate_workers = 1
+        progress = []
+        entries = make_entries(6)
+
+        async def fail(messages, cfg):
+            raise RuntimeError("network")
+
+        with pytest.raises(RuntimeError, match="network"):
+            await translate_all(entries, config, fail, progress_callback=lambda done, total: progress.append((done, total)))
+
+        assert progress == []
+
     @pytest.fixture
     def config(self):
         return Config(
@@ -198,7 +212,7 @@ class TestTranslateAll:
         media.write_text("audio", encoding="utf-8")
         store = ResumeStore(tmp_path / "jobs")
         job = Job(file_path=media)
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
         store.save_batch(
             state,
             0,
@@ -225,7 +239,7 @@ class TestTranslateAll:
         media.write_text("audio", encoding="utf-8")
         store = ResumeStore(tmp_path / "jobs")
         job = Job(file_path=media)
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
         store.save_batch(
             state,
             0,
@@ -246,7 +260,7 @@ class TestTranslateAll:
         media.write_text("audio", encoding="utf-8")
         store = ResumeStore(tmp_path / "jobs")
         job = Job(file_path=media)
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
         mock_translate = AsyncMock(return_value="\n".join(f"[{i}] live{i}" for i in range(1, 6)))
 
         await translate_all(entries, config, mock_translate, resume_state=state, resume_store=store)
@@ -254,3 +268,69 @@ class TestTranslateAll:
 
         assert loaded is not None
         assert loaded.translation["completed_batches"]["0"][0]["text"] == "live1"
+
+
+class TestEmptyResponseGuard:
+    @pytest.fixture
+    def config(self):
+        return Config(source_lang="ja", target_lang="zh", batch_size=10, context_size=3)
+
+    async def test_empty_content_raises_instead_of_caching_blanks(self, config):
+        """推理模型把 max_tokens 吃光时 content 为空：绝不能当作成功缓存空翻译。"""
+        config.batch_size = 10
+        entries = make_entries(5)
+        mock_translate = AsyncMock(return_value="")  # LLM 返回空 content
+
+        with pytest.raises(RuntimeError, match="empty"):
+            await translate_all(entries, config, mock_translate)
+
+    async def test_all_missing_prefixes_raises(self, config):
+        """响应非空但完全没有 [N] 前缀（模型格式跑偏）：同样视为失败。"""
+        config.batch_size = 10
+        entries = make_entries(3)
+        mock_translate = AsyncMock(return_value="随便说的内容，没有前缀")
+
+        with pytest.raises(RuntimeError, match="empty"):
+            await translate_all(entries, config, mock_translate)
+
+    async def test_partially_parsed_batch_is_retried_then_cached(self, config):
+        """个别条目缺前缀：不算致命（翻译质量兜底），但全空才致命。"""
+        config.batch_size = 10
+        entries = make_entries(3)
+        mock_translate = AsyncMock(return_value="[1] 你好\n[2] 世界")
+
+        result = await translate_all(entries, config, mock_translate)
+
+        assert result[0].text == "你好"
+        assert result[1].text == "世界"
+        assert result[2].text == ""  # 单条缺失不致命
+
+
+class TestResumeHealsBlankCachedBatches:
+    @pytest.fixture
+    def config(self):
+        return Config(source_lang="ja", target_lang="zh", batch_size=2, context_size=3)
+
+    async def test_resume_with_blank_cached_batch_is_retranslated(self, config, tmp_path):
+        """历史坏缓存（text 全空但被标记完成）：resume 必须自愈重翻，不能直接复用。"""
+        store = ResumeStore(tmp_path / "jobs")
+        state = ResumeState(
+            schema_version=1, job_key="t1", media={}, config_fingerprint={}, paths={},
+        )
+        # 预置坏缓存：batch 0 全空
+        state.translation["completed_batches"] = {
+            "0": [{"index": 1, "start": 0.0, "end": 1.0, "text": ""},
+                  {"index": 2, "start": 1.0, "end": 2.0, "text": ""}],
+        }
+        state.translation["total_batches"] = 2
+        mock_translate = AsyncMock(return_value="[1] 新1\n[2] 新2\n[3] 新3\n[4] 新4")
+
+        result = await translate_all(
+            make_entries(4), config, mock_translate,
+            resume_state=state, resume_store=store,
+        )
+
+        # batch 0 被重新翻译（坏缓存没有被直接采用）
+        assert mock_translate.call_count >= 1
+        assert result[0].text == "新1"
+        assert result[1].text == "新2"

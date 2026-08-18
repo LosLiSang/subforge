@@ -120,7 +120,8 @@ async def translate_all(
 
     for idx in range(len(batches)):
         cached_entries = completed_batches.get(str(idx))
-        if cached_entries:
+        # 自愈：历史坏缓存（text 全空）不算完成，必须重翻
+        if cached_entries and any(str(c.get("text", "")).strip() for c in cached_entries):
             for cached in cached_entries:
                 translated_map[int(cached["index"])] = str(cached["text"])
             completed_count += 1
@@ -164,6 +165,16 @@ async def translate_all(
         response = await llm_translate_fn(messages, config)
         translations = _parse_translations(response, batch)
 
+        # 防御：推理模型可能把 max_tokens 全部吃在 reasoning 上导致 content 为空；
+        # 或者模型完全没按 [N] 前缀格式输出。绝不能把全空批次当作成功缓存。
+        if not response.strip() or not any(t for t in translations):
+            raise RuntimeError(
+                f"LLM returned an empty translation batch (batch {batch_idx + 1}: "
+                f"{sum(1 for t in translations if not t)}/{len(batch)} entries empty). "
+                "If the model is a reasoning model, its reasoning may have consumed "
+                "the entire max_tokens budget."
+            )
+
         translated_entries: list[SubtitleEntry] = []
         for entry, trans in zip(batch, translations):
             translated_map[entry.index] = trans
@@ -195,15 +206,15 @@ async def translate_all(
                 if first_error is None:
                     async with semaphore:
                         await _translate_batch(batch_idx)
+                    completed_count += 1
+                    if progress_callback:
+                        progress_callback(completed_count, len(batches))
                 else:
                     logger.debug("Skipping batch %d because an earlier batch failed", batch_idx)
             except Exception as exc:
                 if first_error is None:
                     first_error = exc
             finally:
-                completed_count += 1
-                if progress_callback:
-                    progress_callback(completed_count, len(batches))
                 queue.task_done()
 
     worker_tasks = [

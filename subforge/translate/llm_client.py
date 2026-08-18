@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-import time
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 import httpx
 
@@ -26,6 +27,23 @@ def _mask_key(key: str) -> str:
     if len(key) < 8:
         return "*" * min(len(key), 4)
     return f"{key[:4]}...{key[-4:]}"
+
+
+def _describe_exception(exception: Exception | None) -> str:
+    if exception is None:
+        return "unknown error"
+    parts: list[str] = []
+    current: BaseException | None = exception
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        detail = str(current).strip()
+        label = type(current).__name__
+        text = f"{label}: {detail}" if detail else label
+        if text not in parts:
+            parts.append(text)
+        current = current.__cause__ or current.__context__
+    return " <- ".join(parts)
 
 
 def _is_retryable(exception: Exception) -> bool:
@@ -61,7 +79,9 @@ def _build_body(messages: list[dict[str, str]], config: Config) -> dict[str, Any
         "model": config.llm_model,
         "messages": messages,
         "temperature": 0.3,
-        "max_tokens": 4096,
+        # 推理模型（reasoning）会把 token 花在 reasoning_content 上，预算太小会
+        # 吃光 max_tokens 导致 content 为空；给足预算避免空翻译。
+        "max_tokens": 16384,
     }
 
 
@@ -69,6 +89,7 @@ async def translate_batch(
     messages: list[dict[str, str]],
     config: Config,
     client: httpx.AsyncClient | None = None,
+    activity_callback: Callable[[str], None] | None = None,
 ) -> str:
     """Send a batch of messages to the LLM and return the response text.
 
@@ -86,7 +107,15 @@ async def translate_batch(
     """
     close_client = False
     if client is None:
-        client = httpx.AsyncClient(timeout=_TIMEOUT)
+        verify: bool | str = config.llm_verify_tls
+        if config.llm_ca_bundle:
+            verify = str(Path(config.llm_ca_bundle))
+        client = httpx.AsyncClient(
+            timeout=_TIMEOUT,
+            proxy=config.llm_proxy_url or None,
+            verify=verify,
+            trust_env=False,  # LLM 网络与下载代理解耦：env 代理不得劫持翻译请求
+        )
         close_client = True
 
     masked_key = _mask_key(config.llm_api_key)
@@ -104,10 +133,30 @@ async def translate_batch(
 
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
+            if activity_callback:
+                activity_callback(f"Calling LLM (attempt {attempt}/{_MAX_RETRIES})")
             response = await client.post(url, json=body, headers=headers)
             response.raise_for_status()
             data = response.json()
             content = data["choices"][0]["message"]["content"]
+            # 并发下服务端可能返回空 content（推理截断/瞬时异常，HTTP 仍 200）。
+            # 空 content 当作可重试失败，绝不能静默当作成功返回。
+            if content is None or not str(content).strip():
+                last_exception = LLMError(
+                    "LLM returned empty content (finish_reason may be 'length')"
+                )
+                wait = 2 ** (attempt - 1)
+                logger.warning(
+                    "LLM: empty content on attempt %d/%d, waiting %ds...",
+                    attempt, _MAX_RETRIES, wait,
+                )
+                if activity_callback:
+                    activity_callback(
+                        f"空响应（推理可能耗尽预算）; {wait}s 后重试 ({attempt}/{_MAX_RETRIES})"
+                    )
+                await asyncio.sleep(wait)
+                continue
+            content = str(content)
             if close_client:
                 await client.aclose()
             return content
@@ -130,18 +179,24 @@ async def translate_batch(
             wait = retry_after if retry_after else (2 ** (attempt - 1))
             logger.warning("LLM: HTTP %d on attempt %d/%d, waiting %ds...",
                            status, attempt, _MAX_RETRIES, wait)
-            time.sleep(wait)
+            if activity_callback:
+                activity_callback(f"HTTP {status}; retrying in {wait}s ({attempt}/{_MAX_RETRIES})")
+            await asyncio.sleep(wait)
 
         except (httpx.TimeoutException, httpx.NetworkError) as e:
             last_exception = e
             wait = 2 ** (attempt - 1)
             logger.warning("LLM: %s on attempt %d/%d, waiting %ds...",
                            type(e).__name__, attempt, _MAX_RETRIES, wait)
-            time.sleep(wait)
+            if activity_callback:
+                activity_callback(
+                    f"{_describe_exception(e)}; retrying in {wait}s ({attempt}/{_MAX_RETRIES})"
+                )
+            await asyncio.sleep(wait)
 
     if close_client:
         await client.aclose()
     raise LLMError(
         f"LLM call failed after {_MAX_RETRIES} retries. "
-        f"Last error: {last_exception}"
+        f"Last error: {_describe_exception(last_exception)}"
     ) from last_exception

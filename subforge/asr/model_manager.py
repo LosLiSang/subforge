@@ -8,6 +8,16 @@ logger = logging.getLogger(__name__)
 _FW_REPO_ID = "Systran/faster-whisper-{model_size}"
 
 
+def cached_models(models_dir: Path, candidates: list[str]) -> set[str]:
+    """Return candidate model names with at least one local snapshot."""
+    cached: set[str] = set()
+    for model_size in candidates:
+        snapshots = models_dir / f"models--Systran--faster-whisper-{model_size}" / "snapshots"
+        if snapshots.is_dir() and any(path.is_dir() for path in snapshots.iterdir()):
+            cached.add(model_size)
+    return cached
+
+
 def ensure_model(model_size: str, models_dir: Path) -> tuple[bool, bool]:
     """Check for cached model files and determine whether to skip network.
 

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from subforge.config import Config
+from subforge.events import EventType
 from subforge.models import Job, JobStatus, SubtitleEntry
 from subforge.orchestrator import process_all, process_one
 from subforge.translate.llm_client import LLMError
@@ -29,11 +30,54 @@ def sample_entries():
 
 
 class TestProcessOne:
+    async def test_successful_pipeline_emits_structured_events(self, config, sample_entries, tmp_path):
+        job = Job(file_path=tmp_path / "test.mp3")
+        events = []
+
+        async def fake_translate(msgs, cfg, activity_callback=None):
+            return "[1] 你好\n[2] 世界"
+
+        def fake_asr(*args, **kwargs):
+            kwargs["model_ready_callback"]()
+            return sample_entries
+
+        with (
+            patch("subforge.orchestrator.asr_transcribe", side_effect=fake_asr),
+            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
+        ):
+            await process_one(job, config, pbar_slot=0, event_sink=events.append)
+
+        assert [event.type for event in events] == [
+            EventType.ASR_PREPARING,
+            EventType.ASR_STARTED,
+            EventType.ASR_COMPLETED,
+            EventType.TRANSLATION_STARTED,
+            EventType.TRANSLATION_PROGRESS,
+            EventType.TRANSLATION_COMPLETED,
+            EventType.TASK_COMPLETED,
+        ]
+        assert events[4].completed == 1
+        assert events[4].total == 1
+        assert all(str(job.file_path) not in (event.message or "") for event in events)
+
+    async def test_failed_pipeline_emits_safe_failure_event(self, config, tmp_path):
+        job = Job(file_path=tmp_path / "secret-name.mp3")
+        events = []
+
+        with patch("subforge.orchestrator.asr_transcribe", side_effect=RuntimeError("ASR crashed")):
+            await process_one(job, config, pbar_slot=0, event_sink=events.append)
+
+        assert events[-1].type == EventType.TASK_FAILED
+        assert events[-1].stage == "model"
+        assert events[-1].error_type == "RuntimeError"
+        assert events[-1].message == "ASR crashed"
+        assert str(job.file_path) not in events[-1].message
+
     async def test_successful_pipeline(self, config, sample_entries, tmp_path):
         job = Job(file_path=tmp_path / "test.mp3")
 
-        async def fake_translate(msgs, cfg):
-            return "translated"
+        async def fake_translate(msgs, cfg, activity_callback=None):
+            return "[1] 译\n[2] 文\n[3] 桩"
 
         with (
             patch(
@@ -52,10 +96,30 @@ class TestProcessOne:
         assert job.translate_progress == 1.0
         assert job.error is None
 
+    async def test_direct_model_path_bypasses_cache_lookup(self, config, sample_entries, tmp_path):
+        job = Job(file_path=tmp_path / "test.mp3", model_size="large-v3")
+        direct = tmp_path / "large-v3"
+        direct.mkdir()
+        config.direct_model_path = direct
+
+        async def fake_translate(msgs, cfg, activity_callback=None):
+            return "[1] 你好\n[2] 世界"
+
+        with (
+            patch("subforge.orchestrator.ensure_model") as mock_ensure,
+            patch("subforge.orchestrator.asr_transcribe", return_value=sample_entries) as mock_asr,
+            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        mock_ensure.assert_not_called()
+        assert mock_asr.call_args.kwargs["model_size"] == str(direct)
+        assert mock_asr.call_args.kwargs["local_files_only"] is True
+
     async def test_default_local_provider_uses_local_asr(self, config, sample_entries, tmp_path):
         job = Job(file_path=tmp_path / "test.mp3")
 
-        async def fake_translate(msgs, cfg):
+        async def fake_translate(msgs, cfg, activity_callback=None):
             return "[1] 你好\n[2] 世界"
 
         with (
@@ -76,7 +140,7 @@ class TestProcessOne:
         config.deepgram_model = "nova-3"
         config.deepgram_keyterms = ["社長"]
 
-        async def fake_translate(msgs, cfg):
+        async def fake_translate(msgs, cfg, activity_callback=None):
             return "[1] 你好\n[2] 世界"
 
         with (
@@ -122,7 +186,7 @@ class TestProcessOne:
     async def test_translation_failure_keeps_source_srt(self, config, sample_entries, tmp_path):
         job = Job(file_path=tmp_path / "test.mp3")
 
-        async def bad_translate(msgs, cfg):
+        async def bad_translate(msgs, cfg, activity_callback=None):
             raise LLMError("API down")
 
         with (
@@ -139,7 +203,7 @@ class TestProcessOne:
 
         assert job.status == JobStatus.FAILED
         assert "API down" in (job.error or "")
-        source_srt = tmp_path / "test.srt"
+        source_srt = tmp_path / "test.ja.srt"
         assert source_srt.exists()
 
     async def test_existing_target_srt_skips_whole_file(self, config, sample_entries, tmp_path):
@@ -147,7 +211,7 @@ class TestProcessOne:
 
         job = Job(file_path=tmp_path / "test.mp3")
         job.file_path.write_text("audio", encoding="utf-8")
-        write_srt(sample_entries, tmp_path / "test_zh.srt")
+        write_srt(sample_entries, tmp_path / "test.zh.srt")
 
         with (
             patch("subforge.orchestrator.asr_transcribe") as mock_asr,
@@ -161,14 +225,34 @@ class TestProcessOne:
         mock_asr.assert_not_called()
         mock_translate.assert_not_called()
 
-    async def test_existing_source_srt_skips_asr(self, config, sample_entries, tmp_path):
+    async def test_legacy_source_srt_is_not_reused(self, config, sample_entries, tmp_path):
         from subforge.translate.srt_io import write_srt
 
         job = Job(file_path=tmp_path / "test.mp3")
         job.file_path.write_text("audio", encoding="utf-8")
         write_srt(sample_entries, tmp_path / "test.srt")
 
-        async def fake_translate(msgs, cfg):
+        async def fake_translate(msgs, cfg, activity_callback=None):
+            return "[1] 你好\n[2] 世界"
+
+        with (
+            patch("subforge.orchestrator.asr_transcribe", return_value=sample_entries) as mock_asr,
+            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.DONE
+        assert mock_asr.call_count == 1
+        assert (tmp_path / "test.ja.srt").exists()
+
+    async def test_existing_source_srt_skips_asr(self, config, sample_entries, tmp_path):
+        from subforge.translate.srt_io import write_srt
+
+        job = Job(file_path=tmp_path / "test.mp3")
+        job.file_path.write_text("audio", encoding="utf-8")
+        write_srt(sample_entries, tmp_path / "test.ja.srt")
+
+        async def fake_translate(msgs, cfg, activity_callback=None):
             return "[1] 你好\n[2] 世界"
 
         with (
@@ -179,7 +263,7 @@ class TestProcessOne:
 
         assert job.status == JobStatus.DONE
         mock_asr.assert_not_called()
-        assert (tmp_path / "test_zh.srt").exists()
+        assert (tmp_path / "test.zh.srt").exists()
 
     async def test_existing_source_srt_skips_deepgram(self, config, sample_entries, tmp_path):
         from subforge.translate.srt_io import write_srt
@@ -188,9 +272,9 @@ class TestProcessOne:
         job.file_path.write_text("audio", encoding="utf-8")
         config.asr_provider = "deepgram"
         config.deepgram_api_key = "dg-test"
-        write_srt(sample_entries, tmp_path / "test.srt")
+        write_srt(sample_entries, tmp_path / "test.ja.srt")
 
-        async def fake_translate(msgs, cfg):
+        async def fake_translate(msgs, cfg, activity_callback=None):
             return "[1] 你好\n[2] 世界"
 
         with (
@@ -208,10 +292,10 @@ class TestProcessOne:
         job = Job(file_path=tmp_path / "test.mp3")
         job.file_path.write_text("audio", encoding="utf-8")
         config.force = True
-        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test.srt")
-        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test_zh.srt")
+        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test.ja.srt")
+        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test.zh.srt")
 
-        async def fake_translate(msgs, cfg):
+        async def fake_translate(msgs, cfg, activity_callback=None):
             return "[1] 你好\n[2] 世界"
 
         with (
@@ -231,10 +315,10 @@ class TestProcessOne:
         config.force = True
         config.asr_provider = "deepgram"
         config.deepgram_api_key = "dg-test"
-        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test.srt")
-        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test_zh.srt")
+        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test.ja.srt")
+        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="old")], tmp_path / "test.zh.srt")
 
-        async def fake_translate(msgs, cfg):
+        async def fake_translate(msgs, cfg, activity_callback=None):
             return "[1] 你好\n[2] 世界"
 
         with (
@@ -259,7 +343,7 @@ class TestProcessOne:
             for i in range(1, 16)
         ]
 
-        async def flaky_translate(msgs, cfg):
+        async def flaky_translate(msgs, cfg, activity_callback=None):
             user_msg = msgs[-1]["content"]
             if "[11]" in user_msg:
                 raise LLMError("batch failed")
@@ -290,10 +374,10 @@ class TestProcessOne:
             SubtitleEntry(index=i, start=float(i), end=float(i) + 0.5, text=f"src{i}")
             for i in range(1, 16)
         ]
-        write_srt(entries, tmp_path / "test.srt")
+        write_srt(entries, tmp_path / "test.ja.srt")
 
         store = ResumeStore(config.jobs_dir)
-        state = store.create(job, config, tmp_path / "test.srt", tmp_path / "test_zh.srt")
+        state = store.create(job, config, tmp_path / "test.ja.srt", tmp_path / "test.zh.srt")
         store.save_batch(
             state,
             0,
@@ -301,7 +385,7 @@ class TestProcessOne:
             total_batches=2,
         )
 
-        async def translate_remaining(msgs, cfg):
+        async def translate_remaining(msgs, cfg, activity_callback=None):
             assert "[1]" not in msgs[-1]["content"].split("=== Entries to translate ===")[-1]
             return "\n".join(f"[{i}] live{i}" for i in range(11, 16))
 
@@ -314,7 +398,7 @@ class TestProcessOne:
         assert job.status == JobStatus.DONE
         mock_asr.assert_not_called()
         assert mock_translate.call_count == 1
-        target_entries = read_srt(tmp_path / "test_zh.srt")
+        target_entries = read_srt(tmp_path / "test.zh.srt")
         assert target_entries[0].text == "cached1"
         assert target_entries[-1].text == "live15"
 
@@ -331,8 +415,8 @@ class TestProcessAll:
 
         sample = [SubtitleEntry(index=1, start=0.0, end=1.0, text="hello")]
 
-        async def fake_translate_batch(msgs, cfg):
-            return "translated"
+        async def fake_translate_batch(msgs, cfg, activity_callback=None):
+            return "[1] 译桩"
 
         with (
             patch(
@@ -359,8 +443,8 @@ class TestProcessAll:
                 raise RuntimeError("ASR failed")
             return [SubtitleEntry(index=1, start=0.0, end=1.0, text="hello")]
 
-        async def fake_translate_batch(msgs, cfg):
-            return "translated"
+        async def fake_translate_batch(msgs, cfg, activity_callback=None):
+            return "[1] 译桩"
 
         with (
             patch(
@@ -390,7 +474,7 @@ class TestProcessAll:
             # Note: this runs in a thread via to_thread, so no real asyncio lock
             return [SubtitleEntry(index=1, start=0.0, end=1.0, text="x")]
 
-        async def fake_translate_batch(msgs, cfg):
+        async def fake_translate_batch(msgs, cfg, activity_callback=None):
             nonlocal active, max_active
             async with lock:
                 active += 1

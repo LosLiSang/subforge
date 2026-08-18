@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -108,6 +108,19 @@ class TestTranslateBatch:
         assert result == "ok"
         assert mock_client.post.call_count == 2
 
+    async def test_connect_error_reports_type_and_underlying_ssl_reason(self, config, messages):
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        cause = RuntimeError("certificate verify failed")
+        error = httpx.ConnectError("", request=MagicMock())
+        error.__cause__ = cause
+        mock_client.post.side_effect = error
+
+        with pytest.raises(LLMError) as captured:
+            await translate_batch(messages, config, client=mock_client)
+
+        assert "ConnectError" in str(captured.value)
+        assert "certificate verify failed" in str(captured.value)
+
     async def test_exhausted_retries(self, config, messages):
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_client.post.side_effect = httpx.TimeoutException("timeout")
@@ -128,3 +141,50 @@ class TestTranslateBatch:
 
         assert result == "ok"
         assert mock_client.post.call_count == 2
+
+
+class TestEnvProxyIsolation:
+    async def test_client_ignores_environment_proxies(self, config, messages, monkeypatch):
+        """LLM 端点网络必须与下载代理解耦：即使进程 env 里有代理变量，
+        未配置 llm_proxy_url 的翻译请求也必须直连（trust_env=False）。"""
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+        monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:9")
+
+        with patch("subforge.translate.llm_client.httpx.AsyncClient", wraps=httpx.AsyncClient) as spy:
+            mock_client = MagicMock()
+            mock_client.post = AsyncMock(return_value=_ok_response("你好"))
+            mock_client.aclose = AsyncMock()
+            spy.return_value = mock_client
+            await translate_batch(messages, config)
+
+        # AsyncClient 必须以 trust_env=False 构造
+        spy.assert_called_once()
+        kwargs = spy.call_args.kwargs
+        assert kwargs.get("trust_env") is False
+        assert kwargs.get("proxy") is None
+
+
+class TestEmptyContentRetry:
+    async def test_empty_content_retries_then_succeeds(self, config, messages):
+        """并发下服务端可能返回空 content（推理截断/瞬时异常）：必须重试而非当作成功。"""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.post.side_effect = [
+            _ok_response(""),          # 第一次空 content
+            _ok_response("你好"),      # 第二次成功
+        ]
+
+        result = await translate_batch(messages, config, client=mock_client)
+
+        assert result == "你好"
+        assert mock_client.post.call_count == 2
+
+    async def test_all_empty_content_exhausts_retries(self, config, messages):
+        """连续空 content 3 次后必须报错，不能返回空串让上层静默缓存。"""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.post.return_value = _ok_response("")
+
+        with pytest.raises(LLMError, match="empty"):
+            await translate_batch(messages, config, client=mock_client)
+
+        assert mock_client.post.call_count == 3

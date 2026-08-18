@@ -65,10 +65,18 @@ class ResumeState:
 
 
 class ResumeStore:
-    """Manage per-media resume state under the SubForge jobs directory."""
+    """Manage per-media resume state under a jobs directory."""
 
-    def __init__(self, jobs_dir: Path) -> None:
+    def __init__(
+        self,
+        jobs_dir: Path,
+        *,
+        identity: str | None = None,
+        relative_to: Path | None = None,
+    ) -> None:
         self.jobs_dir = jobs_dir
+        self.identity = identity
+        self.relative_to = relative_to.resolve() if relative_to else None
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
 
     def build_job_key(self, job: Job, config: Config) -> str:
@@ -92,8 +100,8 @@ class ResumeStore:
             media=self._media_fingerprint(job.file_path),
             config_fingerprint=self._config_fingerprint(job, config),
             paths={
-                "source_srt": str(source_srt),
-                "target_srt": str(target_srt),
+                "source_srt": self._stored_path(source_srt),
+                "target_srt": self._stored_path(target_srt),
             },
             updated_at=self._now(),
         )
@@ -155,11 +163,23 @@ class ResumeStore:
         state.translation["status"] = "done"
         self.save(state)
 
+    def resolve_path(self, stored_path: str) -> Path:
+        path = Path(stored_path)
+        if not path.is_absolute() and self.relative_to is not None:
+            return self.relative_to / path
+        return path
+
+    def _stored_path(self, path: Path) -> str:
+        resolved = path.resolve()
+        if self.relative_to and (resolved == self.relative_to or self.relative_to in resolved.parents):
+            return resolved.relative_to(self.relative_to).as_posix()
+        return str(resolved)
+
     def _fingerprint_parts(self, job: Job, config: Config) -> list[Any]:
         media = self._media_fingerprint(job.file_path)
         cfg = self._config_fingerprint(job, config)
         return [
-            media["path"],
+            self.identity or media["path"],
             media["size"],
             media["mtime_ns"],
             cfg["asr_provider"],
@@ -175,15 +195,21 @@ class ResumeStore:
 
     def _media_fingerprint(self, file_path: Path) -> dict[str, Any]:
         path = file_path.resolve()
+        if self.identity:
+            path_value = self.identity
+        elif self.relative_to and (path == self.relative_to or self.relative_to in path.parents):
+            path_value = path.relative_to(self.relative_to).as_posix()
+        else:
+            path_value = str(path)
         if not path.exists():
             return {
-                "path": str(path),
+                "path": path_value,
                 "size": 0,
                 "mtime_ns": 0,
             }
         stat = path.stat()
         return {
-            "path": str(path),
+            "path": path_value,
             "size": stat.st_size,
             "mtime_ns": stat.st_mtime_ns,
         }

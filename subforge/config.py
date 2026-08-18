@@ -122,6 +122,9 @@ class Config:
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o"
+    llm_proxy_url: str = ""
+    llm_verify_tls: bool = True
+    llm_ca_bundle: str = ""
     # Deepgram ASR
     deepgram_api_key: str = ""
     deepgram_model: str = "nova-3"
@@ -136,6 +139,7 @@ class Config:
     # Paths
     config_path: Path = field(default=DEFAULT_CONFIG_PATH)
     models_dir: Path = field(default=DEFAULT_MODELS_DIR)
+    direct_model_path: Path | None = None
     jobs_dir: Path = field(default=DEFAULT_JOBS_DIR)
 
 
@@ -213,6 +217,9 @@ def load_config(
     kwargs["llm_api_key"] = toml_data.get("llm", {}).get("api_key", "")
     kwargs["llm_base_url"] = toml_data.get("llm", {}).get("base_url", "https://api.openai.com/v1")
     kwargs["llm_model"] = toml_data.get("llm", {}).get("model", "gpt-4o")
+    kwargs["llm_proxy_url"] = ""
+    kwargs["llm_verify_tls"] = True
+    kwargs["llm_ca_bundle"] = ""
     kwargs["deepgram_api_key"] = toml_data.get("deepgram", {}).get("api_key", "")
     kwargs["deepgram_model"] = toml_data.get("deepgram", {}).get("model", "nova-3")
     keyterms = toml_data.get("deepgram", {}).get("keyterms", [])
@@ -225,6 +232,7 @@ def load_config(
     kwargs["force"] = False
     kwargs["config_path"] = path
     kwargs["models_dir"] = DEFAULT_MODELS_DIR
+    kwargs["direct_model_path"] = None
     kwargs["jobs_dir"] = DEFAULT_JOBS_DIR
 
     # 4. Apply CLI overrides (highest priority)
@@ -232,6 +240,9 @@ def load_config(
         for key, val in cli_overrides.items():
             if val is not None and key in kwargs:
                 kwargs[key] = val
+
+    if kwargs["concurrency"] < 1:
+        raise ValueError("concurrency must be at least 1")
 
     return Config(**kwargs)
 

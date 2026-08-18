@@ -56,6 +56,13 @@ class TestLoadConfigDefaults:
 
 
 class TestLoadConfigFromToml:
+    def test_rejects_non_positive_concurrency(self, tmp_path):
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[processing]\nconcurrency = 0\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="concurrency must be at least 1"):
+            load_config(config_path)
+
     def test_custom_values(self, tmp_path):
         config_path = tmp_path / "config.toml"
         config_path.parent.mkdir(parents=True, exist_ok=True)

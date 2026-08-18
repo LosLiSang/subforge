@@ -80,6 +80,7 @@ def transcribe(
     no_speech_threshold: float = 0.6,
     preprocess_audio: bool = False,
     progress_callback: Callable[[float], None] | None = None,
+    model_ready_callback: Callable[[], None] | None = None,
 ) -> list[SubtitleEntry]:
     """Transcribe audio file using faster-whisper.
 
@@ -107,6 +108,7 @@ def transcribe(
         no_speech_threshold: Threshold for silence detection in Whisper.
             Lower to be more sensitive (0.6 default; 0.3 for ASMR).
         progress_callback: Called with 0.0–1.0 progress after each segment.
+        model_ready_callback: Called after the model is loaded and before transcription.
 
     Returns:
         List of SubtitleEntry objects with timestamps.
@@ -139,6 +141,9 @@ def transcribe(
     else:
         model = _load_model(False)
 
+    if model_ready_callback:
+        model_ready_callback()
+
     # Preprocess audio if requested (essential for ASMR whispered audio)
     working_path = file_path
     if preprocess_audio:
@@ -153,6 +158,11 @@ def transcribe(
             "condition_on_previous_text": condition_on_previous_text,
             "no_speech_threshold": no_speech_threshold,
         }
+        # Windows GPU 下 ctranslate2 的温度回退会在模型释放时触发 __fastfail
+        # （0xC0000409 / 退出码 3221226505，上游 issue SYSTRAN/faster-whisper#71）。
+        # GPU 禁回退防崩溃；CPU 保留默认回退保证识别质量。
+        if device == "cuda":
+            transcribe_kwargs["temperature"] = 0.0
         if vad_filter:
             transcribe_kwargs["vad_parameters"] = {
                 "threshold": vad_threshold,

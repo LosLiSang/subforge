@@ -1,7 +1,8 @@
 [project]
 name = "subforge"
 version = "0.4.0"
-description = "SubForge — automatic subtitle generation tool with ASR + LLM translation"
+description = "Local Japanese-to-Chinese subtitle translation for doujin audio and ASMR"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
@@ -13,7 +14,15 @@ dependencies = [
     "tenacity>=8.0",
     "tqdm>=4.0",
     "click>=8.0",
+    "starlette>=0.46",
+    "uvicorn>=0.34",
+    "jinja2>=3.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/LosLiSang/subforge"
+Repository = "https://github.com/LosLiSang/subforge"
+Issues = "https://github.com/LosLiSang/subforge/issues"
 
 [project.scripts]
 subforge = "subforge.cli:main"
@@ -22,8 +31,19 @@ subforge = "subforge.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+include = [
+    "/subforge",
+    "/README.md",
+    "/LICENSE",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["subforge"]
+artifacts = [
+    "subforge/ui/templates/*.html",
+    "subforge/ui/static/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

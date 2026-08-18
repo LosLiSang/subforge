@@ -35,6 +35,14 @@ def _parse_timestamp(s: str) -> float:
     )
 
 
+def subtitle_path(media_path: Path, language: str, output_dir: Path | None = None) -> Path:
+    """Return the canonical language-tagged SRT path for a media file."""
+    if not language or any(char in language for char in ("/", "\\", ".")):
+        raise ValueError(f"Invalid language code: {language!r}")
+    directory = output_dir if output_dir is not None else media_path.parent
+    return directory / f"{media_path.stem}.{language}.srt"
+
+
 def write_srt(entries: list[SubtitleEntry], path: Path) -> None:
     """Write a list of SubtitleEntries to an SRT file."""
     lines: list[str] = []

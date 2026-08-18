@@ -39,13 +39,50 @@ def runner():
     return CliRunner()
 
 
+@pytest.fixture
+def config_path(tmp_path, monkeypatch):
+    """Keep CLI tests isolated from the user's ~/.subforge state."""
+    monkeypatch.setattr("subforge.config.DEFAULT_MODELS_DIR", tmp_path / "models")
+    monkeypatch.setattr("subforge.config.DEFAULT_JOBS_DIR", tmp_path / "jobs")
+
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f"""\
+[asr]
+provider = "local"
+model = "tiny"
+
+[llm]
+api_key = "test-key"
+
+[logging]
+file = "{(tmp_path / 'subforge.log').as_posix()}"
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _with_config(config_path: Path, *args: str) -> list[str]:
+    return ["--config", str(config_path), *args]
+
+
 class TestE2EWithMockedASRandLLM:
     """Full pipeline test with mocked ASR and LLM."""
 
-    def test_help_includes_deepgram_options(self, runner):
+    def test_ui_command_dispatches_without_treating_ui_as_a_file(self, runner):
+        with patch("subforge.ui.server.run_ui") as mock_run_ui:
+            result = runner.invoke(main, ["ui"])
+
+        assert result.exit_code == 0
+        mock_run_ui.assert_called_once_with()
+
+    def test_help_describes_current_product_and_options(self, runner):
         result = runner.invoke(main, ["--help"])
 
         assert result.exit_code == 0
+        assert "large-v3" in result.output
+        assert "subforge ./RJ01499022/ --asmr" in result.output
         assert "--asr-provider" in result.output
         assert "--deepgram-api-key" in result.output
         assert "--deepgram-model" in result.output
@@ -59,7 +96,7 @@ class TestE2EWithMockedASRandLLM:
         assert result.exit_code != 0
         assert "Invalid value for '--asr-provider'" in result.output
 
-    def test_single_file_flow(self, runner, tmp_path):
+    def test_single_file_flow(self, runner, tmp_path, config_path):
         """Test the complete flow: CLI → scan → ASR(mock) → translate(mock) → output."""
         audio_path = tmp_path / "test.mp3"
         _generate_silent_wav(audio_path)
@@ -69,7 +106,7 @@ class TestE2EWithMockedASRandLLM:
             SubtitleEntry(index=2, start=1.0, end=2.0, text="世界"),
         ]
 
-        async def fake_translate(msgs, cfg):
+        async def fake_translate(msgs, cfg, activity_callback=None):
             # Parse the entry index from the user message and return dummy translations
             return "[1] 你好\n[2] 世界"
 
@@ -83,18 +120,21 @@ class TestE2EWithMockedASRandLLM:
                 side_effect=fake_translate,
             ),
         ):
-            result = runner.invoke(main, [
+            result = runner.invoke(main, _with_config(
+                config_path,
                 str(audio_path),
                 "--concurrency", "1",
-            ])
+            ))
 
         assert result.exit_code == 0, f"CLI failed: {result.stderr}"
 
-        # Check output files
-        source_srt = tmp_path / "test.srt"
-        target_srt = tmp_path / "test_zh.srt"
+        # Check the public subtitle naming contract.
+        source_srt = tmp_path / "test.ja.srt"
+        target_srt = tmp_path / "test.zh.srt"
         assert source_srt.exists()
         assert target_srt.exists()
+        assert not (tmp_path / "test.srt").exists()
+        assert not (tmp_path / "test_zh.srt").exists()
 
         # Verify content
         source_entries = read_srt(source_srt)
@@ -104,8 +144,8 @@ class TestE2EWithMockedASRandLLM:
         target_entries = read_srt(target_srt)
         assert len(target_entries) == 2
 
-    def test_multi_file_concurrent(self, runner, tmp_path):
-        """Test concurrent processing of 3 files."""
+    def test_multi_file_concurrent(self, runner, tmp_path, config_path):
+        """A directory input processes every supported file."""
         files = []
         for i in range(3):
             f = tmp_path / f"audio{i}.mp3"
@@ -114,42 +154,73 @@ class TestE2EWithMockedASRandLLM:
 
         sample = [SubtitleEntry(index=1, start=0.0, end=1.0, text="x")]
 
-        async def fake_translate(msgs, cfg):
+        async def fake_translate(msgs, cfg, activity_callback=None):
             return "[1] 翻译"
+
+        with (
+            patch("subforge.orchestrator.asr_transcribe", return_value=sample) as mock_asr,
+            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
+        ):
+            result = runner.invoke(
+                main,
+                _with_config(config_path, str(tmp_path), "--concurrency", "2"),
+            )
+
+        assert result.exit_code == 0, f"CLI failed: {result.stderr}"
+        assert mock_asr.call_count == 3
+        for file_path in files:
+            assert file_path.with_name(f"{file_path.stem}.ja.srt").exists()
+            assert file_path.with_name(f"{file_path.stem}.zh.srt").exists()
+
+    def test_concurrency_must_be_positive(self, runner, tmp_path, config_path):
+        audio = tmp_path / "test.mp3"
+        _generate_silent_wav(audio)
 
         result = runner.invoke(
             main,
-            [str(tmp_path), "--concurrency", "2"],
-            catch_exceptions=False,
+            _with_config(config_path, str(audio), "--concurrency", "-1"),
         )
-        # Note: with patching inside the runner context, we need a different approach
-        # This test verifies CLI + scanner integration; modular tests cover the rest
 
-    def test_unsupported_format_cli(self, runner, tmp_path):
+        assert result.exit_code != 0
+        assert "Invalid value for '--concurrency'" in result.output
+
+    def test_invalid_config_reports_friendly_error(self, runner, tmp_path, config_path):
+        audio = tmp_path / "test.mp3"
+        _generate_silent_wav(audio)
+        config_path.write_text("[processing]\nconcurrency = 0\n", encoding="utf-8")
+
+        result = runner.invoke(main, _with_config(config_path, str(audio)))
+
+        assert result.exit_code != 0
+        assert "Error: Invalid configuration: concurrency must be at least 1" in result.output
+        assert not isinstance(result.exception, ValueError)
+
+    def test_unsupported_format_cli(self, runner, tmp_path, config_path):
         """CLI should error when no supported files are found."""
         txt = tmp_path / "notes.txt"
         txt.write_text("hello")
 
-        result = runner.invoke(main, [str(txt)])
+        result = runner.invoke(main, _with_config(config_path, str(txt)))
         assert result.exit_code == 1  # exits with error
         assert "No supported media files found" in result.stderr or \
                result.stderr == ""
 
-    def test_cli_with_config_flags(self, runner, tmp_path):
+    def test_cli_with_config_flags(self, runner, tmp_path, config_path):
         """CLI accepts all configuration flags without error."""
         audio = tmp_path / "test.mp3"
         _generate_silent_wav(audio)
 
         sample = [SubtitleEntry(index=1, start=0.0, end=1.0, text="hello")]
 
-        async def fake_translate(msgs, cfg):
+        async def fake_translate(msgs, cfg, activity_callback=None):
             return "[1] translation"
 
         with (
             patch("subforge.orchestrator.asr_transcribe", return_value=sample),
             patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
         ):
-            result = runner.invoke(main, [
+            result = runner.invoke(main, _with_config(
+                config_path,
                 str(audio),
                 "--model", "tiny",
                 "--asr-provider", "local",
@@ -157,34 +228,35 @@ class TestE2EWithMockedASRandLLM:
                 "--target-lang", "en",
                 "--concurrency", "1",
                 "--llm-model", "gpt-4o-mini",
-            ])
+            ))
 
         assert result.exit_code == 0
 
-    def test_output_dir_flag(self, runner, tmp_path):
+    def test_output_dir_flag_creates_missing_directory(self, runner, tmp_path, config_path):
         """Verify --output-dir places SRT files in the specified directory."""
         audio = tmp_path / "test.mp3"
         _generate_silent_wav(audio)
         out_dir = tmp_path / "subtitles"
-        out_dir.mkdir()
+        assert not out_dir.exists()
 
         sample = [SubtitleEntry(index=1, start=0.0, end=1.0, text="x")]
 
-        async def fake_translate(msgs, cfg):
+        async def fake_translate(msgs, cfg, activity_callback=None):
             return "[1] ok"
 
         with (
             patch("subforge.orchestrator.asr_transcribe", return_value=sample),
             patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
         ):
-            result = runner.invoke(main, [
+            result = runner.invoke(main, _with_config(
+                config_path,
                 str(audio),
                 "--output-dir", str(out_dir),
-            ])
+            ))
 
         assert result.exit_code == 0
-        assert (out_dir / "test.srt").exists()
-        assert (out_dir / "test_zh.srt").exists()
+        assert (out_dir / "test.ja.srt").exists()
+        assert (out_dir / "test.zh.srt").exists()
 
 
 class TestE2ESrtRoundtrip:

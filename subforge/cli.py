@@ -11,30 +11,20 @@ import click
 
 from subforge import __version__
 from subforge.config import load_config, setup_logging
+from subforge.events import CliProgressAdapter
 from subforge.models import Job
 from subforge.orchestrator import process_all
+from subforge.presets import ASMR_PRESET
 from subforge.scanner import scan_paths
 
 logger = logging.getLogger(__name__)
 
-_ASMR_PRESET = {
-    "vad_threshold": 0.2,
-    "vad_min_speech_duration_ms": 100,
-    "vad_min_silence_duration_ms": 300,
-    "vad_speech_pad_ms": 600,
-    "vad_max_speech_duration_s": 20.0,
-    "condition_on_previous_text": False,
-    "no_speech_threshold": 0.3,
-    "preprocess_audio": True,
-}
-
-
 @click.command(context_settings={"max_content_width": 100})
-@click.argument("inputs", nargs=-1, required=True, type=click.Path(exists=True))
+@click.argument("inputs", nargs=-1, required=False, type=click.Path())
 @click.option(
     "--model",
     default=None,
-    help="ASR model size: tiny/base/small/medium/large (default: medium)",
+    help="ASR model size: tiny/base/small/medium/large-v3 (default: medium)",
 )
 @click.option(
     "--asr-provider",
@@ -66,7 +56,7 @@ _ASMR_PRESET = {
 )
 @click.option(
     "--concurrency",
-    type=int,
+    type=click.IntRange(min=1),
     default=None,
     help="Max parallel files (default: 2)",
 )
@@ -158,16 +148,23 @@ def main(
     \b
     Examples:
       subforge audio.mp3
-      subforge *.mp3 --target-lang en --concurrency 4
-      subforge ./downloads/ --model large --source-lang ja
+      subforge audio.m4a --asmr --device auto
+      subforge ./RJ01499022/ --asmr --concurrency 2
     """
+
+    if inputs == ("ui",):
+        from subforge.ui.server import run_ui
+        run_ui()
+        return
+    if not inputs:
+        raise click.UsageError("Missing argument 'INPUTS...' (or run: subforge ui)")
 
     # Collect CLI overrides (only non-None values)
     cli_overrides: dict = {}
 
     # ASMR preset: insert first so explicit CLI flags can override
     if asmr:
-        cli_overrides.update(_ASMR_PRESET)
+        cli_overrides.update(ASMR_PRESET)
 
     if model is not None:
         cli_overrides["model"] = model
@@ -201,11 +198,17 @@ def main(
         cli_overrides["log_level"] = log_level
 
     # Load configuration
-    config = load_config(config_path=config_path, cli_overrides=cli_overrides)
+    try:
+        config = load_config(config_path=config_path, cli_overrides=cli_overrides)
+    except ValueError as exc:
+        raise click.ClickException(f"Invalid configuration: {exc}") from exc
     setup_logging(config)
 
-    # Scan input paths
+    # Validate and scan input paths after handling the reserved `ui` command.
     paths = [Path(p) for p in inputs]
+    missing = [path for path in paths if not path.exists()]
+    if missing:
+        raise click.BadParameter(f"Path does not exist: {missing[0]}", param_hint="INPUTS")
     files = scan_paths(paths)
 
     if not files:
@@ -223,12 +226,18 @@ def main(
         for f in files
     ]
 
-    # Run pipeline
+    # Run pipeline; the processing core emits events and the CLI adapter renders tqdm.
+    progress = CliProgressAdapter(
+        {job.id: job.file_path.name for job in jobs},
+        {job.id: index % config.concurrency for index, job in enumerate(jobs)},
+    )
     try:
-        result = asyncio.run(process_all(jobs, config))
+        result = asyncio.run(process_all(jobs, config, event_sink=progress))
     except KeyboardInterrupt:
         logger.warning("Interrupted by user.")
         sys.exit(130)
+    finally:
+        progress.close()
 
     if result["failed"] > 0:
         sys.exit(1)

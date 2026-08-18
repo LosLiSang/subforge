@@ -96,6 +96,24 @@ class TestResumeStore:
 
         assert key1 != key2
 
+    def test_library_identity_and_relative_paths_survive_root_move(self, tmp_path):
+        root = tmp_path / "Library"
+        media = root / "works" / "RJ1" / "media" / "audio.m4a"
+        media.parent.mkdir(parents=True)
+        media.write_text("audio", encoding="utf-8")
+        job = Job(file_path=media)
+        config = Config()
+        store = ResumeStore(root / "works" / "RJ1" / ".subforge" / "tracks", identity="track-1", relative_to=root)
+        state = store.create(
+            job, config,
+            root / "works" / "RJ1" / "subtitles" / "audio.ja.srt",
+            root / "works" / "RJ1" / "subtitles" / "audio.zh.srt",
+        )
+        store.save(state)
+
+        assert state.media["path"] == "track-1"
+        assert state.paths["source_srt"] == "works/RJ1/subtitles/audio.ja.srt"
+
     def test_state_path_uses_job_key(self, tmp_path):
         media = tmp_path / "audio.m4a"
         media.write_text("audio", encoding="utf-8")
@@ -115,7 +133,7 @@ class TestResumeStore:
         config = Config(batch_size=20, context_size=10, llm_model="gpt-4o")
         store = ResumeStore(tmp_path / "jobs")
 
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
 
         assert state.schema_version == SCHEMA_VERSION
         assert state.job_key == store.build_job_key(job, config)
@@ -140,7 +158,7 @@ class TestResumeStore:
         job = Job(file_path=media)
         config = Config()
         store = ResumeStore(tmp_path / "jobs")
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
 
         store.save(state)
         loaded = store.load(job, config)
@@ -172,7 +190,7 @@ class TestResumeStore:
         media.write_text("audio", encoding="utf-8")
         job = Job(file_path=media)
         store = ResumeStore(tmp_path / "jobs")
-        state = store.create(job, Config(llm_model="gpt-4o"), tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, Config(llm_model="gpt-4o"), tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
         store.save(state)
 
         assert store.load(job, Config(llm_model="different-model")) is None
@@ -184,7 +202,7 @@ class TestResumeStore:
         store = ResumeStore(tmp_path / "jobs")
         config1 = Config(asr_provider="deepgram", deepgram_api_key="dg-old")
         config2 = Config(asr_provider="deepgram", deepgram_api_key="dg-new")
-        state = store.create(job, config1, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config1, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
         store.save(state)
 
         loaded = store.load(job, config2)
@@ -198,7 +216,7 @@ class TestResumeStore:
         job = Job(file_path=media)
         config = Config()
         store = ResumeStore(tmp_path / "jobs")
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
         store.save(state)
         media.write_text("changed audio", encoding="utf-8")
 
@@ -210,7 +228,7 @@ class TestResumeStore:
         job = Job(file_path=media)
         config = Config(llm_api_key="sk-secret-value")
         store = ResumeStore(tmp_path / "jobs")
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
 
         store.save(state)
         content = store.state_path(job, config).read_text(encoding="utf-8")
@@ -226,7 +244,7 @@ class TestResumeStore:
         job = Job(file_path=media)
         config = Config(asr_provider="deepgram", deepgram_api_key="dg-secret-value")
         store = ResumeStore(tmp_path / "jobs")
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
 
         store.save(state)
         content = store.state_path(job, config).read_text(encoding="utf-8")
@@ -240,7 +258,7 @@ class TestResumeStore:
         job = Job(file_path=media)
         config = Config()
         store = ResumeStore(tmp_path / "jobs")
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
 
         store.mark_asr_done(state)
         loaded = store.load(job, config)
@@ -254,7 +272,7 @@ class TestResumeStore:
         job = Job(file_path=media)
         config = Config()
         store = ResumeStore(tmp_path / "jobs")
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
 
         store.save_batch(
             state,
@@ -279,7 +297,7 @@ class TestResumeStore:
         job = Job(file_path=media)
         config = Config()
         store = ResumeStore(tmp_path / "jobs")
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
 
         store.save_batch(state, 0, [SubtitleEntry(index=1, start=0.0, end=1.0, text="a")], 2)
         store.save_batch(state, 1, [SubtitleEntry(index=2, start=1.0, end=2.0, text="b")], 2)
@@ -294,7 +312,7 @@ class TestResumeStore:
         job = Job(file_path=media)
         config = Config()
         store = ResumeStore(tmp_path / "jobs")
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
         store.save_batch(state, 0, [SubtitleEntry(index=1, start=0.0, end=1.0, text="a")], 1)
 
         store.mark_translation_done(state)
@@ -310,7 +328,7 @@ class TestResumeStore:
         job = Job(file_path=media)
         config = Config()
         store = ResumeStore(tmp_path / "jobs")
-        state = store.create(job, config, tmp_path / "audio.srt", tmp_path / "audio_zh.srt")
+        state = store.create(job, config, tmp_path / "audio.ja.srt", tmp_path / "audio.zh.srt")
 
         store.save_batch(state, 0, [SubtitleEntry(index=1, start=0.0, end=1.0, text="a")], 2)
         loaded = store.load(job, config)
@@ -327,7 +345,7 @@ class TestResumeState:
             job_key="abc",
             media={"path": "audio.m4a"},
             config_fingerprint={"source_lang": "ja", "target_lang": "zh"},
-            paths={"source_srt": "audio.srt", "target_srt": "audio_zh.srt"},
+            paths={"source_srt": "audio.ja.srt", "target_srt": "audio.zh.srt"},
         )
 
         assert state.schema_version == 1
@@ -341,7 +359,7 @@ class TestResumeState:
 
 class TestReadReusableSrt:
     def test_valid_srt_returns_entries(self, tmp_path):
-        path = tmp_path / "audio.srt"
+        path = tmp_path / "audio.ja.srt"
         write_srt(
             [
                 SubtitleEntry(index=1, start=0.0, end=1.0, text="a"),

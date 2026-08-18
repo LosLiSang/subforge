@@ -114,21 +114,17 @@
       <img class="player-bar-cover" src="/covers/${st.itemId || ''}" alt="" onerror="this.remove()">
       <a class="player-bar-title" href="/tracks/${st.trackId}/play" title="${safeTitle}">${safeTitle}</a>
       <span class="player-bar-time" data-role="time">${fmtT(st.currentTime)}</span>
-      <button type="button" class="ghost small" data-role="resume" hidden>▶ 继续播放</button>
       <button type="button" class="ghost small" data-role="toggle" aria-label="播放/暂停">▶</button>
       <button type="button" class="ghost small" data-role="open" aria-label="打开播放页">⛶</button>
       <button type="button" class="ghost small" data-role="close" aria-label="关闭">✕</button>
     `;
     const toggleBtn = bar.querySelector('[data-role="toggle"]');
-    const resumeBtn = bar.querySelector('[data-role="resume"]');
     bar.querySelector('[data-role="toggle"]').addEventListener('click', () => player.toggle());
-    bar.querySelector('[data-role="resume"]').addEventListener('click', async () => { const a = await player.ensureAudio(); if (a) await a.play().catch(() => {}); });
     bar.querySelector('[data-role="open"]').addEventListener('click', () => { window.location.href = `/tracks/${st.trackId}/play`; });
     bar.querySelector('[data-role="close"]').addEventListener('click', () => player.close());
     const syncUI = () => {
       bar.querySelector('[data-role="time"]').textContent = fmtT(player.currentTime);
       toggleBtn.textContent = player.paused ? '▶' : '⏸';
-      resumeBtn.hidden = !player.paused || !(st.playing);
     };
     player.on('timeupdate', syncUI);
     player.on('play', syncUI);
@@ -140,7 +136,7 @@
   // 跨页恢复：之前正在播放或有进度 → 自动重建 iframe 续播
   const st = read();
   if (st && (st.playing || (st.currentTime && st.currentTime > 1))) {
-    player.resume().then(ok => { if (!ok) renderBar(); });
+    player.resume().then(() => {});
   }
 })();
 

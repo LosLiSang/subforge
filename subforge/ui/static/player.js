@@ -94,10 +94,10 @@ if(!embed){
   loadTranscripts();
   applySubtitleMode();
 }else{
-  /* embed 模式：全局播放器 iframe 内，恢复位置并自动播放 */
+  /* embed 模式：全局播放器 iframe 内。不自动播放——由父页面播放栏控制。
+   * 只恢复保存的位置，播放由父页面的 toggle/play 触发。 */
   const st=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null');
   audio=document.getElementById('audio');
   if(st&&st.currentTime&&isFinite(st.currentTime))audio.currentTime=Math.min(st.currentTime,audio.duration||st.currentTime);
-  audio.play().catch(()=>{});
 }
 })();

@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block title %}播放 · {{ item.title }}{% endblock %}{% block content %}
 {% if embed %}
 <section class="player" id="player" data-embed="1" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}">
-<audio id="audio" preload="auto" autoplay src="/tracks/{{ track.track_id }}/media"></audio>
+<audio id="audio" preload="auto" src="/tracks/{{ track.track_id }}/media"></audio>
 </section>
 <script src="/static/player.js"></script>
 {% else %}

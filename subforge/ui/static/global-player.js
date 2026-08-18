@@ -73,12 +73,14 @@
       if (!a.paused) return true;
       try { await a.play(); return true; } catch { return false; }
     },
-    /* 设置当前播放（就地播放按钮用）：写状态后由调用方 reload 重建 */
+    /* 设置当前播放（就地播放按钮用） */
     setTrack(trackId, title, itemId) {
-      this.state = { trackId, title, itemId, currentTime: 0, playing: true };
+      this.state = { trackId, title, itemId, currentTime: 0, duration: 0, playing: false };
       write(this.state);
+      renderBar();
     },
-    /* 激活播放：设状态 + 渲染播放条 + 准备 iframe（播放页初始化用） */
+    /* 激活播放：设状态 + 渲染播放条 + 准备 iframe（播放页初始化用）。
+     * 不自动播放——音频由底部播放栏（或播放页控制条）上的用户操作控制。 */
     activate(trackId, title, itemId) {
       const st = read();
       if (!st || st.trackId !== trackId) {
@@ -88,9 +90,6 @@
         this.state = st;
       }
       renderBar();
-      if (this.state.playing || (this.state.currentTime && this.state.currentTime > 1)) {
-        this.resume();
-      }
       return this;
     },
     close() {
@@ -133,11 +132,6 @@
   };
 
   renderBar();
-  // 跨页恢复：之前正在播放或有进度 → 自动重建 iframe 续播
-  const st = read();
-  if (st && (st.playing || (st.currentTime && st.currentTime > 1))) {
-    player.resume().then(() => {});
-  }
 })();
 
 /* 就地播放：点击 data-play-track 时在底部条中开始播放（不跳转页面）。 */
@@ -147,7 +141,10 @@ for (const btn of document.querySelectorAll('[data-play-track]')) {
     const trackId = url.split('/').filter(Boolean).slice(-2)[0];
     const row = btn.closest('.track-row');
     const title = row?.querySelector('h2')?.textContent || '播放中';
-    window.SubForgePlayer?.setTrack(trackId, title, '');
-    location.reload();
+    const player = window.SubForgePlayer;
+    if (!player) return;
+    player.setTrack(trackId, title, '');
+    player.toggle(); // 创建 iframe 并播放（此刻有用户手势，自动播放放行）
+    window.scrollTo({ top: document.body.scrollHeight });
   });
 }

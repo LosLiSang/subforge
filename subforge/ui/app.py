@@ -757,12 +757,18 @@ def _download_and_import(
         raise ValueError("yt-dlp 未安装：请先安装 yt-dlp 或 pip install yt-dlp")
     tmp_dir = Path(_tf.mkdtemp(prefix="subforge-dl-"))
     try:
+        # Bilibili 反爬：412 Precondition Failed。模拟浏览器 UA + referer + cookie 直通
+        # （yt-dlp 对 bilibili 需要 referer 与 UA 才放行元数据请求）。
         cmd = [
             ytdlp,
             "--no-playlist",
             "--extract-audio",
             "--audio-format", "m4a",
             "--audio-quality", "0",
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "--referer", "https://www.bilibili.com/",
+            "--add-header", "Origin:https://www.bilibili.com",
+            "--no-check-certificates",
             "-o", str(tmp_dir / "%(title)s.%(ext)s"),
             url,
         ]

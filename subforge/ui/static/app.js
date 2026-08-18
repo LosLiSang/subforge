@@ -53,3 +53,35 @@ for (const btn of document.querySelectorAll('[data-play-track]')) {
     if (topBar) topBar.hidden = false;
   });
 }
+
+/* URL 下载导入：fetch 提交，错误在对话框内友好显示（避免裸 JSON 页面） */
+const urlImportForm = document.querySelector('[data-import-url-form]');
+if (urlImportForm) {
+  urlImportForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = urlImportForm.querySelector('[data-import-error]');
+    const btn = urlImportForm.querySelector('[data-import-submit]');
+    errEl.hidden = true;
+    const formData = new FormData(urlImportForm);
+    formData.append('csrf_token', window.SUBFORGE_CSRF || '');
+    // 服务端 _read_form 用 parse_qs 解析 urlencoded body（不支持 multipart）
+    const body = new URLSearchParams(formData).toString();
+    btn.disabled = true;
+    btn.textContent = '下载中…';
+    try {
+      const resp = await fetch(urlImportForm.action, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+      if (resp.redirected) { window.location.href = resp.url; return; }
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || data.error) {
+        errEl.textContent = data.error || `下载失败（HTTP ${resp.status}）`;
+        errEl.hidden = false;
+      }
+    } catch (err) {
+      errEl.textContent = `下载失败：${err.message}`;
+      errEl.hidden = false;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '下载并导入';
+    }
+  });
+}

@@ -165,3 +165,50 @@ class TestWindowsGpuCrashWorkaround:
 
         call_kwargs = mock_model.transcribe.call_args.kwargs
         assert "temperature" not in call_kwargs
+
+
+class TestStereoMerge:
+    def test_left_only_content_uses_left(self):
+        """左侧有语音、右侧空 → 用左侧内容。"""
+        from subforge.asr.engine import _merge_stereo_sides
+        left = [SubtitleEntry(1, 10.0, 15.0, "左侧语音")]
+        merged = _merge_stereo_sides(left, [])
+        assert len(merged) == 1
+        assert merged[0].text == "左侧语音"
+        assert merged[0].start == 10.0 and merged[0].end == 15.0
+
+    def test_right_only_content_uses_right(self):
+        """右侧有语音、左侧空 → 用右侧内容（ASMR 单侧耳语场景）。"""
+        from subforge.asr.engine import _merge_stereo_sides
+        right = [SubtitleEntry(1, 30.0, 38.0, "右侧语音")]
+        merged = _merge_stereo_sides([], right)
+        assert len(merged) == 1
+        assert merged[0].text == "右侧语音"
+
+    def test_alternating_sides_merge_by_time_window(self):
+        """两侧交替说话 → 按时间窗选语音侧，合并为一条连续字幕。"""
+        from subforge.asr.engine import _merge_stereo_sides
+        left = [SubtitleEntry(1, 0.0, 5.0, "左一句")]
+        right = [SubtitleEntry(1, 6.0, 10.0, "右一句")]
+        merged = _merge_stereo_sides(left, right)
+        assert [e.text for e in merged] == ["左一句", "右一句"]
+        assert merged[0].end <= merged[1].start  # 时间不重叠
+
+    def test_overlapping_sides_prefer_side_with_longer_text(self):
+        """同一时间窗两侧都有内容 → 取文本更长（更完整）的一侧。"""
+        from subforge.asr.engine import _merge_stereo_sides
+        left = [SubtitleEntry(1, 0.0, 10.0, "左")]
+        right = [SubtitleEntry(1, 0.0, 10.0, "右侧更完整的句子")]
+        merged = _merge_stereo_sides(left, right)
+        assert len(merged) == 1
+        assert merged[0].text == "右侧更完整的句子"
+
+    def test_non_overlapping_same_side_keeps_order(self):
+        """同一侧连续多段 → 顺序保持。"""
+        from subforge.asr.engine import _merge_stereo_sides
+        right = [
+            SubtitleEntry(1, 0.0, 5.0, "第一句"),
+            SubtitleEntry(2, 5.5, 9.0, "第二句"),
+        ]
+        merged = _merge_stereo_sides([], right)
+        assert [e.text for e in merged] == ["第一句", "第二句"]

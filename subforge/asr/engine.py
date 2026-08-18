@@ -59,6 +59,96 @@ def _preprocess_audio(input_path: Path) -> Path:
         out_path.unlink(missing_ok=True)
         return input_path
 
+
+def _extract_channel(input_path: Path, channel: str, tmp_suffix: str = ".wav") -> Path:
+    """Extract one channel (FL/FR) as a mono 16kHz wav with loudnorm, like _preprocess_audio."""
+    tmp = tempfile.NamedTemporaryFile(suffix=tmp_suffix, delete=False)
+    tmp.close()
+    out_path = Path(tmp.name)
+    cmd = [
+        _FFMPEG, "-y", "-i", str(input_path),
+        "-map", "0:a:0",
+        "-af", f"pan=mono|c0={channel},loudnorm=I=-12:TP=-0.5:LRA=7:linear=true",
+        "-ar", "16000",
+        "-f", "wav",
+        str(out_path),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        out_path.unlink(missing_ok=True)
+        return input_path
+    return out_path
+
+
+def _merge_stereo_sides(
+    left_entries: list[SubtitleEntry],
+    right_entries: list[SubtitleEntry],
+) -> list[SubtitleEntry]:
+    """Merge per-side ASR results into one timeline by picking the speech side.
+
+    ASMR binaural audio often has speech alternating between ears (left ear
+    one line, right ear the next). Averaging both channels into mono halves
+    the speech energy, so VAD drops whole segments (a 30s speech block can
+    disappear entirely). We instead transcribe each channel separately and
+    merge per time window:
+      - a window where only one side has content uses that side;
+      - overlapping windows prefer the side with the longer (more complete)
+        text, keeping the other side's whisper when it is identifiable;
+      - non-overlapping segments are kept in chronological order.
+    """
+    segments: list[tuple[float, float, str]] = []  # (start, end, text)
+
+    def _add(side_segments: list[SubtitleEntry], side: str) -> None:
+        for e in side_segments:
+            if e.text and e.text.strip():
+                segments.append((e.start, e.end, e.text.strip()))
+
+    _add(left_entries, "L")
+    _add(right_entries, "R")
+
+    if not segments:
+        return []
+
+    # Sort by start time; for ties prefer the longer text (more complete side).
+    segments.sort(key=lambda s: (s[0], -(len(s[2]))))
+
+    merged: list[tuple[float, float, str]] = []
+    for start, end, text in segments:
+        if not merged:
+            merged.append((start, end, text))
+            continue
+        prev_start, prev_end, prev_text = merged[-1]
+        # Overlap: same time window spoken on both sides — keep the more complete
+        # (longer) one; if the new one wins, replace. Slight overlaps from
+        # per-side VAD padding are normal.
+        if start < prev_end:
+            if len(text) > len(prev_text):
+                merged[-1] = (min(prev_start, start), max(prev_end, end), text)
+            # else keep previous (longer) entry
+            continue
+        merged.append((start, end, text))
+
+    return [
+        SubtitleEntry(index=i + 1, start=round(s, 3), end=round(e, 3), text=t)
+        for i, (s, e, t) in enumerate(merged)
+    ]
+
+
+def _is_stereo(input_path: Path) -> bool:
+    """Detect whether the audio has more than one channel (needs ffprobe)."""
+    ffprobe = shutil.which("ffprobe") or str(Path(_FFMPEG).with_name("ffprobe"))
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=channels", "-of", "csv=p=0", str(input_path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        channels = result.stdout.strip()
+        return channels.isdigit() and int(channels) > 1
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return False
+
     return out_path
 
 
@@ -149,48 +239,72 @@ def transcribe(
     if preprocess_audio:
         working_path = _preprocess_audio(file_path)
 
-    try:
-        logger.info("ASR: Transcribing %s...", file_path.name)
-        transcribe_kwargs: dict = {
-            "language": language,
-            "beam_size": 5,
-            "vad_filter": vad_filter,
-            "condition_on_previous_text": condition_on_previous_text,
-            "no_speech_threshold": no_speech_threshold,
-        }
-        # Windows GPU 下 ctranslate2 的温度回退会在模型释放时触发 __fastfail
-        # （0xC0000409 / 退出码 3221226505，上游 issue SYSTRAN/faster-whisper#71）。
-        # GPU 禁回退防崩溃；CPU 保留默认回退保证识别质量。
-        if device == "cuda":
-            transcribe_kwargs["temperature"] = 0.0
-        if vad_filter:
-            transcribe_kwargs["vad_parameters"] = {
-                "threshold": vad_threshold,
-                "min_speech_duration_ms": vad_min_speech_duration_ms,
-                "min_silence_duration_ms": vad_min_silence_duration_ms,
-                "speech_pad_ms": vad_speech_pad_ms,
-                "max_speech_duration_s": vad_max_speech_duration_s,
+    def _run_transcribe(wav_path: Path) -> list[SubtitleEntry]:
+        """Run ASR on one wav file, returning entries with absolute timestamps."""
+        try:
+            logger.info("ASR: Transcribing %s...", Path(wav_path).name)
+            transcribe_kwargs: dict = {
+                "language": language,
+                "beam_size": 5,
+                "vad_filter": vad_filter,
+                "condition_on_previous_text": condition_on_previous_text,
+                "no_speech_threshold": no_speech_threshold,
             }
-        segments, info = model.transcribe(str(working_path), **transcribe_kwargs)
-    finally:
-        if working_path is not file_path:
-            working_path.unlink(missing_ok=True)
+            # Windows GPU 下 ctranslate2 的温度回退会在模型释放时触发 __fastfail
+            # （0xC0000409 / 退出码 3221226505，上游 issue SYSTRAN/faster-whisper#71）。
+            # GPU 禁回退防崩溃；CPU 保留默认回退保证识别质量。
+            if device == "cuda":
+                transcribe_kwargs["temperature"] = 0.0
+            if vad_filter:
+                transcribe_kwargs["vad_parameters"] = {
+                    "threshold": vad_threshold,
+                    "min_speech_duration_ms": vad_min_speech_duration_ms,
+                    "min_silence_duration_ms": vad_min_silence_duration_ms,
+                    "speech_pad_ms": vad_speech_pad_ms,
+                    "max_speech_duration_s": vad_max_speech_duration_s,
+                }
+            segments, info = model.transcribe(str(wav_path), **transcribe_kwargs)
+        finally:
+            if wav_path is not file_path:
+                wav_path.unlink(missing_ok=True)
 
-    total_duration = info.duration if info and info.duration else 0.0
+        total_duration = info.duration if info and info.duration else 0.0
+        side_entries: list[SubtitleEntry] = []
+        for idx, segment in enumerate(segments, start=1):
+            entry = SubtitleEntry(
+                index=idx,
+                start=round(segment.start, 3),
+                end=round(segment.end, 3),
+                text=segment.text.strip(),
+            )
+            side_entries.append(entry)
+            if progress_callback and total_duration > 0:
+                progress = min(entry.end / total_duration, 1.0)
+                progress_callback(progress)
+        return side_entries
 
-    entries: list[SubtitleEntry] = []
-    for idx, segment in enumerate(segments, start=1):
-        entry = SubtitleEntry(
-            index=idx,
-            start=round(segment.start, 3),
-            end=round(segment.end, 3),
-            text=segment.text.strip(),
-        )
-        entries.append(entry)
-        if progress_callback and total_duration > 0:
-            progress = min(entry.end / total_duration, 1.0)
-            progress_callback(progress)
+    # 双声道（ASMR binaural）：语音可能在左耳或右耳交替出现。
+    # 平均混音会砍半语音能量导致 VAD 整段丢失（实测 30s 语音块直接消失），
+    # 因此拆左右声道分别转写，再按时间窗选语音侧合并。
+    if preprocess_audio and _is_stereo(file_path):
+        logger.info("ASR: Stereo input detected, transcribing channels separately")
+        left_path = _extract_channel(file_path, "FL")
+        right_path = _extract_channel(file_path, "FR")
+        try:
+            left_entries = _run_transcribe(left_path) if left_path is not file_path else []
+            right_entries = _run_transcribe(right_path) if right_path is not file_path else []
+        finally:
+            if left_path is not file_path:
+                left_path.unlink(missing_ok=True)
+            if right_path is not file_path:
+                right_path.unlink(missing_ok=True)
+        entries = _merge_stereo_sides(left_entries, right_entries)
+        if progress_callback:
+            progress_callback(1.0)
+        logger.info("ASR: %d segments transcribed (stereo merged).", len(entries))
+        return entries
 
+    entries = _run_transcribe(working_path)
     if progress_callback:
         progress_callback(1.0)
 

@@ -16,7 +16,9 @@
   </nav>
 </header>
 <main>{% block content %}{% endblock %}</main>
+<div id="player-bar" hidden></div>
 <script>window.SUBFORGE_CSRF={{ csrf_token|tojson }};</script>
 <script src="/static/app.js"></script>
+<script src="/static/global-player.js"></script>
 </body>
 </html>

@@ -1,8 +1,15 @@
 {% extends "base.html" %}{% block title %}播放 · {{ item.title }}{% endblock %}{% block content %}
+{% if embed %}
+<section class="player" id="player" data-embed="1" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}">
+<audio id="audio" preload="auto" autoplay src="/tracks/{{ track.track_id }}/media"></audio>
+</section>
+<script src="/static/player.js"></script>
+{% else %}
 <a class="back-link" href="/items/{{ item.item_id }}">← 返回作品</a>
 <section class="player" id="player" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}">
 <div class="work-hero">
   <div class="work-hero-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}">
+    <img class="work-cover-img" src="/covers/{{ item.item_id }}" alt="" loading="lazy" onerror="this.remove()">
     <span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span>
   </div>
   <div class="work-hero-info">
@@ -14,7 +21,17 @@
   </div>
 </div>
 <audio id="audio" controls preload="metadata" src="/tracks/{{ track.track_id }}/media"></audio>
-<div class="subtitles"><div><small>{{ track.source_language }}</small><p id="source-subtitle">正在加载源字幕…</p></div><div><small>{{ track.target_language }}</small><p id="target-subtitle">正在加载翻译字幕…</p></div></div>
+<div class="subtitle-mode" role="group" aria-label="字幕模式">
+  <button type="button" class="active" data-subtitle-mode="both">双语</button>
+  <button type="button" data-subtitle-mode="source">仅原文</button>
+  <button type="button" data-subtitle-mode="target">仅译文</button>
+  <button type="button" data-subtitle-mode="off">关闭</button>
+</div>
+<div class="subtitles">
+  <div data-subtitle-panel="source"><small>{{ track.source_language }}</small><p id="source-subtitle">正在加载源字幕…</p></div>
+  <div data-subtitle-panel="target"><small>{{ track.target_language }}</small><p id="target-subtitle">正在加载翻译字幕…</p></div>
+</div>
 <details class="track-actions"><summary>全部字幕</summary><div id="transcript"></div></details></section>
 <script src="/static/player.js"></script>
+{% endif %}
 {% endblock %}

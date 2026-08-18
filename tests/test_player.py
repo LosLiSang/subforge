@@ -101,3 +101,32 @@ def test_transcript_rows_include_time_and_translation_columns(tmp_path):
     assert "entry.start" in js and "entry.end" in js
     assert "transcript-time" in js           # 时间列 class
     assert "target[i]?.text" in js or "target[i]" in js
+
+
+def test_player_page_has_subtitle_mode_selector(tmp_path):
+    """播放页必须有字幕模式选择（双语/仅原文/仅译文/关闭）。"""
+    client, track_id = _player_client(tmp_path)
+    page = client.get(f"/tracks/{track_id}/play").text
+    assert 'data-subtitle-mode="both"' in page
+    assert 'data-subtitle-mode="source"' in page
+    assert 'data-subtitle-mode="target"' in page
+    assert 'data-subtitle-mode="off"' in page
+
+
+def test_every_page_has_global_player_bar(tmp_path):
+    """每个页面底部都有全局播放条容器（任何页面可播放）。"""
+    client, track_id = _player_client(tmp_path)
+    for url in ("/", f"/tracks/{track_id}/play"):
+        page = client.get(url).text
+        assert 'id="player-bar"' in page
+        assert "/static/global-player.js" in page
+
+
+def test_player_embed_mode_renders_bare_audio(tmp_path):
+    """embed=1 模式（底部播放条 iframe）：只保留 audio，隐藏完整页面装饰。"""
+    client, track_id = _player_client(tmp_path)
+    page = client.get(f"/tracks/{track_id}/play?embed=1").text
+    assert 'id="audio"' in page
+    assert f'/tracks/{track_id}/media' in page
+    assert 'class="player-bar"' not in page   # iframe 内不渲染底部条（仅空容器）
+    assert 'data-embed="1"' in page

@@ -30,7 +30,7 @@
   <label>Whisper<select name="whisper_model">{% for model in models %}<option value="{{ model }}" {% if model == default_model %}selected{% endif %}>{{ model }}{% if model in direct_models %}（直接目录）{% elif model in cached_models %}（已缓存）{% else %}（需下载）{% endif %}</option>{% endfor %}</select></label>
   <label>翻译配置<select name="llm_profile_id">{% for p in profiles %}<option value="{{ p.profile_id }}" {% if latest_snapshot and latest_snapshot.llm_profile_id == p.profile_id %}selected{% endif %}>{{ p.name }} / {{ p.model }}</option>{% endfor %}</select></label><label>操作<select name="mode"><option value="continue">继续处理（沿用原配置）</option><option value="retranslate">重新翻译（可换翻译配置）</option><option value="from_scratch">从头处理（应用 ASR 设置）</option></select></label><button {% if not profiles %}disabled{% endif %}>开始处理</button></form>
   </details>
-  {% if track.status == 'playable' %}<a class="button" href="/tracks/{{ track.track_id }}/play">▶ 播放结果</a>{% endif %}
+  {% if track.status == 'playable' %}<button type="button" class="button" data-play-track="/tracks/{{ track.track_id }}/play">▶ 就地播放</button> <a class="ghost button small" href="/tracks/{{ track.track_id }}/play">打开播放页</a>{% endif %}
 </article>{% endfor %}
 <form method="post" action="/items/{{ item.item_id }}/trash" data-secure data-confirm="移出 Library？归档副本将进入 .trash。"><button class="danger ghost">移出 Library</button></form>
 {% endblock %}

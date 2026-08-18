@@ -381,7 +381,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             item, track = library.get_track(request.path_params["track_id"])
         except KeyError:
             return Response("Not found", status_code=404)
-        return runtime.render("player.html", request, item=item, track=track)
+        return runtime.render("player.html", request, item=item, track=track,
+                              embed=request.query_params.get("embed") == "1")
 
     async def track_media(request: Request) -> Response:
         library = runtime.open_active_library()

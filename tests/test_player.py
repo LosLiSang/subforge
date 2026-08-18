@@ -83,11 +83,15 @@ def test_player_page_contains_audio_and_bilingual_subtitle_surfaces(tmp_path):
     response = client.get(f"/tracks/{track_id}/play")
 
     assert response.status_code == 200
-    assert f'/tracks/{track_id}/media' in response.text
+    assert 'id="play-toggle"' in response.text       # 自绘控制条（统一音频源）
+    assert 'id="play-seek"' in response.text
     assert 'id="source-subtitle"' in response.text
     assert 'id="target-subtitle"' in response.text
     assert 'data-source-language="ja"' in response.text
     assert 'data-target-language="zh"' in response.text
+    # media 由全局播放器 iframe（embed 页）加载
+    embed_page = client.get(f"/tracks/{track_id}/play?embed=1").text
+    assert f'/tracks/{track_id}/media' in embed_page
 
 
 def test_transcript_rows_include_time_and_translation_columns(tmp_path):

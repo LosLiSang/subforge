@@ -1,43 +1,103 @@
-(()=>{const root=document.getElementById('player');if(!root)return;const audio=document.getElementById('audio'),track=root.dataset.trackId,sourceLang=root.dataset.sourceLanguage,targetLang=root.dataset.targetLanguage;let source=[],target=[],sourceIndex=0,targetIndex=0;
-let lastTranscriptInteract=0;
+(()=>{
+const root=document.getElementById('player');if(!root)return;
+const track=root.dataset.trackId,sourceLang=root.dataset.sourceLanguage,targetLang=root.dataset.targetLanguage;
 const embed=root.dataset.embed==='1';
 const STORAGE_KEY='sf.playback';
+let source=[],target=[],sourceIndex=0,targetIndex=0;
+let lastTranscriptInteract=0;
+let player=window.SubForgePlayer;
+
+/* 播放器音频源：统一用全局单例（iframe 内 audio），播放页不再自建 <audio>。 */
+let audio=null;
+function bindPlayerAudio(){
+  if(!player)return;
+  if(player.audio)audio=player.audio;
+  const title=root.querySelector('.work-hero-info h1')?.textContent||track;
+  player.activate(track,title,'');
+  player.ensureAudio().then(a=>{audio=a;if(audio)wireAudio();});
+  const toggle=document.getElementById('play-toggle');
+  if(toggle)toggle.addEventListener('click',()=>player.toggle());
+  const seek=document.getElementById('play-seek');
+  if(seek)seek.addEventListener('input',()=>{player.seek(parseFloat(seek.value));});
+  renderNow();
+}
+function renderNow(){
+  const time=player.currentTime,dur=player.duration||0;
+  if(document.getElementById('play-time'))document.getElementById('play-time').textContent=`${fmt(time)} / ${fmt(dur)}`;
+  if(document.getElementById('play-toggle'))document.getElementById('play-toggle').textContent=player.paused?'▶':'⏸';
+  if(document.getElementById('play-seek')){const s=document.getElementById('play-seek');s.max=dur||0;s.value=time||0;}
+  updateSubs();
+}
+function wireAudio(){
+  const render=()=>{
+    if(document.getElementById('play-time'))document.getElementById('play-time').textContent=`${fmt(audio.currentTime)} / ${fmt(audio.duration||0)}`;
+    if(document.getElementById('play-toggle'))document.getElementById('play-toggle').textContent=audio.paused?'▶':'⏸';
+    if(document.getElementById('play-seek')){const s=document.getElementById('play-seek');s.max=audio.duration||0;s.value=audio.currentTime||0;}
+    updateSubs();
+  };
+  player.on('timeupdate',render);player.on('play',render);player.on('pause',render);
+  audio.addEventListener('loadedmetadata',render);
+}
+function updateSubs(){
+  if(!audio)return;
+  const time=audio.currentTime;
+  sourceIndex=locate(source,time,sourceIndex);targetIndex=locate(target,time,targetIndex);
+  const srcEl=document.getElementById('source-subtitle'),tgtEl=document.getElementById('target-subtitle');
+  if(srcEl)srcEl.textContent=sourceIndex>=0?source[sourceIndex].text:'…';
+  if(tgtEl)tgtEl.textContent=targetIndex>=0?target[targetIndex].text:'…';
+  document.querySelectorAll('[data-entry]').forEach(e=>e.classList.toggle('active',Number(e.dataset.entry)===sourceIndex));
+  const active=document.querySelector('.transcript-row.active');
+  if(active&&'scrollIntoViewIfNeeded' in active&&Date.now()-lastTranscriptInteract>3000)active.scrollIntoViewIfNeeded(false);
+}
 
 /* 字幕模式：双语 / 仅原文 / 仅译文 / 关闭，localStorage 记忆 */
 const modeButtons=[...document.querySelectorAll('[data-subtitle-mode]')];
 let subtitleMode=localStorage.getItem('sf.subtitleMode')||'both';
 function applySubtitleMode(){
-  const panels={source:document.querySelector('[data-subtitle-panel="source"]'),target:document.querySelector('[data-subtitle-panel="target"]')};
-  if(!panels.source&&!panels.target)return;
+  if(!document.querySelector('[data-subtitle-panel="source"]'))return;
   document.querySelectorAll('.subtitles>div').forEach(d=>{
     const kind=d.dataset.subtitlePanel;
     d.style.display=(subtitleMode==='both'||subtitleMode===kind)?'':'none';
   });
   modeButtons.forEach(b=>b.classList.toggle('active',b.dataset.subtitleMode===subtitleMode));
 }
-if(!embed){modeButtons.forEach(b=>b.addEventListener('click',()=>{subtitleMode=b.dataset.subtitleMode;localStorage.setItem('sf.subtitleMode',subtitleMode);applySubtitleMode()}));}
-
-/* 播放状态 → localStorage（全局底部播放条在其他页面读取） */
-function persistPlayback(){writePlayback({trackId:track,currentTime:audio.currentTime,duration:audio.duration||0,playing:!audio.paused});}
-function writePlayback(patch){try{const cur=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null')||{};localStorage.setItem(STORAGE_KEY,JSON.stringify({...cur,...patch}));}catch(e){}}
-audio.addEventListener('timeupdate',persistPlayback);
-audio.addEventListener('play',()=>writePlayback({playing:true}));
-audio.addEventListener('pause',()=>writePlayback({playing:false}));
-audio.addEventListener('ended',()=>writePlayback({playing:false}));
-/* 退出播放页时确保最终状态写入（全局播放条在其他页面立即接续） */
-window.addEventListener('pagehide',persistPlayback);
 
 async function load(lang,element){const r=await fetch(`/tracks/${track}/subtitles/${lang}`);if(!r.ok){element.textContent=r.status===404?'暂无字幕':'字幕无法读取';return []}return await r.json()}
 function locate(entries,time,old){if(entries[old]&&time>=entries[old].start&&time<=entries[old].end)return old;let lo=0,hi=entries.length-1;while(lo<=hi){const mid=(lo+hi)>>1,e=entries[mid];if(time<e.start)hi=mid-1;else if(time>e.end)lo=mid+1;else return mid}return -1}
 function fmt(t){if(t==null||!isFinite(t))return '--:--';const s=Math.max(0,Math.floor(t)),h=Math.floor(s/3600),m=Math.floor(s%3600/60),sec=s%60,p=n=>String(n).padStart(2,'0');return h?`${h}:${p(m)}:${p(sec)}`:`${m}:${p(sec)}`}
-function update(){const time=audio.currentTime;sourceIndex=locate(source,time,sourceIndex);targetIndex=locate(target,time,targetIndex);const srcEl=document.getElementById('source-subtitle'),tgtEl=document.getElementById('target-subtitle');if(srcEl)srcEl.textContent=sourceIndex>=0?source[sourceIndex].text:'…';if(tgtEl)tgtEl.textContent=targetIndex>=0?target[targetIndex].text:'…';document.querySelectorAll('[data-entry]').forEach(e=>e.classList.toggle('active',Number(e.dataset.entry)===sourceIndex));const active=document.querySelector('.transcript-row.active');if(active&&'scrollIntoViewIfNeeded' in active&&Date.now()-lastTranscriptInteract>3000)active.scrollIntoViewIfNeeded(false)}
+
+function loadTranscripts(){
+  Promise.all([load(sourceLang,document.getElementById('source-subtitle')),load(targetLang,document.getElementById('target-subtitle'))]).then(values=>{
+    [source,target]=values;
+    const transcript=document.getElementById('transcript');
+    const markInteract=()=>{lastTranscriptInteract=Date.now()};
+    window.addEventListener('wheel',markInteract,{passive:true});
+    window.addEventListener('touchmove',markInteract,{passive:true});
+    transcript.addEventListener('pointerdown',markInteract,{passive:true});
+    source.forEach((entry,i)=>{
+      const row=document.createElement('button');row.type='button';row.dataset.entry=i;row.className='transcript-row';
+      row.innerHTML=`<span class="transcript-time">${fmt(entry.start)}<br>${fmt(entry.end)}</span><span>${entry.text}</span><span>${target[i]?.text||'（未翻译）'}</span>`;
+      row.onclick=()=>{lastTranscriptInteract=Date.now();player.seek(entry.start);player.play()};
+      transcript.append(row);
+    });
+    updateSubs();
+  });
+}
+
 if(!embed){
-Promise.all([load(sourceLang,document.getElementById('source-subtitle')),load(targetLang,document.getElementById('target-subtitle'))]).then(values=>{[source,target]=values;const transcript=document.getElementById('transcript');const markInteract=()=>{lastTranscriptInteract=Date.now()};window.addEventListener('wheel',markInteract,{passive:true});window.addEventListener('touchmove',markInteract,{passive:true});transcript.addEventListener('pointerdown',markInteract,{passive:true});source.forEach((entry,i)=>{const row=document.createElement('button');row.type='button';row.dataset.entry=i;row.className='transcript-row';row.innerHTML=`<span class="transcript-time">${fmt(entry.start)}<br>${fmt(entry.end)}</span><span>${entry.text}</span><span>${target[i]?.text||'（未翻译）'}</span>`;row.onclick=()=>{lastTranscriptInteract=Date.now();audio.currentTime=entry.start;audio.play()};transcript.append(row)});update()});
-audio.addEventListener('timeupdate',update);audio.addEventListener('seeked',update);
-applySubtitleMode();
+  /* 等待全局播放器（global-player.js，base.html 末尾加载）就绪后初始化 */
+  const init=()=>{player=window.SubForgePlayer;bindPlayerAudio();};
+  if(window.SubForgePlayer){init();}else{
+    let tries=0;
+    const iv=setInterval(()=>{tries++;if(window.SubForgePlayer||tries>50){clearInterval(iv);if(window.SubForgePlayer)init();}},100);
+  }
+  loadTranscripts();
+  applySubtitleMode();
 }else{
-/* embed 模式：恢复 localStorage 播放位置并同步到全局播放条 */
-const st=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null');
-audio.addEventListener('loadedmetadata',()=>{if(st&&st.currentTime&&isFinite(st.currentTime))audio.currentTime=Math.min(st.currentTime,audio.duration||st.currentTime);audio.play().catch(()=>{});});
+  /* embed 模式：全局播放器 iframe 内，恢复位置并自动播放 */
+  const st=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null');
+  audio=document.getElementById('audio');
+  if(st&&st.currentTime&&isFinite(st.currentTime))audio.currentTime=Math.min(st.currentTime,audio.duration||st.currentTime);
+  audio.play().catch(()=>{});
 }
 })();

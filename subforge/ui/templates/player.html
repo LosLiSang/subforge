@@ -20,7 +20,11 @@
     </div>
   </div>
 </div>
-<audio id="audio" controls preload="metadata" src="/tracks/{{ track.track_id }}/media"></audio>
+<div class="player-controls">
+  <button type="button" class="ghost" id="play-toggle" aria-label="播放/暂停">▶</button>
+  <input type="range" id="play-seek" min="0" max="0" step="0.1" value="0" aria-label="进度">
+  <span class="player-controls-time" id="play-time">--:-- / --:--</span>
+</div>
 <div class="subtitle-mode" role="group" aria-label="字幕模式">
   <button type="button" class="active" data-subtitle-mode="both">双语</button>
   <button type="button" data-subtitle-mode="source">仅原文</button>

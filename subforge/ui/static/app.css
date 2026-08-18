@@ -63,3 +63,30 @@ body{display:flex;flex-direction:column;min-height:100vh;padding-bottom:0}
 #content-frame{flex:1;width:100%;border:none;min-height:0}
 .frame-main{padding:28px clamp(18px,5vw,64px) 56px;width:min(880px,100%);margin:auto}
 @media(max-width:700px){.frame-main{padding:20px 16px 48px}}
+
+/* ─── 侧边导航外壳 ─── */
+body{flex-direction:row;min-height:100vh}
+.shell{display:flex;flex:1;min-height:0;width:100%}
+.sidebar{width:220px;flex:none;display:flex;flex-direction:column;gap:18px;padding:16px 12px;background:#0e1420;border-right:1px solid var(--line);overflow-y:auto}
+.sidebar .brand{display:flex;align-items:center;gap:8px;padding:4px 10px;font-weight:700;color:#e6edf3;text-decoration:none}
+.side-nav{display:flex;flex-direction:column;gap:2px}
+.side-nav a{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;color:var(--fg-dim);font-size:.92rem;text-decoration:none;transition:background .12s,color .12s}
+.side-nav a:hover{background:#161b22;color:#e6edf3}
+.side-nav a.active{background:#1c2b40;color:#71b7ff;font-weight:600}
+#content-frame{flex:1;border:none;min-height:0;background:transparent}
+/* ─── 统计页 ─── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px;margin-bottom:24px}
+.stat-card{background:var(--panel);border:1px solid var(--line-strong);border-radius:10px;padding:18px;display:flex;flex-direction:column;gap:6px}
+.stat-num{font-size:1.6rem;font-weight:700;color:#e6edf3}.stat-num.small{font-size:1rem}
+.stat-label{color:var(--fg-faint);font-size:.84rem}
+.dash-h2{font-size:.85rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--fg-dim);margin:0 0 12px}
+.status-bars{display:grid;gap:8px}
+.status-bar-row{display:flex;align-items:center;gap:10px}
+.status-bar-track{flex:1;height:10px;background:#161b22;border-radius:99px;overflow:hidden}
+.status-bar-fill{height:100%;border-radius:99px;min-width:2px}
+@media(max-width:700px){
+  .sidebar{width:56px;padding:12px 8px}
+  .brand-text{display:none}
+  .side-nav a{justify-content:center;padding:10px 0;font-size:0}
+  .side-nav a::after{content:attr(data-nav);font-size:.7rem}
+}

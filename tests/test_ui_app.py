@@ -416,3 +416,50 @@ def _import_audio(tmp_path, library, media) -> str:
     ))
     store.close()
     return imported.item_id
+
+
+def test_stats_page_reports_library_counts(tmp_path):
+    """统计页：真实库聚合数据（作品/音轨/状态分布）。"""
+    library = tmp_path / "Library"
+    audio = tmp_path / "s.mp3"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, audio=audio, library=library)
+    store = LibraryStore.open(library)
+    store.import_audio(ImportRequest(source=audio, kind=ItemKind.RJ_WORK, title="A", rj_code="RJ1"))
+    store.close()
+
+    page = client.get("/stats").text
+    assert "统计" in page
+    assert "作品" in page
+    assert "音轨" in page
+
+
+def test_downloads_page_shows_model_and_proxy_status(tmp_path):
+    """下载管理页：模型缓存/直接目录/代理配置状态。"""
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+
+    page = client.get("/downloads").text
+    assert "下载管理" in page or "下载" in page
+    assert "模型" in page
+
+
+def test_about_page_reports_version(tmp_path):
+    """关于页：版本号与仓库链接。"""
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+
+    page = client.get("/about").text
+    assert "0.4.0" in page
+    assert "github.com" in page
+
+
+def test_shell_sidebar_contains_all_nav_entries(tmp_path):
+    """顶层外壳：侧边导航含全部入口（含新页），内容在 iframe。"""
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+    shell = client.get("/", headers={"sec-fetch-dest": "document"}).text
+    assert 'class="sidebar"' in shell
+    for entry in ("作品库", "翻译配置", "设置", "统计", "下载管理", "关于"):
+        assert entry in shell
+    assert 'id="content-frame"' in shell

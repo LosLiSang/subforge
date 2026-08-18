@@ -13,19 +13,48 @@
 <script src="/static/app.js"></script>
 {% block scripts %}{% endblock %}
 {% else %}
-<header>
-  <a class="brand" href="/" target="content-frame"><span class="brand-mark">S</span>SubForge</a>
-  <nav>
-    <a href="/" target="content-frame">作品库</a>
-    <a href="/profiles" target="content-frame">翻译配置</a>
-    <a href="/settings" target="content-frame">设置</a>
-  </nav>
-</header>
-<iframe id="content-frame" name="content-frame" src="/" title="内容"></iframe>
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="/" target="content-frame"><span class="brand-mark">S</span><span class="brand-text">SubForge</span></a>
+    <nav class="side-nav">
+      <a href="/" target="content-frame" data-nav="/">作品库</a>
+      <a href="/profiles" target="content-frame" data-nav="/profiles">翻译配置</a>
+      <a href="/settings" target="content-frame" data-nav="/settings">设置</a>
+      <a href="/stats" target="content-frame" data-nav="/stats">统计</a>
+      <a href="/downloads" target="content-frame" data-nav="/downloads">下载管理</a>
+      <a href="/about" target="content-frame" data-nav="/about">关于</a>
+    </nav>
+  </aside>
+  <iframe id="content-frame" name="content-frame" src="/" title="内容"></iframe>
+</div>
 <div id="player-bar" hidden></div>
 <script>window.SUBFORGE_CSRF={{ csrf_token|tojson }};</script>
 <script src="/static/app.js"></script>
 <script src="/static/global-player.js"></script>
+<script>
+/* 侧边栏高亮：点击立即高亮；iframe 内页通过 postMessage 通知路径变化 */
+const navLinks = [...document.querySelectorAll('.side-nav a')];
+function highlightNav(path) {
+  if (!path) return;
+  // 最长匹配优先：/stats 匹配 /stats 而非 /；/items/x 匹配 /items（无侧边入口则回退 /）
+  const exact = navLinks.find(a => path === a.dataset.nav || path.startsWith(a.dataset.nav + '/'));
+  const fallback = navLinks.find(a => a.dataset.nav === '/');
+  const target = exact || fallback;
+  for (const a of navLinks) a.classList.toggle('active', a === target);
+}
+for (const a of navLinks) {
+  a.addEventListener('click', () => {
+    for (const x of navLinks) x.classList.toggle('active', x === a);
+  });
+}
+window.addEventListener('message', (e) => {
+  if (e.data && typeof e.data === 'object' && e.data.__navPath) highlightNav(e.data.__navPath);
+});
+// 初始：读取 iframe 当前路径（导航后由内页 postMessage 持续同步）
+let path = '';
+try { path = document.getElementById('content-frame').contentWindow.location.pathname; } catch (e) {}
+highlightNav(path || '/');
+</script>
 {% endif %}
 </body>
 </html>

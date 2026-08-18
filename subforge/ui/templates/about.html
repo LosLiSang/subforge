@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% block title %}关于 · SubForge{% endblock %}{% block content %}
+<div class="page-head"><h1>关于</h1><p class="page-sub">SubForge Library</p></div>
+<section class="dash-section">
+  <div class="field-list">
+    <div class="field"><div class="field-label">版本</div><code>v{{ version }}</code></div>
+    <div class="field"><div class="field-label">仓库</div><a href="https://github.com/LosLiSang/subforge" target="_blank" rel="noopener">github.com/LosLiSang/subforge</a></div>
+    <div class="field"><div class="field-label">说明</div><small>本地音声翻译工作台：ASR 识别日语音频 → LLM 翻译成中文 → 双语字幕 + 作品库浏览。</small></div>
+  </div>
+</section>
+{% endblock %}

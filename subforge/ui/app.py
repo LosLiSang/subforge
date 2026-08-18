@@ -20,6 +20,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from subforge.asr.model_manager import cached_models
+from subforge import __version__
 from subforge.config import DEFAULT_MODELS_DIR
 from subforge.library import ImportRequest, ItemKind, LibraryStore
 from subforge.translate.srt_io import read_srt
@@ -241,6 +242,48 @@ def create_app(deps: UiDependencies) -> Starlette:
             cached_models=cached, direct_models=direct_models, default_model=default_model,
             latest_snapshot=latest_snapshot,
         )
+
+    async def stats_page(request: Request) -> Response:
+        library = runtime.open_active_library()
+        items = library.list_items() if library else []
+        tracks = [t for it in items for t in it.tracks]
+        status_counts: dict[str, int] = {}
+        for t in tracks:
+            status_counts[t.status] = status_counts.get(t.status, 0) + 1
+        stats = {
+            "item_count": len(items),
+            "track_count": len(tracks),
+            "ready_count": sum(1 for t in tracks if t.status == "playable"),
+            "rj_count": sum(1 for it in items if it.kind == ItemKind.RJ_WORK),
+            "stream_count": sum(1 for it in items if it.kind == ItemKind.STREAM_ARCHIVE),
+            "status_counts": sorted(status_counts.items(), key=lambda kv: -kv[1]),
+        }
+        return runtime.render("stats.html", request, stats=stats)
+
+    async def downloads_page(request: Request) -> Response:
+        models_dir = deps.settings.get_models_dir()
+        model_names = ["tiny", "base", "small", "medium", "large-v3"]
+        cached = cached_models(models_dir, model_names)
+        direct = {
+            name: deps.settings.get_direct_model_path(name)
+            for name in model_names
+        }
+        models = {}
+        for name in model_names:
+            if direct.get(name):
+                models[name] = {"state": "direct", "note": f"直接目录：{direct[name]}"}
+            elif name in cached:
+                models[name] = {"state": "cached", "note": "已缓存，可离线使用"}
+            else:
+                models[name] = {"state": "未下载", "note": "首次使用本地 ASR 时自动下载"}
+        return runtime.render(
+            "downloads.html", request,
+            models=models, models_dir=models_dir,
+            proxy_url=deps.settings.get_proxy_url(),
+        )
+
+    async def about_page(request: Request) -> Response:
+        return runtime.render("about.html", request, version=__version__)
 
     async def settings_page(request: Request) -> Response:
         if request.method == "POST":
@@ -527,6 +570,9 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/covers/{item_id}", item_cover),
         Route("/settings", settings_page, methods=["GET", "POST"]),
         Route("/settings/deepgram/delete-key", delete_deepgram_key, methods=["POST"]),
+        Route("/stats", stats_page),
+        Route("/downloads", downloads_page),
+        Route("/about", about_page),
         Route("/profiles", profiles_page, methods=["GET", "POST"]),
         Route("/profiles/{profile_id}/test", test_profile, methods=["POST"]),
         Route("/profiles/{profile_id}/delete", delete_profile, methods=["POST"]),

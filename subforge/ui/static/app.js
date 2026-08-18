@@ -22,3 +22,10 @@ if (workSearch) {
     }
   });
 }
+
+/* iframe 外壳：通知顶层当前路径（侧边栏高亮） */
+if (window.parent !== window) {
+  try {
+    window.parent.postMessage({ __navPath: window.location.pathname }, window.location.origin);
+  } catch (e) {}
+}

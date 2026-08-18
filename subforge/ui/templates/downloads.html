@@ -1,0 +1,27 @@
+{% extends "base.html" %}{% block title %}下载管理 · SubForge{% endblock %}{% block content %}
+<div class="page-head"><h1>下载管理</h1><p class="page-sub">Whisper 模型与网络代理</p></div>
+<section class="dash-section">
+  <header class="dash-head"><h2>模型</h2><span class="dash-hint">{{ models_dir }}</span></header>
+  <div class="field-list">
+    {% for model, info in models.items() %}
+    <div class="field">
+      <div class="field-label">{{ model }} <span class="chip {{ 'chip-ok' if info.state == 'cached' or info.state == 'direct' else '' }}">{{ info.state }}</span></div>
+      <small>{{ info.note }}</small>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+<section class="dash-section">
+  <header class="dash-head"><h2>网络代理</h2><span class="dash-hint">模型下载与外部 API</span></header>
+  <div class="field-list">
+    <div class="field">
+      <div class="field-label">下载代理 <span class="chip">{{ '已配置' if proxy_url else '未配置' }}</span></div>
+      <small>{{ proxy_url or '未配置下载代理；模型将从 Hugging Face 直连下载。' }}</small>
+    </div>
+    <div class="field">
+      <div class="field-label">LLM 代理 <span class="chip">按翻译配置</span></div>
+      <small>翻译请求的代理/证书设置在各翻译配置中独立管理，不继承下载代理。</small>
+    </div>
+  </div>
+</section>
+{% endblock %}

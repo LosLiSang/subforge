@@ -461,8 +461,12 @@ def create_app(deps: UiDependencies) -> Starlette:
             return Response("Not found", status_code=404)
 
         async def stream():
-            async for event in runtime.tasks.subscribe(task_id):
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            try:
+                async for event in runtime.tasks.subscribe(task_id):
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                # 客户端断开（页面关闭/跳页）时优雅结束，避免 Proactor 噪音
+                return
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
@@ -535,6 +539,7 @@ def create_app(deps: UiDependencies) -> Starlette:
     ]
     @asynccontextmanager
     async def lifespan(app):
+        _quiet_proactor_reset_noise()
         yield
         await runtime.close()
 
@@ -602,21 +607,54 @@ def _range_response(path: Path, range_header: str | None) -> Response:
         return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
 
     def chunk():
-        with path.open("rb") as handle:
-            handle.seek(start)
-            remaining = end - start + 1
-            while remaining:
-                data = handle.read(min(64 * 1024, remaining))
-                if not data:
-                    break
-                remaining -= len(data)
-                yield data
+        try:
+            with path.open("rb") as handle:
+                handle.seek(start)
+                remaining = end - start + 1
+                while remaining:
+                    data = handle.read(min(64 * 1024, remaining))
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            # 客户端强制断开（如播放器 iframe 跳页被销毁）：优雅结束流，
+            # 避免 Windows Proactor 在已关闭 socket 上再 shutdown 报
+            # ConnectionResetError [WinError 10054]（asyncio 已知问题）。
+            return
 
     headers.update({
         "Content-Range": f"bytes {start}-{end}/{size}",
         "Content-Length": str(end - start + 1),
     })
     return StreamingResponse(chunk(), status_code=206, media_type=content_type, headers=headers)
+
+
+def _quiet_proactor_reset_noise() -> None:
+    """Silence known asyncio Proactor noise on Windows.
+
+    When a client forcibly closes a connection (e.g. the global player
+    iframe is destroyed while streaming audio), ProactorEventLoop's
+    _call_connection_lost callback calls shutdown() on an already-closed
+    socket and asyncio logs "Exception in callback ... ConnectionResetError:
+    [WinError 10054]". The transport is already gone; this is harmless
+    noise (python/cpython #38856, #39010). We suppress only those.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    def handler(loop_: asyncio.AbstractEventLoop, context: dict) -> None:
+        exc = context.get("exception")
+        message = str(context.get("message", ""))
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return
+        if "_call_connection_lost" in message or "_ProactorBasePipeTransport" in message:
+            return
+        loop_.default_exception_handler(context)
+
+    loop.set_exception_handler(handler)
 
 
 def _resolve_selected_path(runtime: UiRuntime, form: dict[str, str], field: str) -> Path | None:

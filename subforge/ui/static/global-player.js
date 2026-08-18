@@ -112,22 +112,27 @@
     bar.innerHTML = `
       <img class="player-bar-cover" src="/covers/${st.itemId || ''}" alt="" onerror="this.remove()">
       <a class="player-bar-title" href="/tracks/${st.trackId}/play" title="${safeTitle}">${safeTitle}</a>
+      <input type="range" class="player-bar-seek" data-role="seek" min="0" max="${st.duration || 0}" step="0.1" value="${st.currentTime || 0}" aria-label="进度">
       <span class="player-bar-time" data-role="time">${fmtT(st.currentTime)}</span>
       <button type="button" class="ghost small" data-role="toggle" aria-label="播放/暂停">▶</button>
       <button type="button" class="ghost small" data-role="open" aria-label="打开播放页">⛶</button>
-      <button type="button" class="ghost small" data-role="close" aria-label="关闭">✕</button>
     `;
     const toggleBtn = bar.querySelector('[data-role="toggle"]');
+    const seekInput = bar.querySelector('[data-role="seek"]');
     bar.querySelector('[data-role="toggle"]').addEventListener('click', () => player.toggle());
     bar.querySelector('[data-role="open"]').addEventListener('click', () => { window.location.href = `/tracks/${st.trackId}/play`; });
-    bar.querySelector('[data-role="close"]').addEventListener('click', () => player.close());
+    seekInput.addEventListener('input', () => { player.seek(parseFloat(seekInput.value)); });
     const syncUI = () => {
       bar.querySelector('[data-role="time"]').textContent = fmtT(player.currentTime);
       toggleBtn.textContent = player.paused ? '▶' : '⏸';
+      const dur = player.duration || st.duration || 0;
+      seekInput.max = dur || 0;
+      seekInput.value = player.currentTime || 0;
     };
     player.on('timeupdate', syncUI);
     player.on('play', syncUI);
     player.on('pause', syncUI);
+    player.on('loadedmetadata', syncUI);
     syncUI();
   };
 

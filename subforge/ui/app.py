@@ -403,6 +403,26 @@ def create_app(deps: UiDependencies) -> Starlette:
             else next((name for name in ("large-v3", "medium", "base") if name in cached), "medium")
         )
         creators = library.list_creators()
+        status_counts: dict[str, int] = {}
+        for track in item.tracks:
+            status_counts[track.status] = status_counts.get(track.status, 0) + 1
+        total_seconds = sum(_track_duration_seconds(library, track) for track in item.tracks)
+        snapshot_profile = None
+        if latest_snapshot and latest_snapshot.get("llm_profile_id"):
+            snapshot_profile = next(
+                (p for p in public_profiles if p["profile_id"] == latest_snapshot["llm_profile_id"]),
+                None,
+            )
+        overview = {
+            "track_count": len(item.tracks),
+            "total_duration_label": _format_duration(total_seconds) if total_seconds else "--:--",
+            "total_size": sum(track.size for track in item.tracks),
+            "status_counts": [(status, status_counts[status]) for status in sorted(status_counts)],
+            "playable_count": status_counts.get("playable", 0) + status_counts.get("completed", 0),
+            "processing_count": status_counts.get("queued", 0) + status_counts.get("running", 0),
+            "failed_count": status_counts.get("failed", 0),
+            "no_speech_count": status_counts.get("no_speech", 0),
+        }
         return runtime.render(
             "detail.html", request, item=item, task_by_track=task_by_track,
             profiles=public_profiles, models=model_names,
@@ -413,6 +433,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             track_subtitle_available=track_subtitle_available,
             track_durations=track_durations,
             default_profile_id=default_profile_id,
+            overview=overview, snapshot_profile=snapshot_profile,
         )
 
     async def edit_item(request: Request) -> Response:
@@ -1469,7 +1490,7 @@ def _item_directory_sizes(root: Path, items: list) -> dict[str, int]:
     return sizes
 
 
-def _track_duration_label(library: LibraryStore, track) -> str:
+def _track_duration_seconds(library: LibraryStore, track) -> float:
     for language in (track.source_language, track.target_language):
         path = library.track_subtitle_path(track.track_id, language)
         if not path.is_file():
@@ -1479,11 +1500,20 @@ def _track_duration_label(library: LibraryStore, track) -> str:
         except Exception:
             continue
         if entries:
-            total = max(0, round(max(entry.end for entry in entries)))
-            hours, remainder = divmod(total, 3600)
-            minutes, seconds = divmod(remainder, 60)
-            return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
-    return "--:--"
+            return max(entry.end for entry in entries)
+    return 0.0
+
+
+def _format_duration(total_seconds: float) -> str:
+    total = max(0, int(round(total_seconds)))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
+
+
+def _track_duration_label(library: LibraryStore, track) -> str:
+    seconds = _track_duration_seconds(library, track)
+    return _format_duration(seconds) if seconds else "--:--"
 
 
 def _creator_duration(library: LibraryStore, items: list) -> float:

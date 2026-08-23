@@ -464,6 +464,89 @@ def test_detail_renders_track_rows_with_status_badges(tmp_path):
     assert f'href="/tracks/{imported.track_id}/play"' in html
 
 
+def test_detail_renders_enriched_overview_summary(tmp_path):
+    """detail 页：概览汇总卡片（音轨数/总时长/总大小/状态计数/创建更新时间/目录）。"""
+    library = tmp_path / "Library"
+    one = tmp_path / "one.mp3"
+    two = tmp_path / "two.mp3"
+    one.write_bytes(b"x" * (3 * 1024 * 1024))
+    two.write_bytes(b"y" * (2 * 1024 * 1024))
+    client, headers = _authenticated_client(tmp_path, library=library)
+    store = LibraryStore.open(library)
+    first = store.import_audio(ImportRequest(
+        source=one, kind=ItemKind.RJ_WORK, title="RJ 作品", rj_code="RJ00000801",
+    ))
+    second = store.import_audio(ImportRequest(
+        source=two, kind=ItemKind.RJ_WORK, title="RJ 作品", rj_code="RJ00000801",
+    ))
+    assert first.item_id == second.item_id  # 同一 RJ 号合并为同一作品
+    store.track_subtitle_path(first.track_id, "ja").write_text(
+        "1\n00:00:00,000 --> 00:01:02,000\ntext\n", encoding="utf-8"
+    )
+    store.update_track_status(first.track_id, "playable")
+    store.update_track_status(second.track_id, "no_speech")
+    store.close()
+
+    page = client.get(f"/items/{first.item_id}").text
+    assert 'class="item-overview"' in page
+    assert 'class="stat-label">音轨' in page
+    assert 'class="stat-label">总时长' in page
+    assert ">1:02" in page
+    assert 'class="stat-label">总大小' in page
+    assert ">5.0" in page
+    assert 'class="stat-label">可播放' in page
+    assert 'class="stat-label">无语音' in page
+    assert 'class="status-bars"' in page
+    assert 'class="item-facts"' in page
+    assert "创建" in page and "更新" in page
+    assert "works/RJ00000801" in page  # 所在目录
+    assert 'class="track-subs"' in page
+    assert 'class="chip sub-ok"' in page
+
+
+def test_detail_renders_last_config_and_dlsite_link(tmp_path):
+    """detail 页：上次处理配置摘要 + RJ 号 DLsite 链接 + 作者。"""
+    LlmProfileStore(tmp_path / "profiles.json").save(
+        name="测试配置", base_url="https://api.deepseek.com/v1", model="deepseek-chat",
+        profile_id="p1",
+    )
+    library = tmp_path / "Library"
+    audio = tmp_path / "a.mp3"
+    audio.write_bytes(b"audio")
+    client, _ = _authenticated_client(tmp_path, audio=audio, library=library)
+    store = LibraryStore.open(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="某作品", rj_code="RJ01546796", author="社团A",
+    ))
+    item_id = imported.item_id
+    store.close()
+    # 首次访问会触发 open_active_library 新建 TaskManager（启动期 cleanup 已执行）。
+    client.get(f"/items/{item_id}")
+    # 此后插入的已完成任务（含 config）不会被再次清理。
+    store = LibraryStore.open(library)
+    with store._db:
+        store._db.execute(
+            "INSERT OR REPLACE INTO tasks (task_id,track_id,status,stage,progress,completed,total,message,config_snapshot,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            ("task1", imported.track_id, "completed", "complete", 1.0, 5, 5, None,
+             json.dumps({"asr_provider": "local", "scene": "asmr",
+                         "whisper_model": "large-v3", "llm_profile_id": "p1"}),
+             "2026-08-23T00:00:00Z"),
+        )
+    store.close()
+
+    page = client.get(f"/items/{item_id}").text
+    assert 'class="item-config"' in page
+    config = re.search(r'class="item-config".*?</section>', page, re.S)
+    assert config, "缺少上次处理配置摘要段"
+    assert "本地" in config.group(0)
+    assert "large-v3" in config.group(0)
+    assert "测试配置" in config.group(0)
+    assert "deepseek-chat" in config.group(0)
+    assert "https://www.dlsite.com/maniax/work/=/product_id/RJ01546796" in page
+    assert "社团A" in page
+
+
 def test_process_item_enqueues_every_incomplete_track(tmp_path):
     library = tmp_path / "Library"
     one = tmp_path / "one.mp3"

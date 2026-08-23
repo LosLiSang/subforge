@@ -14,13 +14,13 @@
   <div class="stats-grid">
     <div class="stat-card"><span class="stat-num">{{ overview.track_count }}</span><span class="stat-label">音轨</span></div>
     <div class="stat-card"><span class="stat-num">{{ overview.total_duration_label }}</span><span class="stat-label">总时长</span></div>
-    <div class="stat-card"><span class="stat-num">{{ (overview.total_size / 1048576)|round(1) }}</span><span class="stat-label">总大小</span></div>
+    <div class="stat-card"><span class="stat-num">{{ (overview.total_size / 1048576)|round(1) }} MB</span><span class="stat-label">总大小</span></div>
     <div class="stat-card"><span class="stat-num">{{ overview.playable_count }}</span><span class="stat-label">可播放</span></div>
     <div class="stat-card"><span class="stat-num">{{ overview.processing_count }}</span><span class="stat-label">处理中</span></div>
     <div class="stat-card"><span class="stat-num small">{{ overview.failed_count }}</span><span class="stat-label">失败</span></div>
     <div class="stat-card"><span class="stat-num small">{{ overview.no_speech_count }}</span><span class="stat-label">无语音</span></div>
   </div>
-  {% if overview.status_counts %}<div class="status-summary"><h3 class="dash-h2">音轨状态</h3><div class="status-bars">{% for status, count in overview.status_counts %}<div class="status-bar-row status-{{ status }}"><span class="status-label"><span class="status-dot"></span>{{ {'playable':'可播放','completed':'完成','queued':'排队','running':'处理中','processing':'处理中','failed':'失败','no_speech':'无语音','waiting':'等待','interrupted':'中断'}.get(status, status) }}</span><div class="status-bar-track"><div class="status-bar-fill" style="width: {{ (count / overview.track_count * 100) if overview.track_count else 0 }}%"></div></div><span class="status-count">{{ count }}</span></div>{% endfor %}</div></div>{% endif %}
+  {% if overview.status_counts %}<div class="status-summary"><h3 class="dash-h2">音轨状态</h3><div class="status-bars">{% for status, count in overview.status_counts %}<div class="status-bar-row sc-{{ status }}"><span class="status-label"><span class="status-dot"></span>{{ {'playable':'可播放','completed':'完成','queued':'排队','running':'处理中','processing':'处理中','failed':'失败','no_speech':'无语音','waiting':'等待','interrupted':'中断'}.get(status, status) }}</span><div class="status-bar-track"><div class="status-bar-fill" style="width: {{ (count / overview.track_count * 100) if overview.track_count else 0 }}%"></div></div><span class="status-count">{{ count }}</span></div>{% endfor %}</div></div>{% endif %}
   <dl class="item-facts">{% if item.created_at %}<div class="fact"><dt>创建</dt><dd>{{ item.created_at[:10] }}</dd></div>{% endif %}{% if item.updated_at %}<div class="fact"><dt>更新</dt><dd>{{ item.updated_at[:10] }}</dd></div>{% endif %}{% if item.directory %}<div class="fact fact-wide"><dt>目录</dt><dd class="dir">{{ item.directory }}</dd></div>{% endif %}</dl>
 </section>
 

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from math import ceil
 from pathlib import Path
 from typing import Any, Callable
 
 import httpx
 
 from subforge.config import Config
+from subforge.translate.limiter import TranslationRequestLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +58,7 @@ def _is_retryable(exception: Exception) -> bool:
         status = exception.response.status_code
         if status == 401:
             return False
-        return status in (429, 500, 502, 503, 504) or status >= 500
+        return status in (429, 502, 503, 504)
     if isinstance(exception, httpx.TimeoutException):
         return True
     if isinstance(exception, httpx.NetworkError):
@@ -63,15 +67,22 @@ def _is_retryable(exception: Exception) -> bool:
 
 
 def _get_retry_after(exception: Exception) -> int | None:
-    """Extract Retry-After header value in seconds from 429 response."""
-    if isinstance(exception, httpx.HTTPStatusError):
-        val = exception.response.headers.get("Retry-After")
-        if val is not None:
-            try:
-                return int(val)
-            except ValueError:
-                pass
-    return None
+    """Extract Retry-After seconds from either delta-seconds or an HTTP date."""
+    if not isinstance(exception, httpx.HTTPStatusError):
+        return None
+    value = exception.response.headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        return max(0, int(value))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            return max(0, ceil((retry_at - datetime.now(UTC)).total_seconds()))
+        except (TypeError, ValueError, OverflowError):
+            return None
 
 
 def _build_body(messages: list[dict[str, str]], config: Config) -> dict[str, Any]:
@@ -130,12 +141,17 @@ async def translate_batch(
     url = f"{config.llm_base_url.rstrip('/')}/chat/completions"
 
     last_exception: Exception | None = None
+    request_limiter = TranslationRequestLimiter(
+        config.translation_limiter_dir,
+        config.translation_global_workers,
+    )
 
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             if activity_callback:
                 activity_callback(f"Calling LLM (attempt {attempt}/{_MAX_RETRIES})")
-            response = await client.post(url, json=body, headers=headers)
+            async with request_limiter.slot():
+                response = await client.post(url, json=body, headers=headers)
             response.raise_for_status()
             data = response.json()
             content = data["choices"][0]["message"]["content"]
@@ -145,16 +161,17 @@ async def translate_batch(
                 last_exception = LLMError(
                     "LLM returned empty content (finish_reason may be 'length')"
                 )
-                wait = 2 ** (attempt - 1)
-                logger.warning(
-                    "LLM: empty content on attempt %d/%d, waiting %ds...",
-                    attempt, _MAX_RETRIES, wait,
-                )
-                if activity_callback:
-                    activity_callback(
-                        f"空响应（推理可能耗尽预算）; {wait}s 后重试 ({attempt}/{_MAX_RETRIES})"
+                if attempt < _MAX_RETRIES:
+                    wait = 2 ** (attempt - 1)
+                    logger.warning(
+                        "LLM: empty content on attempt %d/%d, waiting %ds...",
+                        attempt, _MAX_RETRIES, wait,
                     )
-                await asyncio.sleep(wait)
+                    if activity_callback:
+                        activity_callback(
+                            f"等待重试 · 空响应 · 请求 {attempt}/{_MAX_RETRIES} · {wait}秒后重试"
+                        )
+                    await asyncio.sleep(wait)
                 continue
             content = str(content)
             if close_client:
@@ -175,28 +192,32 @@ async def translate_batch(
                 if close_client:
                     await client.aclose()
                 raise LLMError(f"Non-retryable HTTP error: {status}") from e
-            retry_after = _get_retry_after(e)
-            wait = retry_after if retry_after else (2 ** (attempt - 1))
-            logger.warning("LLM: HTTP %d on attempt %d/%d, waiting %ds...",
-                           status, attempt, _MAX_RETRIES, wait)
-            if activity_callback:
-                activity_callback(f"HTTP {status}; retrying in {wait}s ({attempt}/{_MAX_RETRIES})")
-            await asyncio.sleep(wait)
+            if attempt < _MAX_RETRIES:
+                retry_after = _get_retry_after(e)
+                wait = retry_after if retry_after is not None else (2 ** (attempt - 1))
+                logger.warning("LLM: HTTP %d on attempt %d/%d, waiting %ds...",
+                               status, attempt, _MAX_RETRIES, wait)
+                if activity_callback:
+                    activity_callback(
+                        f"等待重试 · HTTP {status} · 请求 {attempt}/{_MAX_RETRIES} · {wait}秒后重试"
+                    )
+                await asyncio.sleep(wait)
 
         except (httpx.TimeoutException, httpx.NetworkError) as e:
             last_exception = e
-            wait = 2 ** (attempt - 1)
-            logger.warning("LLM: %s on attempt %d/%d, waiting %ds...",
-                           type(e).__name__, attempt, _MAX_RETRIES, wait)
-            if activity_callback:
-                activity_callback(
-                    f"{_describe_exception(e)}; retrying in {wait}s ({attempt}/{_MAX_RETRIES})"
-                )
-            await asyncio.sleep(wait)
+            if attempt < _MAX_RETRIES:
+                wait = 2 ** (attempt - 1)
+                logger.warning("LLM: %s on attempt %d/%d, waiting %ds...",
+                               type(e).__name__, attempt, _MAX_RETRIES, wait)
+                if activity_callback:
+                    activity_callback(
+                        f"等待重试 · {_describe_exception(e)} · 请求 {attempt}/{_MAX_RETRIES} · {wait}秒后重试"
+                    )
+                await asyncio.sleep(wait)
 
     if close_client:
         await client.aclose()
     raise LLMError(
-        f"LLM call failed after {_MAX_RETRIES} retries. "
+        f"LLM call failed after {_MAX_RETRIES} attempts. "
         f"Last error: {_describe_exception(last_exception)}"
     ) from last_exception

@@ -117,6 +117,10 @@ async def translate_all(
 
     queue: asyncio.Queue[int] = asyncio.Queue()
     semaphore = asyncio.Semaphore(config.translate_workers)
+    # Initial calls may run concurrently, but semantic-empty retries are serialized.
+    # This prevents a transient provider overload from causing every failed batch to
+    # retry at the same instant and return another HTTP-200-but-empty response.
+    semantic_retry_lock = asyncio.Lock()
 
     for idx in range(len(batches)):
         cached_entries = completed_batches.get(str(idx))
@@ -162,17 +166,33 @@ async def translate_all(
             {"role": "user", "content": user_msg},
         ]
 
-        response = await llm_translate_fn(messages, config)
-        translations = _parse_translations(response, batch)
-
-        # 防御：推理模型可能把 max_tokens 全部吃在 reasoning 上导致 content 为空；
-        # 或者模型完全没按 [N] 前缀格式输出。绝不能把全空批次当作成功缓存。
-        if not response.strip() or not any(t for t in translations):
+        response = ""
+        translations: list[str] = []
+        semantic_attempts = 3
+        for attempt in range(1, semantic_attempts + 1):
+            if attempt == 1:
+                response = await llm_translate_fn(messages, config)
+            else:
+                wait = 2 ** (attempt - 2)
+                logger.warning(
+                    "Batch %d/%d returned no parseable translations; semantic retry %d/%d in %ds",
+                    batch_idx + 1, len(batches), attempt, semantic_attempts, wait,
+                )
+                await asyncio.sleep(wait)
+                async with semantic_retry_lock:
+                    response = await llm_translate_fn(messages, config)
+            translations = _parse_translations(response, batch)
+            if response.strip() and any(t.strip() for t in translations):
+                break
+        else:
+            # Never cache a batch whose response is non-empty at the HTTP layer but
+            # contains no usable [N] translations after semantic retries.
             raise RuntimeError(
-                f"LLM returned an empty translation batch (batch {batch_idx + 1}: "
-                f"{sum(1 for t in translations if not t)}/{len(batch)} entries empty). "
-                "If the model is a reasoning model, its reasoning may have consumed "
-                "the entire max_tokens budget."
+                f"LLM returned an empty translation batch after {semantic_attempts} semantic attempts "
+                f"(batch {batch_idx + 1}: "
+                f"{sum(1 for t in translations if not t.strip())}/{len(batch)} entries empty). "
+                "This can be caused by reasoning token exhaustion or a transient "
+                "provider failure under concurrent load."
             )
 
         translated_entries: list[SubtitleEntry] = []

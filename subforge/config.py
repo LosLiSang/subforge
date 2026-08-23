@@ -118,6 +118,8 @@ class Config:
     batch_size: int = 20
     context_size: int = 10
     translate_workers: int = 8
+    translation_global_workers: int = 0
+    translation_limiter_dir: Path | None = None
     # LLM
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
@@ -214,6 +216,8 @@ def load_config(
     kwargs["batch_size"] = int(toml_data.get("translate", {}).get("batch_size", 20))
     kwargs["context_size"] = int(toml_data.get("translate", {}).get("context_size", 10))
     kwargs["translate_workers"] = int(toml_data.get("translate", {}).get("workers", 8))
+    kwargs["translation_global_workers"] = 0
+    kwargs["translation_limiter_dir"] = None
     kwargs["llm_api_key"] = toml_data.get("llm", {}).get("api_key", "")
     kwargs["llm_base_url"] = toml_data.get("llm", {}).get("base_url", "https://api.openai.com/v1")
     kwargs["llm_model"] = toml_data.get("llm", {}).get("model", "gpt-4o")

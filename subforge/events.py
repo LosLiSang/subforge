@@ -21,6 +21,7 @@ class EventType(StrEnum):
     TRANSLATION_ACTIVITY = "translation_activity"
     TRANSLATION_PROGRESS = "translation_progress"
     TRANSLATION_COMPLETED = "translation_completed"
+    TASK_NO_SPEECH = "task_no_speech"
     TASK_COMPLETED = "task_completed"
     TASK_FAILED = "task_failed"
 
@@ -93,7 +94,8 @@ class CliProgressAdapter:
         elif event.type == EventType.TRANSLATION_PROGRESS:
             self._update(event.job_id, event.completed or 0)
         elif event.type in {
-            EventType.TRANSLATION_COMPLETED, EventType.TASK_COMPLETED, EventType.TASK_FAILED,
+            EventType.TRANSLATION_COMPLETED, EventType.TASK_NO_SPEECH,
+            EventType.TASK_COMPLETED, EventType.TASK_FAILED,
         }:
             self._close(event.job_id)
 

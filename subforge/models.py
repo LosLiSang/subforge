@@ -8,6 +8,7 @@ class JobStatus(Enum):
     QUEUED = "queued"
     ASR_RUNNING = "asr_running"
     TRANSLATING = "translating"
+    NO_SPEECH = "no_speech"
     DONE = "done"
     FAILED = "failed"
 

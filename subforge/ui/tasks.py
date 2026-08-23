@@ -17,6 +17,9 @@ from subforge.presets import ASMR_PRESET
 
 logger = logging.getLogger(__name__)
 
+# 任务级自动重试：连续失败达此次数才彻底结束（任一次成功即重置/结束）。
+_TASK_MAX_CONSECUTIVE_RETRIES = 3
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -156,18 +159,25 @@ class TaskManager:
         self,
         library: LibraryStore,
         worker: WorkerAdapter,
-        media_concurrency: int = 1,
+        asr_concurrency: int = 1,
         profile_resolver=None,
         deepgram_key_resolver=None,
         proxy_resolver=None,
         models_dir_resolver=None,
         direct_model_resolver=None,
+        translate_workers: int = 8,
+        media_concurrency: int | None = None,
     ) -> None:
-        if media_concurrency < 1:
-            raise ValueError("media_concurrency must be at least 1")
+        if media_concurrency is not None:
+            asr_concurrency = media_concurrency
+        if asr_concurrency < 1:
+            raise ValueError("asr_concurrency must be at least 1")
+        if translate_workers < 1:
+            raise ValueError("translate_workers must be at least 1")
         self.library = library
         self.worker = worker
-        self._semaphore = asyncio.Semaphore(media_concurrency)
+        self._semaphore = asyncio.Semaphore(asr_concurrency)
+        self._translate_workers = translate_workers
         self._profile_resolver = profile_resolver
         self._deepgram_key_resolver = deepgram_key_resolver
         self._proxy_resolver = proxy_resolver
@@ -175,17 +185,30 @@ class TaskManager:
         self._direct_model_resolver = direct_model_resolver
         self._tasks: dict[str, asyncio.Task] = {}
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
-        self._mark_running_interrupted()
+        self._restore_unfinished_tasks()
 
-    def _mark_running_interrupted(self) -> None:
+    def _restore_unfinished_tasks(self) -> None:
+        """Resume unfinished tasks and discard terminal history from older sessions."""
         with self.library._db_lock, self.library._db:
             self.library._db.execute(
-                "UPDATE tasks SET status='interrupted', updated_at=? WHERE status IN ('queued','running')",
-                (_now(),),
+                "DELETE FROM tasks WHERE status IN ('completed','no_speech','failed','cancelled')"
             )
+            rows = self.library._db.execute(
+                "SELECT task_id,track_id FROM tasks WHERE status IN ('queued','running','interrupted') ORDER BY updated_at"
+            ).fetchall()
+        active_track_ids: set[str] = set()
+        for row in rows:
+            task = self.get_task(row["task_id"])
+            task.status = "queued"
+            task.stage = "queue"
+            task.message = "应用重启后恢复任务"
+            self._save(task)
+            self.library.update_track_status(task.track_id, "queued")
+            self._tasks[task.task_id] = asyncio.create_task(self._run(task))
+            active_track_ids.add(task.track_id)
         for item in self.library.list_items():
             for track in item.tracks:
-                if track.status in {"queued", "processing"}:
+                if track.status in {"queued", "processing"} and track.track_id not in active_track_ids:
                     self.library.update_track_status(track.track_id, "interrupted")
 
     async def enqueue(
@@ -211,20 +234,45 @@ class TaskManager:
     async def _run(self, task: TaskRecord) -> None:
         try:
             async with self._semaphore:
-                task.status = "running"
-                self._save(task)
-                self.library.update_track_status(task.track_id, "processing")
-                request = self._build_request(task)
-                async for event in self.worker.events(task, request):
-                    self._apply_event(task, event)
+                consecutive_failures = 0
+                while True:
+                    task.status = "running"
+                    task.stage = "queue"
+                    task.message = (
+                        f"任务失败，自动重试 ({consecutive_failures}/{_TASK_MAX_CONSECUTIVE_RETRIES})"
+                        if consecutive_failures else None
+                    )
                     self._save(task)
-                    self._publish(task.task_id, event)
-                if task.status == "running":
-                    task.status = "failed"
-                    task.stage = "worker"
-                    task.message = "Worker ended without a final event"
-                    self._save(task)
-                    self.library.update_track_status(task.track_id, "failed")
+                    self.library.update_track_status(task.track_id, "processing")
+                    request = self._build_request(task)
+                    completed_at_start = task.completed
+                    async for event in self.worker.events(task, request):
+                        self._apply_event(task, event)
+                        self._save(task)
+                        self._publish(task.task_id, event)
+                    if task.status == "running":
+                        task.status = "failed"
+                        task.stage = "worker"
+                        task.message = "Worker ended without a final event"
+                        self._save(task)
+                        self.library.update_track_status(task.track_id, "failed")
+                    # 成功（或检测到无语音）即结束；失败则累计连续失败次数。
+                    if task.status in ("completed", "no_speech"):
+                        break
+                    # 本轮取得进展（翻译完成批次前进）视为“成功”，重置连续失败计数；
+                    # 只有连续无进展的失败累计到上限才彻底结束。
+                    if task.completed is not None and task.completed != completed_at_start:
+                        consecutive_failures = 0
+                    consecutive_failures += 1
+                    if consecutive_failures >= _TASK_MAX_CONSECUTIVE_RETRIES:
+                        break
+                    self._publish(task.task_id, {
+                        "type": "task_retrying",
+                        "stage": "retry",
+                        "message": (
+                            f"任务失败，自动重试 ({consecutive_failures}/{_TASK_MAX_CONSECUTIVE_RETRIES})"
+                        ),
+                    })
         except asyncio.CancelledError:
             if task.status != "cancelled":
                 task.status = "interrupted"
@@ -260,6 +308,11 @@ class TaskManager:
             "llm_proxy_url": profile.proxy_url if profile else "",
             "llm_verify_tls": profile.verify_tls if profile else True,
             "llm_ca_bundle": profile.ca_bundle if profile else "",
+            "translate_workers": self._translate_workers,
+            "translation_global_workers": self._translate_workers,
+            "translation_limiter_dir": str(
+                (self.library.root / ".subforge" / "translation-slots").resolve()
+            ),
         }
         if snapshot.get("scene") == "asmr":
             overrides.update(ASMR_PRESET)
@@ -296,6 +349,9 @@ class TaskManager:
         if event_type == "task_completed":
             task.status = "completed"
             self.library.update_track_status(task.track_id, "playable")
+        elif event_type == "task_no_speech":
+            task.status = "no_speech"
+            self.library.update_track_status(task.track_id, "no_speech")
         elif event_type == "task_failed":
             task.status = "failed"
             self.library.update_track_status(task.track_id, "failed")
@@ -324,6 +380,13 @@ class TaskManager:
             total=row["total"], message=row["message"],
             config_snapshot=json.loads(row["config_snapshot"]) if row["config_snapshot"] else None,
         )
+
+    def list_tasks(self) -> list[TaskRecord]:
+        with self.library._db_lock:
+            rows = self.library._db.execute(
+                "SELECT task_id FROM tasks ORDER BY updated_at DESC"
+            ).fetchall()
+        return [self.get_task(row["task_id"]) for row in rows]
 
     def latest_for_track(self, track_id: str) -> TaskRecord | None:
         with self.library._db_lock:

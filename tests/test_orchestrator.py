@@ -60,6 +60,23 @@ class TestProcessOne:
         assert events[4].total == 1
         assert all(str(job.file_path) not in (event.message or "") for event in events)
 
+    async def test_empty_asr_finishes_as_no_speech_without_translation(self, config, tmp_path):
+        job = Job(file_path=tmp_path / "silent.mp3")
+        events = []
+
+        with (
+            patch("subforge.orchestrator.asr_transcribe", return_value=[]),
+            patch("subforge.orchestrator.translate_batch", new=AsyncMock()) as translate,
+        ):
+            await process_one(job, config, pbar_slot=0, event_sink=events.append)
+
+        assert job.status == JobStatus.NO_SPEECH
+        assert job.error is None
+        assert events[-1].type == EventType.TASK_NO_SPEECH
+        assert events[-1].stage == "no_speech"
+        assert "未识别到" in events[-1].message
+        translate.assert_not_awaited()
+
     async def test_failed_pipeline_emits_safe_failure_event(self, config, tmp_path):
         job = Job(file_path=tmp_path / "secret-name.mp3")
         events = []

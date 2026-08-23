@@ -181,7 +181,17 @@ async def process_one(
             logger.debug("[%s] DBG: asyncio.to_thread returned, entries=%d", job.id, len(entries))
 
         if not entries:
-            raise RuntimeError("ASR produced no segments")
+            job.status = JobStatus.NO_SPEECH
+            job.finished_at = time.time()
+            logger.info("[%s] %s: no recognizable speech", job.id, job.file_path.name)
+            emit_event(event_sink, make_event(
+                EventType.TASK_NO_SPEECH,
+                job.id,
+                stage="no_speech",
+                progress=1.0,
+                message="未识别到可生成字幕的语音",
+            ))
+            return
 
         # Stage 1.5: Timeline fine-tuning
         logger.debug("[%s] DBG: entering merge_short_entries", job.id)

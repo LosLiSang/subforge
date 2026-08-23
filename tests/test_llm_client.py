@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -125,10 +127,38 @@ class TestTranslateBatch:
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_client.post.side_effect = httpx.TimeoutException("timeout")
 
-        with pytest.raises(LLMError, match="3 retries"):
-            await translate_batch(messages, config, client=mock_client)
+        with patch("subforge.translate.llm_client.asyncio.sleep", new=AsyncMock()) as sleep:
+            with pytest.raises(LLMError, match="3 attempts"):
+                await translate_batch(messages, config, client=mock_client)
 
         assert mock_client.post.call_count == 3
+        assert sleep.await_count == 2
+
+    async def test_http_500_is_not_retried(self, config, messages):
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.post.return_value = _error_response(500)
+
+        with pytest.raises(LLMError, match="Non-retryable HTTP error: 500"):
+            await translate_batch(messages, config, client=mock_client)
+
+        assert mock_client.post.call_count == 1
+
+    async def test_retry_after_http_date_is_respected(self, config, messages):
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        retry_at = format_datetime(datetime.now(UTC) + timedelta(seconds=2), usegmt=True)
+        mock_client.post.side_effect = [
+            _error_response(429, headers={"Retry-After": retry_at}),
+            _ok_response("ok"),
+        ]
+        activity = MagicMock()
+
+        with patch("subforge.translate.llm_client.asyncio.sleep", new=AsyncMock()) as sleep:
+            result = await translate_batch(messages, config, client=mock_client, activity_callback=activity)
+
+        assert result == "ok"
+        waited = sleep.await_args.args[0]
+        assert 0 <= waited <= 2
+        assert any("1/3" in call.args[0] and "HTTP 429" in call.args[0] for call in activity.call_args_list)
 
     async def test_network_error_retry(self, config, messages):
         mock_client = AsyncMock(spec=httpx.AsyncClient)

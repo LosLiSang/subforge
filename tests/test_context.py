@@ -275,22 +275,39 @@ class TestEmptyResponseGuard:
     def config(self):
         return Config(source_lang="ja", target_lang="zh", batch_size=10, context_size=3)
 
-    async def test_empty_content_raises_instead_of_caching_blanks(self, config):
-        """推理模型把 max_tokens 吃光时 content 为空：绝不能当作成功缓存空翻译。"""
+    async def test_empty_content_raises_instead_of_caching_blanks(self, config, monkeypatch):
+        """推理模型把 max_tokens 吃光时 content 为空：重试后仍空才失败，且绝不缓存。"""
         config.batch_size = 10
         entries = make_entries(5)
         mock_translate = AsyncMock(return_value="")  # LLM 返回空 content
+        monkeypatch.setattr("subforge.translate.context.asyncio.sleep", AsyncMock())
 
-        with pytest.raises(RuntimeError, match="empty"):
+        with pytest.raises(RuntimeError, match="3 semantic attempts"):
             await translate_all(entries, config, mock_translate)
 
-    async def test_all_missing_prefixes_raises(self, config):
-        """响应非空但完全没有 [N] 前缀（模型格式跑偏）：同样视为失败。"""
+        assert mock_translate.call_count == 3
+
+    async def test_all_empty_batch_is_retried_and_recovers(self, config, monkeypatch):
+        """并发下首次 17/17 为空时，批次应串行重试而不是立即让任务失败。"""
+        config.batch_size = 20
+        entries = make_entries(17)
+        valid = "\n".join(f"[{i}] 翻译{i}" for i in range(1, 18))
+        mock_translate = AsyncMock(side_effect=["格式跑偏，没有编号", valid])
+        monkeypatch.setattr("subforge.translate.context.asyncio.sleep", AsyncMock())
+
+        result = await translate_all(entries, config, mock_translate)
+
+        assert mock_translate.call_count == 2
+        assert [entry.text for entry in result] == [f"翻译{i}" for i in range(1, 18)]
+
+    async def test_all_missing_prefixes_raises(self, config, monkeypatch):
+        """响应非空但完全没有 [N] 前缀：语义重试耗尽后失败。"""
         config.batch_size = 10
         entries = make_entries(3)
         mock_translate = AsyncMock(return_value="随便说的内容，没有前缀")
+        monkeypatch.setattr("subforge.translate.context.asyncio.sleep", AsyncMock())
 
-        with pytest.raises(RuntimeError, match="empty"):
+        with pytest.raises(RuntimeError, match="3 semantic attempts"):
             await translate_all(entries, config, mock_translate)
 
     async def test_partially_parsed_batch_is_retried_then_cached(self, config):

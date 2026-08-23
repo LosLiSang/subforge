@@ -1060,7 +1060,7 @@ def test_about_page_reports_version(tmp_path):
     client, headers = _authenticated_client(tmp_path, library=library)
 
     page = client.get("/about").text
-    assert "0.4.0" in page
+    assert "0.5.0" in page
     assert "github.com" in page
 
 

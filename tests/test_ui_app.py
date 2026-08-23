@@ -1,16 +1,23 @@
+import asyncio
+import json
 import re
 import shutil
+import time
+from dataclasses import asdict
+
+import httpx
+import pytest
 from pathlib import Path
 from unittest.mock import patch
 
 from starlette.testclient import TestClient
 
-from subforge.library import ImportRequest, ItemKind, LibraryStore
+from subforge.library import CreatorKind, ImportRequest, ItemKind, LibraryStore
 from subforge.ui.app import UiDependencies, create_app
 from subforge.ui.picker import FakeFilePicker
 from subforge.ui.profiles import LlmProfileStore
 from subforge.ui.settings import UiSettingsStore
-from subforge.ui.tasks import FakeWorkerAdapter
+from subforge.ui.tasks import FakeWorkerAdapter, ProcessingSnapshot
 
 
 def _authenticated_client(tmp_path, *, audio=None, library=None, worker=None):
@@ -44,6 +51,50 @@ def _authenticated_client(tmp_path, *, audio=None, library=None, worker=None):
 
     client.get = _get
     return client, headers
+
+
+async def test_http_remains_responsive_while_background_worker_is_running(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "busy.mp3"
+    audio.write_bytes(b"audio")
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Busy", rj_code="RJ00000801"
+    ))
+    store.close()
+    settings = UiSettingsStore(tmp_path / "ui.json")
+    settings.set_active_library(library)
+    app = create_app(UiDependencies(
+        settings=settings,
+        picker=FakeFilePicker(),
+        profiles=LlmProfileStore(tmp_path / "profiles.json"),
+        worker=FakeWorkerAdapter([], wait_forever=True),
+        startup_token="",
+        open_browser=False,
+        allowed_hosts={"testserver"},
+    ))
+    runtime = app.state.runtime
+    runtime.sessions["session"] = "csrf"
+    runtime.open_active_library()
+    assert runtime.tasks is not None
+    await runtime.tasks.enqueue(
+        imported.track_id,
+        ProcessingSnapshot("local", "normal", "medium", "missing-profile"),
+    )
+    await asyncio.sleep(0)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver",
+        cookies={"subforge_session": "session"},
+    ) as client:
+        started = time.monotonic()
+        response = await client.get("/downloads", headers={"sec-fetch-dest": "iframe"})
+        elapsed = time.monotonic() - started
+
+    assert response.status_code == 200
+    assert elapsed < 0.5
+    await runtime.close()
 
 
 def test_write_request_requires_authenticated_session_csrf_and_origin(tmp_path):
@@ -239,6 +290,9 @@ def test_deepgram_key_can_only_be_deleted_by_explicit_action(tmp_path):
     client, headers = _authenticated_client(tmp_path, library=library)
     settings = UiSettingsStore(tmp_path / "ui.json")
     settings.set_deepgram_api_key("dg-secret-value-1234")
+    page = client.get("/settings").text
+    assert "data-delete-deepgram" in page
+    assert "删除 Deepgram Key" not in page
 
     response = client.post("/settings/deepgram/delete-key", headers=headers)
 
@@ -329,6 +383,37 @@ def test_index_renders_work_card_grid_like_asmr_one(tmp_path):
     assert 'name="title"' in html
     assert 'name="rj_code"' in html
     assert '/library/rescan' in html
+    assert 'class="library-toolbar"' in html
+    assert 'class="works-search"' in html
+    assert 'class="library-menu"' in html
+    assert '/library/rescan' in html
+    css = (Path(__file__).parents[1] / "subforge" / "ui" / "static" / "app.css").read_text(encoding="utf-8")
+    assert '.library-toolbar .works-actions>button{height:34px}' in css
+    assert '.library-toolbar .creator-picker-control{height:34px;min-height:34px' in css
+
+
+def test_rj_work_card_shows_total_item_directory_size(tmp_path):
+    library = tmp_path / "Library"
+    one = tmp_path / "one.mp3"
+    two = tmp_path / "two.mp3"
+    one.write_bytes(b"a" * 1048576)
+    two.write_bytes(b"b" * 2097152)
+    client, _headers = _authenticated_client(tmp_path, library=library)
+    store = LibraryStore.open(library)
+    first = store.import_audio(ImportRequest(
+        source=one, kind=ItemKind.RJ_WORK, title="Size work", rj_code="RJ00000202",
+    ))
+    store.import_audio(ImportRequest(
+        source=two, kind=ItemKind.RJ_WORK, title="Size work", rj_code="RJ00000202",
+    ))
+    item = store.get_item(first.item_id)
+    item_dir = store.item_directory(item.item_id)
+    expected = f"{round(sum(path.stat().st_size for path in item_dir.rglob('*') if path.is_file()) / 1048576, 1)} MB"
+    store.close()
+
+    page = client.get("/")
+
+    assert expected in page.text
 
 
 def test_detail_renders_track_rows_with_status_badges(tmp_path):
@@ -342,6 +427,9 @@ def test_detail_renders_track_rows_with_status_badges(tmp_path):
         source=audio, kind=ItemKind.STREAM_ARCHIVE, title="直播作品", author="miyadi",
     ))
     item_id = imported.item_id
+    store.track_subtitle_path(imported.track_id, "ja").write_text(
+        "1\n00:00:00,000 --> 00:01:02,000\ntext\n", encoding="utf-8"
+    )
     store.close()
 
     page = client.get(f"/items/{item_id}")
@@ -351,13 +439,163 @@ def test_detail_renders_track_rows_with_status_badges(tmp_path):
     assert "miyadi" in html
     assert 'class="track-row' in html
     assert "b.mp3" in html
-    # 处理表单字段与端点全部保留
+    assert 'class="track-menu"' in html
+    assert f'data-track-duration="/tracks/{imported.track_id}/media">1:02' in html
+    assert f'action="/items/{item_id}/process"' in html
+    assert 'data-process-incomplete-form' in html
+    assert '>处理全部未完成音轨</button>' in html
+    assert 'data-title="处理全部未完成音轨"' in html
+    assert '>处理设置…</button>' in html
+    assert f'action="/tracks/{imported.track_id}/rename"' in html
+    assert f'action="/tracks/{imported.track_id}/delete"' in html
+    assert f'data-track-player="/tracks/{imported.track_id}/play"' in html
+    assert f'data-item-id="{item_id}"' in html
+    assert f'data-action="/tracks/{imported.track_id}/process"' in html
+    # 处理表单字段与端点全部保留，并集中到 Dialog。
+    assert 'id="processing-dialog"' in html
     assert 'name="asr_provider"' in html
     assert 'name="scene"' in html
     assert 'name="whisper_model"' in html
     assert 'name="llm_profile_id"' in html
     assert 'name="mode"' in html
     assert "/process" in html
+    # 媒体播放与字幕处理状态解耦：waiting Track 也能播放。
+    assert f'data-play-track="/tracks/{imported.track_id}/play"' in html
+    assert f'href="/tracks/{imported.track_id}/play"' in html
+
+
+def test_process_item_enqueues_every_incomplete_track(tmp_path):
+    library = tmp_path / "Library"
+    one = tmp_path / "one.mp3"
+    two = tmp_path / "two.mp3"
+    complete = tmp_path / "complete.mp3"
+    one.write_bytes(b"one")
+    two.write_bytes(b"two")
+    complete.write_bytes(b"complete")
+    client, headers = _authenticated_client(
+        tmp_path, library=library,
+        worker=FakeWorkerAdapter([{"type": "task_completed", "stage": "complete"}]),
+    )
+    store = LibraryStore.open(library)
+    first = store.import_audio(ImportRequest(
+        source=one, kind=ItemKind.RJ_WORK, title="Batch", rj_code="RJ00000802"
+    ))
+    second = store.import_audio(ImportRequest(
+        source=two, kind=ItemKind.RJ_WORK, title="Batch", rj_code="RJ00000802"
+    ))
+    completed = store.import_audio(ImportRequest(
+        source=complete, kind=ItemKind.RJ_WORK, title="Batch", rj_code="RJ00000802"
+    ))
+    store.update_track_status(completed.track_id, "playable")
+    store.close()
+    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+        name="Test", base_url="https://example.com/v1", model="chat", api_key="key"
+    )
+
+    response = client.post(
+        f"/items/{first.item_id}/process",
+        headers=headers,
+        data={
+            "asr_provider": "local", "scene": "asmr", "whisper_model": "medium",
+            "llm_profile_id": profile.profile_id, "mode": "from_scratch",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    tasks = client.app.state.runtime.tasks
+    assert tasks.latest_for_track(first.track_id) is not None
+    assert tasks.latest_for_track(second.track_id) is not None
+    assert tasks.latest_for_track(completed.track_id) is None
+
+
+def test_track_rename_delete_and_subtitle_download_routes(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "old.mp3"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, library=library)
+    store = LibraryStore.open(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Track ops", rj_code="RJ00000803"
+    ))
+    store.track_subtitle_path(imported.track_id, "ja").write_text("subtitle", encoding="utf-8")
+    store.close()
+
+    download = client.get(f"/tracks/{imported.track_id}/subtitles/ja/download")
+    assert download.status_code == 200
+    assert download.content == b"subtitle"
+    assert "attachment" in download.headers["content-disposition"]
+
+    renamed = client.post(
+        f"/tracks/{imported.track_id}/rename", headers=headers,
+        data={"filename": "renamed.mp3"}, follow_redirects=False,
+    )
+    assert renamed.status_code == 303
+    reopened = LibraryStore.open(library)
+    assert reopened.track_media_path(imported.track_id).name == "renamed.mp3"
+    assert reopened.track_subtitle_path(imported.track_id, "ja").exists()
+    reopened.close()
+
+    deleted = client.post(
+        f"/tracks/{imported.track_id}/delete", headers=headers, follow_redirects=False,
+    )
+    assert deleted.status_code == 303
+    reopened = LibraryStore.open(library)
+    with pytest.raises(KeyError):
+        reopened.get_track(imported.track_id)
+    reopened.close()
+
+
+def test_track_row_click_opens_player_and_menu_buttons_do_not_navigate(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "nav.mp3"
+    audio.write_bytes(b"audio")
+    client, _headers = _authenticated_client(tmp_path, library=library)
+    store = LibraryStore.open(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="Nav work", author="miyadi",
+    ))
+    store.close()
+
+    page = client.get(f"/items/{imported.item_id}")
+
+    assert f'data-track-player="/tracks/{imported.track_id}/play"' in page.text
+    script = (Path(__file__).parents[1] / "subforge" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "data-track-player" in script
+    assert "stopPropagation" in script
+
+
+def test_single_track_can_be_reprocessed_directly(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "single.mp3"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(
+        tmp_path, library=library,
+        worker=FakeWorkerAdapter([{"type": "task_completed", "stage": "complete"}]),
+    )
+    store = LibraryStore.open(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Single", rj_code="RJ00000804",
+    ))
+    store.update_track_status(imported.track_id, "failed")
+    store.close()
+    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+        name="Test", base_url="https://example.com/v1", model="chat", api_key="key"
+    )
+
+    response = client.post(
+        f"/tracks/{imported.track_id}/process",
+        headers=headers,
+        data={
+            "asr_provider": "local", "scene": "asmr", "whisper_model": "medium",
+            "llm_profile_id": profile.profile_id, "mode": "from_scratch",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    task = client.app.state.runtime.tasks.latest_for_track(imported.track_id)
+    assert task is not None
 
 
 def test_cover_route_returns_extracted_image(tmp_path):
@@ -435,14 +673,385 @@ def test_stats_page_reports_library_counts(tmp_path):
     assert "音轨" in page
 
 
-def test_downloads_page_shows_model_and_proxy_status(tmp_path):
-    """下载管理页：模型缓存/直接目录/代理配置状态。"""
+def test_task_statuses_are_returned_by_one_batch_request(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "batch-status.mp3"
+    audio.write_bytes(b"audio")
+    client, _headers = _authenticated_client(tmp_path, library=library)
+    client.get("/")
+    store = client.app.state.runtime.library
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Batch status", rj_code="RJ00000406",
+    ))
+    with store._db_lock, store._db:
+        for task_id, status, stage in (("one", "queued", "queue"), ("two", "running", "translation")):
+            store._db.execute(
+                """INSERT INTO tasks(task_id,track_id,status,stage,progress,config_snapshot,updated_at)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (task_id, imported.track_id, status, stage, 0.25, "{}", "now"),
+            )
+
+    response = client.get("/api/tasks/status?task_id=one&task_id=two")
+
+    assert response.status_code == 200
+    assert [(row["task_id"], row["status"]) for row in response.json()] == [
+        ("one", "queued"), ("two", "running"),
+    ]
+
+
+def test_frontend_uses_one_batch_poll_instead_of_per_task_sse():
+    script = (Path(__file__).parents[1] / "subforge" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "new EventSource" not in script
+    assert "/api/tasks/status?" in script
+
+
+def test_task_center_shows_processing_and_download_status(tmp_path):
+    """任务中心统一展示字幕处理状态与模型下载配置。"""
+    library = tmp_path / "Library"
+    audio = tmp_path / "task.mp3"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, library=library)
+    client.get("/")  # 建立当前会话的 TaskManager，再注入一个可观察的运行中任务。
+    store = client.app.state.runtime.library
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Task work", rj_code="RJ00000405",
+    ))
+    with store._db_lock, store._db:
+        store._db.execute(
+            """INSERT INTO tasks(task_id,track_id,status,stage,progress,completed,total,message,config_snapshot,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            ("visible-task", imported.track_id, "running", "translation", 0.5, 1, 2,
+             "等待重试 · HTTP 429 · 请求 1/3 · 2秒后重试", "{}", "now"),
+        )
+
+    page = client.get("/downloads").text
+    assert "任务中心" in page
+    assert 'class="tab-bar task-center-tabs"' in page
+    assert 'data-tab="downloads"' in page
+    assert 'data-tab="subtitles"' in page
+    assert 'data-tab="models"' in page
+    assert "Task work" in page
+    assert "translation" in page
+    assert "HTTP 429" in page
+    assert "1 / 2" in page
+    assert "模型" in page
+
+
+def test_task_center_shows_retry_for_failed_subtitle_and_download(tmp_path):
+    """任务中心：失败的字幕任务与报错的 URL 下载任务都显示重试按钮。"""
+    library = tmp_path / "Library"
+    audio = tmp_path / "t.mp3"
+    audio.write_bytes(b"audio")
+    client, _headers = _authenticated_client(tmp_path, library=library)
+    client.get("/")  # 建立 TaskManager
+    store = client.app.state.runtime.library
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Retry work", rj_code="RJ00000405",
+    ))
+    with store._db_lock, store._db:
+        store._db.execute(
+            """INSERT INTO tasks(task_id,track_id,status,stage,progress,completed,total,message,config_snapshot,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?) """,
+            ("failed-task", imported.track_id, "failed", "translation", 0.2, 0, 5,
+             "HTTP 500", json.dumps({"asr_provider": "local", "scene": "normal",
+                                     "whisper_model": "medium", "llm_profile_id": "p1"}),
+             "now"),
+        )
+    runtime = client.app.state.runtime
+    runtime.imports["dl-fail"] = {
+        "task_id": "dl-fail", "kind": "download", "status": "error",
+        "stage": "download", "message": "yt-dlp 下载失败：404", "item_id": None,
+        "source_url": "https://example.com/video", "item_kind": "stream_archive",
+    }
+    page = client.get("/downloads").text
+    assert "/tasks/failed-task/retry" in page
+    assert "/api/imports/dl-fail/retry" in page
+    # 未失败的下载任务不显示重试
+    runtime.imports["dl-ok"] = {
+        "task_id": "dl-ok", "kind": "download", "status": "done",
+        "stage": "complete", "message": "导入完成", "item_id": "x",
+        "source_url": "https://example.com/ok", "item_kind": "stream_archive",
+    }
+    page2 = client.get("/downloads").text
+    assert "/api/imports/dl-ok/retry" not in page2
+
+
+def test_retry_failed_subtitle_task_re_enqueues(tmp_path):
+    """POST /tasks/{id}/retry：为失败字幕任务复用配置快照重新排队。"""
+    library = tmp_path / "Library"
+    audio = tmp_path / "t.mp3"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, library=library)
+    client.get("/")
+    runtime = client.app.state.runtime
+    store = runtime.library
+    profile = runtime.deps.profiles.save("p", "https://api.example.com", "model", api_key="k")
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Retry", rj_code="RJ00000405",
+    ))
+    snapshot = ProcessingSnapshot("local", "normal", "medium", profile.profile_id)
+    with store._db_lock, store._db:
+        store._db.execute(
+            """INSERT INTO tasks(task_id,track_id,status,stage,progress,completed,total,message,config_snapshot,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?) """,
+            ("fail-1", imported.track_id, "failed", "translation", 0.3, 1, 5, "HTTP 500",
+             json.dumps(asdict(snapshot)), "2020-01-01T00:00:00Z"),
+        )
+    resp = client.post("/tasks/fail-1/retry", headers=headers, follow_redirects=False)
+    assert resp.status_code == 303
+    # 重试后为新任务复用同一配置快照重新排队
+    latest = runtime.tasks.latest_for_track(imported.track_id)
+    assert latest is not None
+    assert latest.task_id != "fail-1"
+    assert latest.config_snapshot == asdict(snapshot)
+
+
+def test_retry_rejects_non_failed_subtitle_task(tmp_path):
+    """正在运行/已完成的任务不允许重试。"""
+    library = tmp_path / "Library"
+    audio = tmp_path / "t.mp3"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, library=library)
+    client.get("/")
+    store = client.app.state.runtime.library
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Retry", rj_code="RJ00000405",
+    ))
+    with store._db_lock, store._db:
+        store._db.execute(
+            """INSERT INTO tasks(task_id,track_id,status,stage,progress,completed,total,message,config_snapshot,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?) """,
+            ("run-1", imported.track_id, "running", "translation", 0.3, 1, 5, "...",
+             json.dumps({"asr_provider": "local", "scene": "normal",
+                         "whisper_model": "medium", "llm_profile_id": "p1"}), "now"),
+        )
+    resp = client.post("/tasks/run-1/retry", headers=headers)
+    assert resp.status_code == 409
+
+
+def test_retry_failed_url_download(tmp_path):
+    """POST /api/imports/{id}/retry：报错 URL 下载任务重新执行 yt-dlp 并入库。"""
+    import subprocess as sp
+    import tempfile as _tf
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+    runtime = client.app.state.runtime
+    task_id = "dl-fail-retry"
+    runtime.imports[task_id] = {
+        "task_id": task_id, "kind": "download", "status": "error",
+        "stage": "download", "message": "yt-dlp 失败", "item_id": None,
+        "source_url": "https://example.com/v", "item_kind": "stream_archive",
+        "rj_code": None, "title": "重试下载", "author": "作者", "creator_ids": [],
+    }
+    fake_audio = tmp_path / "r.m4a"
+    fake_audio.write_bytes(b"\x00" * 2048)
+    real_mkdtemp = _tf.mkdtemp
+
+    def fake_mkdtemp(*a, **k):
+        d = real_mkdtemp(*a, **k)
+        shutil.copy(str(fake_audio), str(Path(d) / "a.m4a"))
+        return d
+
+    def fake_run(cmd, **kwargs):
+        return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    import subforge.ui.app as app_mod
+    with (
+        patch.object(app_mod.shutil, "which", lambda n: "yt-dlp" if n == "yt-dlp" else app_mod.shutil.which(n)),
+        patch.object(_tf, "mkdtemp", fake_mkdtemp),
+        patch.object(sp, "run", fake_run),
+    ):
+        resp = client.post(f"/api/imports/{task_id}/retry", headers=headers, follow_redirects=False)
+        assert resp.status_code == 303
+        import time as _time
+        deadline = _time.time() + 10
+        st = None
+        while _time.time() < deadline:
+            st = client.get(f"/api/imports/{task_id}").json()
+            if st.get("status") == "done":
+                break
+            _time.sleep(0.2)
+        assert st is not None and st.get("status") == "done", st
+    items = LibraryStore.open(library).list_items()
+    assert any(it.title == "重试下载" for it in items)
+
+
+def test_item_metadata_can_be_edited_with_existing_creators(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "edit.mp3"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, audio=audio, library=library)
+    store = LibraryStore.open(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Old", rj_code="RJ00000400",
+    ))
+    circle = store.create_creator("Circle", CreatorKind.CIRCLE)
+    actor = store.create_creator("Actor", CreatorKind.VOICE_ACTOR)
+    store.close()
+
+    detail = client.get(f"/items/{imported.item_id}")
+    assert 'action="/items/' in detail.text
+    assert 'id="work-edit-dialog"' in detail.text
+    assert "data-open-work-edit" in detail.text
+    assert "data-pick-work-cover" in detail.text
+    assert 'name="creator_ids"' in detail.text
+    assert 'data-creator-create-dialog' in detail.text
+    assert "Circle" in detail.text and "Actor" in detail.text
+
+    from urllib.parse import urlencode
+    response = client.post(
+        f"/items/{imported.item_id}/edit",
+        headers={**headers, "content-type": "application/x-www-form-urlencoded"},
+        content=urlencode([
+            ("title", "New title"),
+            ("kind", "rj_work"),
+            ("rj_code", "RJ00000401"),
+            ("creator_ids", circle.creator_id),
+            ("creator_ids", actor.creator_id),
+        ]),
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    updated = LibraryStore.open(library).get_item(imported.item_id)
+    assert updated.title == "New title"
+    assert updated.rj_code == "RJ00000401"
+    assert updated.creator_ids == [circle.creator_id, actor.creator_id]
+
+
+def test_creator_filter_and_statistics_use_creator_relations(tmp_path):
+    library = tmp_path / "Library"
+    first_audio = tmp_path / "one.mp3"
+    second_audio = tmp_path / "two.mp3"
+    first_audio.write_bytes(b"one")
+    second_audio.write_bytes(b"two")
+    client, headers = _authenticated_client(tmp_path, library=library)
+    store = LibraryStore.open(library)
+    circle = store.create_creator("Circle", CreatorKind.CIRCLE)
+    actor = store.create_creator("Actor", CreatorKind.VOICE_ACTOR)
+    first = store.import_audio(ImportRequest(
+        source=first_audio, kind=ItemKind.RJ_WORK, title="Together", rj_code="RJ00000402",
+    ))
+    second = store.import_audio(ImportRequest(
+        source=second_audio, kind=ItemKind.RJ_WORK, title="Circle only", rj_code="RJ00000403",
+    ))
+    store.update_item(first.item_id, title="Together", kind=ItemKind.RJ_WORK,
+                      rj_code="RJ00000402", creator_ids=[circle.creator_id, actor.creator_id])
+    store.update_item(second.item_id, title="Circle only", kind=ItemKind.RJ_WORK,
+                      rj_code="RJ00000403", creator_ids=[circle.creator_id])
+    store.close()
+
+    filtered = client.get(f"/?creator={circle.creator_id}&creator={actor.creator_id}").text
+    assert 'class="library-toolbar"' in filtered
+    assert 'class="creator-filter"' in filtered
+    assert 'class="works-search"' in filtered
+    assert "Together" in filtered
+    assert "Circle only" not in filtered
+
+    stats = client.get("/stats").text
+    assert "Circle" in stats and "Actor" in stats
+    assert f"creator={circle.creator_id}" in stats
+
+
+def test_url_source_is_visible_on_item_detail(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "source.mp3"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, library=library)
+    store = LibraryStore.open(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio,
+        kind=ItemKind.STREAM_ARCHIVE,
+        title="Source item",
+        author="Actor",
+        source_url="https://example.com/original-video",
+    ))
+    store.close()
+
+    detail = client.get(f"/items/{imported.item_id}").text
+    assert "https://example.com/original-video" in detail
+    assert "原始来源" in detail
+
+
+def test_quick_creator_api_returns_a_tag_ready_creator(tmp_path):
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
 
-    page = client.get("/downloads").text
-    assert "下载管理" in page or "下载" in page
-    assert "模型" in page
+    response = client.post("/api/creators", headers=headers, data={
+        "name": "Miyadi", "kind": "voice_actor",
+    })
+
+    assert response.status_code == 201
+    assert response.json()["name"] == "Miyadi"
+    assert response.json()["kind"] == "voice_actor"
+    assert LibraryStore.open(library).list_creators()[0].name == "Miyadi"
+
+
+def test_creator_management_can_create_rename_merge_and_delete(tmp_path):
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+
+    created = client.post("/creators", headers=headers, data={
+        "action": "create", "name": "Circle A", "kind": "circle",
+    }, follow_redirects=False)
+    assert created.status_code == 303
+    store = LibraryStore.open(library)
+    creator = store.list_creators()[0]
+    store.close()
+
+    renamed = client.post("/creators", headers=headers, data={
+        "action": "rename", "creator_id": creator.creator_id, "name": "Circle B",
+    }, follow_redirects=False)
+    assert renamed.status_code == 303
+    creator_page = client.get("/creators").text
+    assert "Circle B" in creator_page
+    assert 'class="tab-bar creator-tabs"' in creator_page
+    assert "data-creator-menu-button" in creator_page
+    assert 'id="creator-edit-dialog"' in creator_page
+    assert 'id="creator-merge-dialog"' in creator_page
+    assert 'id="creator-delete-dialog"' in creator_page
+
+    deleted = client.post("/creators", headers=headers, data={
+        "action": "delete", "creator_id": creator.creator_id,
+    }, follow_redirects=False)
+    assert deleted.status_code == 303
+    assert LibraryStore.open(library).list_creators() == []
+
+
+def test_item_cover_can_be_replaced_from_image_picker(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "cover-source.mp3"
+    audio.write_bytes(b"audio")
+    image = tmp_path / "manual.jpg"
+    image.write_bytes(b"\xff\xd8manual-cover")
+    client, headers = _authenticated_client(tmp_path, audio=audio, library=library)
+    client.app.state.runtime.deps.picker.image = image
+    store = LibraryStore.open(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Cover", rj_code="RJ00000404",
+    ))
+    store.close()
+
+    selected = client.post("/picker/image", headers=headers).json()
+    preview = client.get(f"/api/selections/{selected['selection_id']}/image")
+    assert preview.status_code == 200
+    assert preview.content == image.read_bytes()
+    response = client.post(
+        f"/items/{imported.item_id}/edit",
+        headers=headers,
+        data={
+            "title": "Cover updated", "kind": "rj_work", "rj_code": "RJ00000404",
+            "selection_id": selected["selection_id"],
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert (library / ".subforge" / "covers" / f"{imported.item_id}.jpg").read_bytes() == image.read_bytes()
+    saved_item = LibraryStore.open(library).get_item(imported.item_id)
+    assert saved_item.cover_source == "manual_upload"
+    assert saved_item.title == "Cover updated"
 
 
 def test_about_page_reports_version(tmp_path):
@@ -461,23 +1070,62 @@ def test_shell_sidebar_contains_all_nav_entries(tmp_path):
     client, headers = _authenticated_client(tmp_path, library=library)
     shell = client.get("/", headers={"sec-fetch-dest": "document"}).text
     assert 'class="sidebar"' in shell
-    for entry in ("作品库", "翻译配置", "设置", "统计", "下载管理", "关于"):
+    for entry in ("作品库", "翻译配置", "创作者", "设置", "统计", "任务中心", "关于"):
         assert entry in shell
     assert 'id="content-frame"' in shell
 
 
-def test_import_dialog_has_dual_tabs(tmp_path):
-    """导入弹窗：导入方式下拉（本地文件 / 从链接下载），本地选项点按钮才弹文件选择。"""
+def test_import_dialog_has_media_tabs_without_the_old_selector(tmp_path):
+    """导入 Dialog 使用无动画横向 Tab：本地、链接、RJ 文件夹。"""
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
     page = client.get("/").text
     assert 'id="import-dialog"' in page
-    assert 'data-import-select' in page        # 导入方式下拉
-    assert 'value="local"' in page             # 本地文件
-    assert 'value="url"' in page               # 从链接下载
-    assert 'data-pick-import-file' in page      # 本地面板内选择文件按钮
-    assert 'name="url"' in page                # 下载面板 URL 输入
+    assert 'data-import-select' not in page
+    assert 'data-import-tab="local"' in page
+    assert 'data-import-tab="url"' in page
+    assert 'data-import-tab="folder"' in page
+    assert 'data-pick-import-file' in page
+    assert 'data-pick-media-folder' in page
+    assert 'id="folder-import-preview"' in page
+    assert 'name="url"' in page
     assert 'id="pick-audio"' in page
+
+
+def test_rj_folder_preview_and_background_import(tmp_path):
+    import time
+    library = tmp_path / "Library"
+    folder = tmp_path / "RJ01499022"
+    (folder / "本篇").mkdir(parents=True)
+    (folder / "本篇" / "01.m4a").write_bytes(b"one")
+    (folder / "readme.txt").write_text("skip", encoding="utf-8")
+    client, headers = _authenticated_client(tmp_path, library=library)
+    client.app.state.runtime.deps.picker.media_folder = folder
+
+    selected = client.post("/picker/media-folder", headers=headers).json()
+    preview = client.post("/api/import-folders/preview", headers=headers, data={
+        "selection_id": selected["selection_id"],
+    })
+    assert preview.status_code == 200
+    assert preview.json()["audio_count"] == 1
+    assert preview.json()["skipped_count"] == 1
+
+    started = client.post("/items/import-folder", headers=headers, data={
+        "selection_id": selected["selection_id"], "rj_code": "rj01499022", "title": "",
+    })
+    assert started.status_code == 202
+    task_id = started.json()["task_id"]
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get(f"/api/imports/{task_id}").json()
+        if status["status"] != "running":
+            break
+        time.sleep(0.02)
+    assert status["status"] == "done"
+    assert status["imported"] == 1
+    item = LibraryStore.open(library).list_items()[0]
+    assert item.title == "RJ01499022"
+    assert item.tracks[0].original_relative_path == "本篇/01.m4a"
 
 
 def test_import_url_rejects_missing_url(tmp_path):

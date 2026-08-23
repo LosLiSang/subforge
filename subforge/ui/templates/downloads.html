@@ -1,27 +1,19 @@
-{% extends "base.html" %}{% block title %}下载管理 · SubForge{% endblock %}{% block content %}
-<div class="page-head"><h1>下载管理</h1><p class="page-sub">Whisper 模型与网络代理</p></div>
-<section class="dash-section">
-  <header class="dash-head"><h2>模型</h2><span class="dash-hint">{{ models_dir }}</span></header>
-  <div class="field-list">
-    {% for model, info in models.items() %}
-    <div class="field">
-      <div class="field-label">{{ model }} <span class="chip {{ 'chip-ok' if info.state == 'cached' or info.state == 'direct' else '' }}">{{ info.state }}</span></div>
-      <small>{{ info.note }}</small>
-    </div>
-    {% endfor %}
-  </div>
+{% extends "base.html" %}{% block title %}任务中心 · SubForge{% endblock %}{% block content %}
+<div class="page-head task-center-head"><div><h1>任务中心</h1><p class="page-sub">媒体下载、字幕处理与模型状态</p></div></div>
+<nav class="tab-bar task-center-tabs" role="tablist" aria-label="任务类型"><button type="button" class="tab active" data-tab="downloads" role="tab" aria-selected="true">下载</button><button type="button" class="tab" data-tab="subtitles" role="tab" aria-selected="false">字幕</button><button type="button" class="tab" data-tab="models" role="tab" aria-selected="false">模型</button></nav>
+
+<section class="tab-panel active" data-tab-panel="downloads">
+  <div class="section-heading"><div><h2>媒体下载</h2><p>视频链接下载、音频提取与 Library 导入</p></div></div>
+  <div class="task-center-list">{% for task in import_tasks %}<article class="task-center-row"><div class="task-center-main"><strong>{{ '媒体导入' if task.kind == 'media_import' else '媒体下载' }}</strong>{% if task.kind == 'media_import' %}<span>{{ task.source_url }}</span>{% else %}<a href="{{ task.source_url }}" target="_blank" rel="noreferrer">{{ task.source_url }}</a>{% endif %}</div><div class="task-center-state"><span class="status-badge status-{{ task.status }}">{{ task.status }}</span><span class="chip">{{ task.stage }}</span></div>{% if task.total %}<div class="task-center-progress">{{ task.completed or 0 }} / {{ task.total }} · {{ ((task.progress or 0) * 100)|round|int }}%</div>{% endif %}<p class="task-center-message">{{ task.message }}</p>{% if task.kind == 'media_import' and task.status in ['done','partial'] %}<div class="task-import-summary">导入 {{ task.imported or 0 }} · 重复 {{ task.duplicates or 0 }} · 跳过 {{ task.skipped or 0 }} · 失败 {{ task.failed or 0 }}</div>{% endif %}{% if task.kind == 'download' and task.status == 'error' %}<form method="post" action="/api/imports/{{ task.task_id }}/retry" data-secure><button class="small">重试</button></form>{% endif %}</article>{% else %}<p class="empty">当前没有媒体下载或文件夹导入任务。</p>{% endfor %}</div>
 </section>
-<section class="dash-section">
-  <header class="dash-head"><h2>网络代理</h2><span class="dash-hint">模型下载与外部 API</span></header>
-  <div class="field-list">
-    <div class="field">
-      <div class="field-label">下载代理 <span class="chip">{{ '已配置' if proxy_url else '未配置' }}</span></div>
-      <small>{{ proxy_url or '未配置下载代理；模型将从 Hugging Face 直连下载。' }}</small>
-    </div>
-    <div class="field">
-      <div class="field-label">LLM 代理 <span class="chip">按翻译配置</span></div>
-      <small>翻译请求的代理/证书设置在各翻译配置中独立管理，不继承下载代理。</small>
-    </div>
-  </div>
+
+<section class="tab-panel" data-tab-panel="subtitles">
+  <div class="section-heading"><div><h2>字幕处理</h2><p>排队、ASR、翻译与限流重试</p></div></div>
+  <div class="task-center-list">{% for row in processing_tasks %}<article class="task-center-row" data-task-id="{{ row.task.task_id }}"><div class="task-center-main"><strong>{{ row.item.title }}</strong><span>{{ row.track.media.split('/')[-1] }}</span></div><div class="task-center-state"><span class="status-badge status-{{ row.task.status }} task-status">{{ row.task.status }}</span><span class="chip task-stage">{{ row.task.stage or 'queue' }}</span>{% if row.queue_position %}<span>队列第 {{ row.queue_position }} 位</span>{% endif %}</div><div class="task-center-progress"><span class="task-progress">{{ (row.task.progress * 100)|round|int }}</span>%{% if row.task.total is not none %} · <span class="task-batches">{{ row.task.completed or 0 }} / {{ row.task.total }}</span>{% endif %}</div>{% if row.task.message %}<p class="task-center-message">{{ row.task.message }}</p>{% endif %}{% if row.task.status in ['queued','running'] %}<form method="post" action="/tasks/{{ row.task.task_id }}/cancel" data-secure><button class="danger ghost small">取消</button></form>{% endif %}{% if row.task.status == 'failed' %}<form method="post" action="/tasks/{{ row.task.task_id }}/retry" data-secure><button class="small">重试</button></form>{% endif %}</article>{% else %}<p class="empty">当前没有字幕处理任务。</p>{% endfor %}</div>
+</section>
+
+<section class="tab-panel" data-tab-panel="models">
+  <div class="section-heading"><div><h2>Whisper 模型</h2><p>本地缓存、直接目录和下载状态</p></div><a class="button ghost small" href="/settings">前往设置</a></div>
+  <div class="model-status-list">{% for model, info in models.items() %}<div class="model-status-row"><strong>{{ model }}</strong><span class="chip {{ 'chip-ok' if info.state == 'cached' or info.state == 'direct' else '' }}">{{ info.state }}</span><small>{{ info.note }}</small></div>{% endfor %}</div>
 </section>
 {% endblock %}

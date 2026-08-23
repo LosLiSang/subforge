@@ -37,6 +37,9 @@ class UiSettingsStore:
     def get_deepgram_api_key(self) -> str:
         return os.environ.get("DEEPGRAM_API_KEY") or str(self._load().get("deepgram_api_key", ""))
 
+    def has_stored_deepgram_api_key(self) -> bool:
+        return bool(self._load().get("deepgram_api_key"))
+
     def deepgram_key_display(self) -> str:
         if os.environ.get("DEEPGRAM_API_KEY"):
             return "已通过环境变量配置"
@@ -100,13 +103,33 @@ class UiSettingsStore:
             data.pop("proxy_url", None)
         self._save(data)
 
-    def get_media_concurrency(self) -> int:
-        value = int(self._load().get("media_concurrency", 1))
+    def get_asr_concurrency(self) -> int:
+        data = self._load()
+        value = int(data.get("asr_concurrency", data.get("media_concurrency", 1)))
         return max(1, value)
 
-    def set_media_concurrency(self, value: int) -> None:
+    def set_asr_concurrency(self, value: int) -> None:
         if value < 1:
-            raise ValueError("media_concurrency must be at least 1")
+            raise ValueError("asr_concurrency must be at least 1")
         data = self._load()
-        data["media_concurrency"] = value
+        data["asr_concurrency"] = value
+        data.pop("media_concurrency", None)
         self._save(data)
+
+    def get_translate_workers(self) -> int:
+        value = int(self._load().get("translate_workers", 8))
+        return max(1, value)
+
+    def set_translate_workers(self, value: int) -> None:
+        if value < 1:
+            raise ValueError("translate_workers must be at least 1")
+        data = self._load()
+        data["translate_workers"] = value
+        self._save(data)
+
+    # Compatibility for existing callers and settings files.
+    def get_media_concurrency(self) -> int:
+        return self.get_asr_concurrency()
+
+    def set_media_concurrency(self, value: int) -> None:
+        self.set_asr_concurrency(value)

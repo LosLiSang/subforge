@@ -1,12 +1,12 @@
 {% extends "base.html" %}{% block title %}播放 · {{ item.title }}{% endblock %}{% block content %}
 {% if embed %}
-<section class="player" id="player" data-embed="1" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}">
+<section class="player" id="player" data-embed="1" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}" data-item-id="{{ item.item_id }}">
 <audio id="audio" preload="auto" src="/tracks/{{ track.track_id }}/media"></audio>
 </section>
 <script src="/static/player.js"></script>
 {% else %}
 <a class="back-link" href="/items/{{ item.item_id }}">← 返回作品</a>
-<section class="player" id="player" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}">
+<section class="player" id="player" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}" data-item-id="{{ item.item_id }}">
 <div class="work-hero">
   <div class="work-hero-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}">
     <img class="work-cover-img" src="/covers/{{ item.item_id }}" alt="" loading="lazy" onerror="this.remove()">

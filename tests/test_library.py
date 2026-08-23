@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from subforge.library import ImportRequest, ItemKind, LibraryStore
+from subforge.library import CreatorKind, ImportRequest, ItemKind, LibraryStore
 
 
 def test_initialize_creates_movable_library_structure(tmp_path):
@@ -201,3 +201,188 @@ def test_trash_item_moves_directory_and_hides_index(tmp_path):
     assert any((root / ".trash").iterdir())
     with pytest.raises(KeyError):
         store.get_item(result.item_id)
+
+
+def test_creator_store_supports_same_name_with_distinct_ids(tmp_path):
+    store = LibraryStore.initialize(tmp_path / "Library")
+
+    circle = store.create_creator("Alice", CreatorKind.CIRCLE)
+    actor = store.create_creator("Alice", CreatorKind.VOICE_ACTOR)
+
+    assert circle.creator_id != actor.creator_id
+    assert [(c.name, c.kind) for c in store.list_creators()] == [
+        ("Alice", CreatorKind.CIRCLE),
+        ("Alice", CreatorKind.VOICE_ACTOR),
+    ]
+
+
+def test_update_item_enforces_creator_kind_rules_and_filters_by_all_creators(tmp_path):
+    store = LibraryStore.initialize(tmp_path / "Library")
+    audio = tmp_path / "audio.m4a"
+    audio.write_bytes(b"audio")
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Work", rj_code="RJ00000009"
+    ))
+    circle = store.create_creator("Circle", CreatorKind.CIRCLE)
+    actor = store.create_creator("Actor", CreatorKind.VOICE_ACTOR)
+
+    updated = store.update_item(
+        imported.item_id,
+        title="Updated",
+        kind=ItemKind.RJ_WORK,
+        rj_code="RJ00000010",
+        creator_ids=[circle.creator_id, actor.creator_id],
+    )
+
+    assert updated.title == "Updated"
+    assert updated.rj_code == "RJ00000010"
+    assert updated.creator_ids == [circle.creator_id, actor.creator_id]
+    assert [item.item_id for item in store.list_items([circle.creator_id, actor.creator_id])] == [imported.item_id]
+    assert store.list_items([circle.creator_id, "missing"]) == []
+
+    with pytest.raises(ValueError, match="voice actors"):
+        store.update_item(
+            imported.item_id,
+            title="Stream",
+            kind=ItemKind.STREAM_ARCHIVE,
+            rj_code=None,
+            creator_ids=[circle.creator_id],
+        )
+
+
+def test_scan_rj_folder_recurses_classifies_and_prefixes_colliding_names(tmp_path):
+    folder = tmp_path / "RJ01499022"
+    (folder / "本篇").mkdir(parents=True)
+    (folder / "特典").mkdir()
+    (folder / "本篇" / "01.m4a").write_bytes(b"one")
+    (folder / "特典" / "01.m4a").write_bytes(b"two")
+    (folder / "movie.mp4").write_bytes(b"video")
+    (folder / "booklet.pdf").write_bytes(b"pdf")
+    store = LibraryStore.initialize(tmp_path / "Library")
+
+    scan = store.scan_rj_folder(folder)
+
+    assert scan.audio_count == 2
+    assert scan.video_count == 1
+    assert scan.skipped_count == 1
+    assert [entry.relative_path for entry in scan.media] == [
+        "movie.mp4", "本篇/01.m4a", "特典/01.m4a",
+    ]
+    names = {entry.relative_path: entry.archive_name for entry in scan.media}
+    assert names["本篇/01.m4a"] == "本篇_01.m4a"
+    assert names["特典/01.m4a"] == "特典_01.m4a"
+    assert names["movie.mp4"] == "movie.m4a"
+
+
+def test_import_rj_folder_converts_videos_defaults_title_and_reports_partial_success(tmp_path, monkeypatch):
+    import subprocess
+    folder = tmp_path / "RJ01499022"
+    (folder / "本篇").mkdir(parents=True)
+    (folder / "特典").mkdir()
+    (folder / "本篇" / "01.m4a").write_bytes(b"one")
+    (folder / "特典" / "01.m4a").write_bytes(b"two")
+    (folder / "movie.mp4").write_bytes(b"video")
+    (folder / "broken.mkv").write_bytes(b"broken")
+    (folder / "readme.txt").write_text("skip", encoding="utf-8")
+    store = LibraryStore.initialize(tmp_path / "Library")
+
+    monkeypatch.setattr("subforge.library.shutil.which", lambda name: "ffmpeg" if name == "ffmpeg" else None)
+    def fake_run(cmd, **kwargs):
+        output = Path(cmd[-1])
+        if "broken.mkv" in " ".join(str(value) for value in cmd):
+            return subprocess.CompletedProcess(cmd, 1, stdout=b"", stderr=b"bad codec")
+        output.write_bytes(b"converted")
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+    monkeypatch.setattr("subforge.library.subprocess.run", fake_run)
+
+    result = store.import_rj_folder(folder, rj_code="rj01499022", title="   ")
+
+    assert result.status == "partial"
+    assert result.imported_count == 3
+    assert result.failed_count == 1
+    assert result.skipped_count == 1
+    item = store.get_item(result.item_id)
+    assert item.title == "RJ01499022"
+    assert [track.original_relative_path for track in item.tracks] == [
+        "movie.mp4", "本篇/01.m4a", "特典/01.m4a",
+    ]
+    assert len({track.media for track in item.tracks}) == 3
+    assert any(track.media.endswith("movie.m4a") for track in item.tracks)
+
+
+def test_recently_used_creators_are_persisted_and_sorted_first(tmp_path):
+    root = tmp_path / "Library"
+    store = LibraryStore.initialize(root)
+    first = store.create_creator("Alpha", CreatorKind.VOICE_ACTOR)
+    second = store.create_creator("Beta", CreatorKind.VOICE_ACTOR)
+
+    store.touch_creators([first.creator_id])
+    store.close()
+
+    reopened = LibraryStore.open(root)
+    assert [creator.creator_id for creator in reopened.list_creators()] == [
+        first.creator_id,
+        second.creator_id,
+    ]
+    assert reopened.list_creators()[0].last_used_at is not None
+
+
+def test_url_import_source_is_immutable_and_tracks_generated_media(tmp_path):
+    store = LibraryStore.initialize(tmp_path / "Library")
+    audio = tmp_path / "audio.m4a"
+    audio.write_bytes(b"audio")
+
+    imported = store.import_audio(ImportRequest(
+        source=audio,
+        kind=ItemKind.STREAM_ARCHIVE,
+        title="Stream",
+        author="Actor",
+        source_url="https://example.com/video/1",
+    ))
+
+    item = store.get_item(imported.item_id)
+    assert len(item.sources) == 1
+    assert item.sources[0].url == "https://example.com/video/1"
+    assert item.sources[0].track_ids == [imported.track_id]
+    assert item.sources[0].source_type == "url"
+
+
+def test_track_can_be_renamed_with_subtitles_and_resume_reset(tmp_path):
+    store = LibraryStore.initialize(tmp_path / "Library")
+    source = tmp_path / "old.mp3"
+    source.write_bytes(b"audio")
+    imported = store.import_audio(ImportRequest(
+        source=source, kind=ItemKind.RJ_WORK, title="Work", rj_code="RJ00000901"
+    ))
+    store.track_subtitle_path(imported.track_id, "ja").write_text("source", encoding="utf-8")
+    store.track_subtitle_path(imported.track_id, "zh").write_text("target", encoding="utf-8")
+    (store.track_resume_dir(imported.track_id) / "state.json").write_text(
+        json.dumps({"media": {"path": imported.track_id}}), encoding="utf-8"
+    )
+
+    track = store.rename_track(imported.track_id, "new title.mp3")
+
+    assert track.media == "media/new title.mp3"
+    assert store.track_media_path(imported.track_id).name == "new title.mp3"
+    assert store.track_subtitle_path(imported.track_id, "ja").read_text(encoding="utf-8") == "source"
+    assert store.track_subtitle_path(imported.track_id, "zh").read_text(encoding="utf-8") == "target"
+    assert list(store.track_resume_dir(imported.track_id).glob("*.json")) == []
+
+
+def test_track_delete_moves_assets_to_trash_and_removes_metadata(tmp_path):
+    store = LibraryStore.initialize(tmp_path / "Library")
+    source = tmp_path / "delete.mp3"
+    source.write_bytes(b"audio")
+    imported = store.import_audio(ImportRequest(
+        source=source, kind=ItemKind.RJ_WORK, title="Work", rj_code="RJ00000902"
+    ))
+    store.track_subtitle_path(imported.track_id, "ja").write_text("source", encoding="utf-8")
+
+    store.trash_track(imported.track_id)
+
+    with pytest.raises(KeyError):
+        store.get_track(imported.track_id)
+    trash_entries = list((store.root / ".trash").glob(f"track-{imported.track_id}-*"))
+    assert len(trash_entries) == 1
+    assert (trash_entries[0] / "delete.mp3").exists()
+    assert (trash_entries[0] / "delete.ja.srt").exists()

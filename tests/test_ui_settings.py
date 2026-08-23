@@ -79,15 +79,24 @@ def test_invalid_proxy_url_is_rejected(tmp_path):
         raise AssertionError("invalid proxy was accepted")
 
 
-def test_ui_settings_persists_secret_and_worker_concurrency(tmp_path):
+def test_ui_settings_persists_secret_and_distinct_processing_concurrency(tmp_path):
     store = UiSettingsStore(tmp_path / "ui.json")
 
     store.set_deepgram_api_key("dg-secret-value-123")
-    store.set_media_concurrency(3)
+    store.set_asr_concurrency(2)
+    store.set_translate_workers(7)
 
     reopened = UiSettingsStore(tmp_path / "ui.json")
     assert reopened.get_deepgram_api_key() == "dg-secret-value-123"
-    assert reopened.get_media_concurrency() == 3
+    assert reopened.get_asr_concurrency() == 2
+    assert reopened.get_translate_workers() == 7
+
+
+def test_legacy_media_concurrency_migrates_to_asr_concurrency(tmp_path):
+    config = tmp_path / "ui.json"
+    config.write_text('{"media_concurrency": 3}', encoding="utf-8")
+
+    assert UiSettingsStore(config).get_asr_concurrency() == 3
 
 
 def test_blank_secret_does_not_overwrite_and_delete_is_explicit(tmp_path):
@@ -100,14 +109,15 @@ def test_blank_secret_does_not_overwrite_and_delete_is_explicit(tmp_path):
     assert store.get_deepgram_api_key() == ""
 
 
-def test_media_concurrency_must_be_positive(tmp_path):
+def test_processing_concurrency_values_must_be_positive(tmp_path):
     store = UiSettingsStore(tmp_path / "ui.json")
-    try:
-        store.set_media_concurrency(0)
-    except ValueError as exc:
-        assert "at least 1" in str(exc)
-    else:
-        raise AssertionError("zero concurrency was accepted")
+    for setter in (store.set_asr_concurrency, store.set_translate_workers):
+        try:
+            setter(0)
+        except ValueError as exc:
+            assert "at least 1" in str(exc)
+        else:
+            raise AssertionError("zero concurrency was accepted")
 
 
 def test_fake_picker_returns_selected_server_side_paths(tmp_path):

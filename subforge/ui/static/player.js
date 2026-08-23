@@ -1,6 +1,6 @@
 (()=>{
 const root=document.getElementById('player');if(!root)return;
-const track=root.dataset.trackId,sourceLang=root.dataset.sourceLanguage,targetLang=root.dataset.targetLanguage;
+const track=root.dataset.trackId,sourceLang=root.dataset.sourceLanguage,targetLang=root.dataset.targetLanguage,itemId=root.dataset.itemId||'';
 const embed=root.dataset.embed==='1';
 const STORAGE_KEY='sf.playback';
 let source=[],target=[],sourceIndex=0,targetIndex=0;
@@ -11,9 +11,8 @@ let player=window.top.SubForgePlayer||window.SubForgePlayer;
 let audio=null;
 function bindPlayerAudio(){
   if(!player)return;
-  if(player.audio)audio=player.audio;
   const title=root.querySelector('.work-hero-info h1')?.textContent||track;
-  player.activate(track,title,'');
+  player.activate(track,title,itemId);
   player.ensureAudio().then(a=>{audio=a;if(audio)wireAudio();});
   const toggle=document.getElementById('play-toggle');
   if(toggle)toggle.addEventListener('click',()=>player.toggle());
@@ -62,12 +61,12 @@ function applySubtitleMode(){
   modeButtons.forEach(b=>b.classList.toggle('active',b.dataset.subtitleMode===subtitleMode));
 }
 
-async function load(lang,element){const r=await fetch(`/tracks/${track}/subtitles/${lang}`);if(!r.ok){element.textContent=r.status===404?'暂无字幕':'字幕无法读取';return []}return await r.json()}
+async function load(lang,element,missingText){const r=await fetch(`/tracks/${track}/subtitles/${lang}`);if(!r.ok){element.textContent=r.status===404?missingText:'字幕无法读取';return []}return await r.json()}
 function locate(entries,time,old){if(entries[old]&&time>=entries[old].start&&time<=entries[old].end)return old;let lo=0,hi=entries.length-1;while(lo<=hi){const mid=(lo+hi)>>1,e=entries[mid];if(time<e.start)hi=mid-1;else if(time>e.end)lo=mid+1;else return mid}return -1}
 function fmt(t){if(t==null||!isFinite(t))return '--:--';const s=Math.max(0,Math.floor(t)),h=Math.floor(s/3600),m=Math.floor(s%3600/60),sec=s%60,p=n=>String(n).padStart(2,'0');return h?`${h}:${p(m)}:${p(sec)}`:`${m}:${p(sec)}`}
 
 function loadTranscripts(){
-  Promise.all([load(sourceLang,document.getElementById('source-subtitle')),load(targetLang,document.getElementById('target-subtitle'))]).then(values=>{
+  Promise.all([load(sourceLang,document.getElementById('source-subtitle'),'暂无源语言字幕'),load(targetLang,document.getElementById('target-subtitle'),'暂无翻译字幕')]).then(values=>{
     [source,target]=values;
     const transcript=document.getElementById('transcript');
     const markInteract=()=>{lastTranscriptInteract=Date.now()};

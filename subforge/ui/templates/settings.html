@@ -55,7 +55,7 @@
   <section id="settings-network" class="dash-section tab-panel" data-tab-panel="network">
     <div class="field-list">
       <div class="field">
-        <div class="field-label">Deepgram API Key <span class="badge ok">{{ deepgram_key_masked }}</span></div>
+        <div class="field-label deepgram-key-label">Deepgram API Key <span class="badge {{ 'ok' if deepgram_key_configured else '' }}" data-deepgram-status>{{ deepgram_key_masked if deepgram_key_configured else '未配置' }}</span>{% if deepgram_key_deletable %}<button type="button" class="key-delete-x" data-delete-deepgram aria-label="删除 Deepgram API Key">×</button>{% endif %}</div>
         <input type="password" name="deepgram_api_key" placeholder="留空不修改">
         <small>用于云端语音识别。</small>
       </div>
@@ -70,9 +70,14 @@
   <section id="settings-concurrency" class="dash-section tab-panel" data-tab-panel="concurrency">
     <div class="field-list">
       <div class="field">
-        <div class="field-label">同时处理媒体数</div>
-        <input class="narrow" type="number" name="media_concurrency" min="1" value="{{ media_concurrency }}">
-        <small>提高并发会为每个本地 ASR Worker 单独加载模型，可能耗尽内存或显存。重启 UI 后生效。</small>
+        <div class="field-label">同时加载 ASR 模型数</div>
+        <input class="narrow" type="number" name="asr_concurrency" min="1" value="{{ asr_concurrency }}">
+        <small>控制同时运行的媒体 Worker 数；每个本地 ASR Worker 会独立加载模型，数值过高可能耗尽内存或显存。重启 UI 后生效。</small>
+      </div>
+      <div class="field">
+        <div class="field-label">全局翻译请求 Worker 数</div>
+        <input class="narrow" type="number" name="translate_workers" min="1" value="{{ translate_workers }}">
+        <small>所有音轨和 Worker 进程共享此请求上限，不会再按同时处理的音轨数成倍放大。与 ASR 模型数量相互独立，重启 UI 后生效。</small>
       </div>
     </div>
   </section>
@@ -80,9 +85,5 @@
   <div class="dash-actions">
     <button class="primary">保存设置</button>
   </div>
-</form>
-
-<form method="post" action="/settings/deepgram/delete-key" data-secure data-confirm="删除 Deepgram API Key？">
-  <button class="danger ghost small">删除 Deepgram Key</button>
 </form>
 {% endblock %}

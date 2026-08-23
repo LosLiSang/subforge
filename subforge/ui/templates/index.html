@@ -1,59 +1,21 @@
-{% extends "base.html" %}{% block content %}
-<section class="works-head">
-  <h1>作品库</h1>
-  <div class="works-actions">
-    <input id="work-search" class="works-search" type="search" placeholder="搜索标题 / RJ 号 / 作者…" aria-label="搜索作品">
-    <button id="pick-audio">＋ 导入音频</button>
-    <form method="post" action="/library/rescan" data-secure><button class="ghost">重新扫描</button></form>
-  </div>
-</section>
+{% extends "base.html" %}{% from "_creator_ui.html" import picker, create_dialog %}{% block content %}
+<section class="works-head"><h1>作品库</h1><div class="library-toolbar"><input id="work-search" class="works-search" type="search" placeholder="搜索标题 / RJ 号…" aria-label="搜索作品">{% if creators %}<form method="get" class="creator-filter" data-creator-filter-form>{{ picker('library-filter', creators, selected_creator_ids, 'creator', '', '筛选创作者…') }}</form>{% endif %}<div class="works-actions"><button id="pick-audio">＋ 导入</button><details class="library-menu"><summary aria-label="更多操作">⋯</summary><div class="library-menu-popover"><form method="post" action="/library/rescan" data-secure><button class="menu-action">重新扫描 Library</button></form></div></details></div></div></section>
 
 <dialog id="import-dialog" class="import-dialog">
-  <header class="dialog-head"><div><h2>导入音频</h2><div class="dialog-sub">选择本地文件，或从链接下载</div></div><button type="button" class="ghost small" data-close-dialog>✕</button></header>
-  <div class="import-mode">
-    <label>导入方式<select data-import-select aria-label="导入方式"><option value="local">本地文件</option><option value="url">从链接下载</option></select></label>
+  <header class="dialog-head"><div><h2>导入媒体</h2><div class="dialog-sub">单个音频、视频链接或 RJ 文件夹</div></div><button type="button" class="ghost small" data-close-dialog>✕</button></header>
+  <nav class="import-tabs" role="tablist" aria-label="导入方式"><button type="button" class="import-tab active" data-import-tab="local" aria-selected="true">本地文件</button><button type="button" class="import-tab" data-import-tab="url" aria-selected="false">链接下载</button><button type="button" class="import-tab" data-import-tab="folder" aria-selected="false">RJ 文件夹</button></nav>
+  <div class="import-panel" data-import-panel="local">
+    <form method="post" action="/items/import" data-secure><input type="hidden" name="selection_id" id="selection-id"><p id="selected-name" class="selected-name"></p><button type="button" class="ghost" data-pick-import-file>选择音频文件</button><label>类型<select name="kind" id="kind" data-kind-select><option value="rj_work">RJ 作品</option><option value="stream_archive">直播归档</option></select></label><label data-rj-field>RJ 号<input name="rj_code" placeholder="RJ01546796"></label><label>标题<input name="title" required></label><label class="field-label">创作者</label>{{ picker('local-import-creators', creators, [], 'creator_ids', 'rj_work') }}<footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button>导入</button></footer></form>
   </div>
-
-  <div data-import-panel="local">
-    <form method="post" action="/items/import" data-secure>
-      <input type="hidden" name="selection_id" id="selection-id">
-      <p id="selected-name" class="selected-name"></p>
-      <button type="button" class="ghost" data-pick-import-file>选择音频文件</button>
-      <label>类型<select name="kind" id="kind" data-kind-select><option value="rj_work">RJ 作品</option><option value="stream_archive">直播归档</option></select></label>
-      <label data-rj-field>RJ 号<input name="rj_code" placeholder="RJ01546796"></label>
-      <label>标题<input name="title" required></label>
-      <label>作者/博主<input name="author"></label>
-      <footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button>导入</button></footer>
-    </form>
+  <div class="import-panel" data-import-panel="url" hidden>
+    <form method="post" action="/items/import-url" data-secure data-import-url-form><label>视频链接<input name="url" required placeholder="https://www.youtube.com/watch?v=… 或 https://www.bilibili.com/video/…"></label><label>类型<select name="kind" data-kind-select><option value="stream_archive">直播归档</option><option value="rj_work">RJ 作品</option></select></label><label data-rj-field>RJ 号<input name="rj_code" placeholder="RJ01546796"></label><label>标题<input name="title" placeholder="留空使用视频标题"></label><label class="field-label">创作者</label>{{ picker('url-import-creators', creators, [], 'creator_ids', 'stream_archive') }}<p class="import-error" data-import-error hidden></p><footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button data-import-submit>下载并导入</button></footer></form>
   </div>
-
-  <div data-import-panel="url" hidden>
-    <form method="post" action="/items/import-url" data-secure data-import-url-form>
-      <label>视频链接<input name="url" required placeholder="https://www.youtube.com/watch?v=… 或 https://www.bilibili.com/video/…"></label>
-      <label>类型<select name="kind" data-kind-select><option value="stream_archive">直播归档</option><option value="rj_work">RJ 作品</option></select></label>
-      <label data-rj-field>RJ 号<input name="rj_code" placeholder="RJ01546796"></label>
-      <label>标题<input name="title" placeholder="留空用视频标题"></label>
-      <label>作者/博主<input name="author"></label>
-      <p class="import-error" data-import-error hidden></p>
-      <footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button data-import-submit>下载并导入</button></footer>
-    </form>
+  <div class="import-panel" data-import-panel="folder" hidden>
+    <form method="post" action="/items/import-folder" data-secure data-folder-import-form><input type="hidden" name="selection_id"><p class="selected-name" data-folder-name></p><button type="button" class="ghost" data-pick-media-folder>选择 RJ 文件夹</button><label>RJ 号<input name="rj_code" required placeholder="RJ01499022"></label><label>标题<input name="title" placeholder="留空使用 RJ 号"></label><label class="field-label">创作者</label>{{ picker('folder-import-creators', creators, [], 'creator_ids', 'rj_work') }}<p class="import-error" data-folder-error hidden></p><footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button type="button" data-preview-folder-import>扫描并预览</button></footer></form>
   </div>
 </dialog>
+<dialog id="folder-import-preview" class="profile-dialog folder-preview-dialog"><form method="dialog" class="field-list"><header class="dialog-head"><h2>确认 RJ 文件夹导入</h2><button type="button" class="ghost small" data-close-dialog>✕</button></header><div class="folder-preview-summary"><div><strong data-preview-audio>0</strong><span>音频</span></div><div><strong data-preview-video>0</strong><span>视频转换</span></div><div><strong data-preview-skipped>0</strong><span>跳过</span></div></div><p data-preview-folder></p><ul class="folder-preview-files" data-preview-files></ul><p class="dialog-note">视频将提取为 M4A AAC；不支持文件不会导入。个别文件失败不会中止其他文件。</p><footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button type="button" data-confirm-folder-import>开始导入</button></footer></form></dialog>
+{{ create_dialog() }}
 
-<section class="works-grid">{% for item in items %}<a class="work-card" href="/items/{{ item.item_id }}">
-<div class="work-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}">
-  <img class="work-cover-img" src="/covers/{{ item.item_id }}" alt="" loading="lazy" onerror="this.remove()">
-  <span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span>
-  {% if item.tracks %}<span class="work-size">{{ (item.tracks[0].size / 1048576)|round(1) }} MB</span>{% endif %}
-</div>
-<div class="work-body">
-  <h2>{{ item.title }}</h2>
-  <div class="work-meta">
-    {% if item.rj_code %}<span class="chip chip-rj">{{ item.rj_code }}</span>{% endif %}
-    {% if item.author %}<span class="chip">{{ item.author }}</span>{% endif %}
-  </div>
-  {% set first = item.tracks[0] if item.tracks else none %}
-  {% if first %}<span class="status-badge status-{{ first.status }}">{{ first.status }}</span>{% else %}<span class="status-badge status-waiting">waiting</span>{% endif %}
-</div>
-</a>{% else %}<p class="empty">Library 为空，先导入一个音频。</p>{% endfor %}</section>
+<section class="works-grid">{% for item in items %}<a class="work-card" href="/items/{{ item.item_id }}"><div class="work-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}"><img class="work-cover-img" src="/covers/{{ item.item_id }}" alt="" loading="lazy" onerror="this.remove()"><span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span>{% if item.tracks %}{% set total_mb = ((item_size_by_id.get(item.item_id, 0) if item_size_by_id is defined else (item.tracks|sum(attribute='size'))) / 1048576)|round(1) %}<span class="work-size">{{ total_mb }} MB</span>{% endif %}</div><div class="work-body"><h2>{{ item.title }}</h2><div class="work-meta">{% if item.rj_code %}<span class="chip chip-rj">{{ item.rj_code }}</span>{% endif %}{% for creator_id in item.creator_ids %}{% set creator = creator_by_id.get(creator_id) %}{% if creator %}<span class="creator-tag creator-tag-{{ creator.kind.value }}">{{ creator.name }}</span>{% endif %}{% endfor %}</div>{% set first = item.tracks[0] if item.tracks else none %}{% if first %}<span class="status-badge status-{{ first.status }}">{{ first.status }}</span>{% else %}<span class="status-badge status-waiting">waiting</span>{% endif %}</div></a>{% else %}<p class="empty">Library 为空，先导入一个音频。</p>{% endfor %}</section>
 {% endblock %}

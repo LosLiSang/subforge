@@ -1,0 +1,32 @@
+{% extends "base.html" %}{% from "_creator_ui.html" import picker %}{% block title %}创作者 · SubForge{% endblock %}{% block content %}
+<div class="page-head"><div><h1>创作者</h1><p class="page-sub">管理作品关联的社团与声优</p></div><button data-open-creator-create>＋ 添加创作者</button></div>
+<nav class="tab-bar creator-tabs" role="tablist" aria-label="创作者身份">
+  <button type="button" class="tab active" data-tab="circle" role="tab" aria-selected="true">社团 {{ creator_rows|selectattr('creator.kind.value','equalto','circle')|list|length }}</button>
+  <button type="button" class="tab" data-tab="voice_actor" role="tab" aria-selected="false">声优 {{ creator_rows|selectattr('creator.kind.value','equalto','voice_actor')|list|length }}</button>
+</nav>
+{% for kind, label in [('circle','社团'),('voice_actor','声优')] %}
+<section class="tab-panel creator-panel {{ 'active' if kind == 'circle' else '' }}" data-tab-panel="{{ kind }}">
+  <input type="search" class="creator-list-search" placeholder="搜索{{ label }}…" aria-label="搜索{{ label }}" data-creator-list-search>
+  <div class="creator-list">
+  {% for row in creator_rows if row.creator.kind.value == kind %}
+    <article class="creator-row" data-creator-row data-creator-name="{{ row.creator.name }}">
+      <div class="creator-row-main"><span class="creator-tag creator-tag-{{ kind }}">{{ row.creator.name }}</span><span>{{ row.item_count }} 部作品</span><span>{{ row.track_count }} 音轨</span></div>
+      <div class="creator-row-menu-wrap"><button type="button" class="ghost small creator-menu-trigger" aria-label="{{ row.creator.name }} 操作" data-creator-menu-button>⋯</button><div class="creator-row-menu" data-creator-menu hidden>
+        <button type="button" data-edit-creator data-id="{{ row.creator.creator_id }}" data-name="{{ row.creator.name }}" data-kind="{{ kind }}">修改</button>
+        <button type="button" data-merge-creator data-id="{{ row.creator.creator_id }}" data-name="{{ row.creator.name }}" data-kind="{{ kind }}" data-count="{{ row.item_count }}">合并</button>
+        <button type="button" class="danger" data-delete-creator data-id="{{ row.creator.creator_id }}" data-name="{{ row.creator.name }}" data-kind="{{ kind }}" data-count="{{ row.item_count }}">删除</button>
+      </div></div>
+    </article>
+  {% else %}<p class="empty">暂无{{ label }}。</p>{% endfor %}
+  </div>
+</section>
+{% endfor %}
+
+<dialog id="creator-manage-create" class="profile-dialog creator-dialog"><form method="post" action="/creators" data-secure class="field-list"><header class="dialog-head"><h2>添加创作者</h2><button type="button" class="ghost small" data-close-dialog>✕</button></header><input type="hidden" name="action" value="create"><label>名称<input name="name" required></label><fieldset class="creator-kind-field"><legend>身份</legend><label><input type="radio" name="kind" value="circle" checked> 社团</label><label><input type="radio" name="kind" value="voice_actor"> 声优</label></fieldset><footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button>添加</button></footer></form></dialog>
+
+<dialog id="creator-edit-dialog" class="profile-dialog creator-dialog"><form method="post" action="/creators" data-secure class="field-list"><header class="dialog-head"><h2>修改创作者</h2><button type="button" class="ghost small" data-close-dialog>✕</button></header><input type="hidden" name="action" value="rename"><input type="hidden" name="creator_id"><div class="creator-dialog-kind" data-edit-kind></div><label>名称<input name="name" required></label><footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button>保存</button></footer></form></dialog>
+
+<dialog id="creator-merge-dialog" class="profile-dialog creator-dialog"><form method="post" action="/creators" data-secure class="field-list"><header class="dialog-head"><h2>合并创作者</h2><button type="button" class="ghost small" data-close-dialog>✕</button></header><input type="hidden" name="action" value="merge"><input type="hidden" name="source_id"><div class="merge-source"><span>来源</span><strong data-merge-source-name></strong><small data-merge-source-count></small></div><label class="field-label">合并到</label>{{ picker('creator-merge-target', creators, [], 'target_id', '', '搜索同身份创作者…', '', 1, false) }}<p class="dialog-note">来源创作者的全部作品关系将迁移到目标记录。</p><footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button class="danger">确认合并</button></footer></form></dialog>
+
+<dialog id="creator-delete-dialog" class="profile-dialog creator-dialog"><form method="post" action="/creators" data-secure class="field-list"><header class="dialog-head"><h2 data-delete-title>删除创作者</h2><button type="button" class="ghost small" data-close-dialog>✕</button></header><input type="hidden" name="action" value="delete"><input type="hidden" name="creator_id"><p data-delete-message></p><footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button type="button" class="ghost" data-delete-to-merge hidden>改为合并</button><button class="danger" data-confirm-delete>确认删除</button></footer></form></dialog>
+{% endblock %}

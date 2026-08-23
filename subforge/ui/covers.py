@@ -51,6 +51,33 @@ def extract_cover(media_path: Path, cache_path: Path, timeout: float = 30.0) -> 
     return cache_path
 
 
+def replace_cover(library_root: Path, item_id: str, source: Path) -> Path:
+    """Normalize a user-selected JPG/PNG/WebP image into the cover cache."""
+    source = source.resolve()
+    if not source.is_file() or source.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise ValueError("cover must be a JPG, PNG, or WebP image")
+    destination = covers_dir(library_root) / f"{item_id}.jpg"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.suffix.lower() in {".jpg", ".jpeg"}:
+        temporary = destination.with_name(f".{destination.stem}.tmp.jpg")
+        shutil.copyfile(source, temporary)
+        temporary.replace(destination)
+        return destination
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise ValueError("ffmpeg is required to convert PNG/WebP covers")
+    temporary = destination.with_name(f".{destination.stem}.tmp.jpg")
+    result = subprocess.run(
+        [ffmpeg, "-y", "-loglevel", "error", "-i", str(source), "-frames:v", "1", str(temporary)],
+        capture_output=True,
+    )
+    if result.returncode != 0 or not temporary.exists():
+        temporary.unlink(missing_ok=True)
+        raise ValueError("failed to convert cover image")
+    temporary.replace(destination)
+    return destination
+
+
 def cover_for_item(
     library_root: Path,
     item_id: str,

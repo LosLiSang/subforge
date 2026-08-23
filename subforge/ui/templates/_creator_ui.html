@@ -1,0 +1,30 @@
+{% macro picker(picker_id, creators, selected_ids, field_name='creator_ids', context_kind='', placeholder='搜索创作者，逗号或回车添加…', allowed_kind='', max_items=0, allow_create=true) -%}
+<div class="creator-picker" data-creator-picker data-picker-id="{{ picker_id }}" data-field-name="{{ field_name }}" data-context-kind="{{ context_kind }}" data-allowed-kind="{{ allowed_kind }}" data-max-items="{{ max_items }}" data-allow-create="{{ 'true' if allow_create else 'false' }}" data-initial-ids="{{ selected_ids|join(',') }}">
+  <div class="creator-picker-control" data-picker-control>
+    <div class="creator-tags" data-selected-tags>
+      {% for creator in creators if creator.creator_id in selected_ids %}
+      <span class="creator-tag creator-tag-{{ creator.kind.value }}" data-selected-id="{{ creator.creator_id }}">{{ creator.name }}<button type="button" aria-label="移除 {{ creator.name }}" data-remove-tag>×</button><input type="hidden" name="{{ field_name }}" value="{{ creator.creator_id }}"></span>
+      {% endfor %}
+      <input class="creator-search-input" type="text" autocomplete="off" placeholder="{{ placeholder }}" aria-label="搜索创作者" data-creator-search>
+    </div>
+  </div>
+  <div class="creator-suggestions" data-creator-suggestions hidden>
+    {% for creator in creators %}<button type="button" class="creator-suggestion" data-creator-option data-creator-id="{{ creator.creator_id }}" data-creator-name="{{ creator.name }}" data-creator-kind="{{ creator.kind.value }}"><span class="creator-tag creator-tag-{{ creator.kind.value }}">{{ creator.name }}</span><small>{{ '社团' if creator.kind.value == 'circle' else '声优' }}</small></button>{% endfor %}
+    <button type="button" class="creator-suggestion creator-create-suggestion" data-create-from-picker hidden>＋ 创建“<span data-create-name></span>”</button>
+    <p class="creator-suggestion-empty" data-suggestion-empty hidden>没有匹配的创作者</p>
+  </div>
+</div>
+{%- endmacro %}
+
+{% macro create_dialog(dialog_id='creator-quick-create-dialog') -%}
+<dialog id="{{ dialog_id }}" class="profile-dialog creator-dialog" data-creator-create-dialog>
+  <form method="dialog" class="field-list" data-creator-create-form>
+    <header class="dialog-head"><h2>新建创作者</h2><button type="button" class="ghost small" data-close-dialog>✕</button></header>
+    <input type="hidden" name="picker_id">
+    <label>名称<input name="name" required autocomplete="off"></label>
+    <fieldset class="creator-kind-field"><legend>身份</legend><label><input type="radio" name="kind" value="circle"> 社团</label><label><input type="radio" name="kind" value="voice_actor" checked> 声优</label></fieldset>
+    <p class="import-error" data-dialog-error hidden></p>
+    <footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button type="submit">创建</button></footer>
+  </form>
+</dialog>
+{%- endmacro %}

@@ -13,4 +13,17 @@
   <div class="status-bar-row"><span class="chip">{{ status }}</span><div class="status-bar-track"><div class="status-bar-fill status-{{ status }}" style="width: {{ (count / stats.track_count * 100) if stats.track_count else 0 }}%"></div></div><span class="stat-num small">{{ count }}</span></div>
   {% endfor %}
 </div>
+{% for kind, label in [('circle', '社团'), ('voice_actor', '声优')] %}
+<h2 class="dash-h2 creator-stat-heading">{{ label }}</h2>
+<div class="creator-stats">
+  {% for row in stats.creator_stats if row.creator.kind.value == kind %}
+  <a class="creator-stat-row" href="/?creator={{ row.creator.creator_id }}">
+    <strong>{{ row.creator.name }}</strong>
+    <span>{{ row.item_count }} 作品</span>
+    <span>{{ row.track_count }} 音轨</span>
+    <span>{{ (row.duration / 60)|round(1) }} 分钟</span>
+  </a>
+  {% else %}<p class="empty">暂无{{ label }}数据。</p>{% endfor %}
+</div>
+{% endfor %}
 {% endblock %}

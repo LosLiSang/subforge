@@ -7,6 +7,8 @@ from typing import Protocol
 
 class FilePicker(Protocol):
     def choose_audio(self) -> Path | None: ...
+    def choose_image(self) -> Path | None: ...
+    def choose_media_folder(self) -> Path | None: ...
     def choose_directory(self) -> Path | None: ...
 
 
@@ -14,9 +16,17 @@ class FilePicker(Protocol):
 class FakeFilePicker:
     audio: Path | None = None
     directory: Path | None = None
+    image: Path | None = None
+    media_folder: Path | None = None
 
     def choose_audio(self) -> Path | None:
         return self.audio
+
+    def choose_image(self) -> Path | None:
+        return self.image
+
+    def choose_media_folder(self) -> Path | None:
+        return self.media_folder
 
     def choose_directory(self) -> Path | None:
         return self.directory
@@ -40,6 +50,38 @@ class WindowsFilePicker:
                     ("All files", "*.*"),
                 ],
             )
+        finally:
+            root.destroy()
+        return Path(selected) if selected else None
+
+    def choose_image(self) -> Path | None:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        try:
+            selected = filedialog.askopenfilename(
+                title="选择封面图片",
+                filetypes=[
+                    ("Images", "*.jpg *.jpeg *.png *.webp"),
+                    ("All files", "*.*"),
+                ],
+            )
+        finally:
+            root.destroy()
+        return Path(selected) if selected else None
+
+    def choose_media_folder(self) -> Path | None:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        try:
+            selected = filedialog.askdirectory(title="选择 RJ 作品文件夹")
         finally:
             root.destroy()
         return Path(selected) if selected else None

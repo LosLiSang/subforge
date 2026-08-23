@@ -87,6 +87,26 @@ def test_subtitle_route_returns_only_track_languages(tmp_path):
     assert forbidden.status_code == 404
 
 
+def test_global_player_repairs_missing_item_id_when_same_track_reactivated():
+    js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "global-player.js").read_text(encoding="utf-8")
+    start = js.index("activate(trackId")
+    activate = js[start:js.index("close()", start)]
+
+    assert "st.itemId !== itemId" in activate
+    # 空 itemId 不得再拼出 /covers/ 这种必然 404 的请求
+    assert "const coverUrl = st.itemId ? `/covers/${st.itemId}` : '';" in js
+
+
+def test_player_and_track_row_carry_item_id_for_cover_thumbnail(tmp_path):
+    client, track_id = _player_client(tmp_path)
+    page = client.get(f"/tracks/{track_id}/play")
+
+    assert 'data-item-id=' in page.text
+    js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "player.js").read_text(encoding="utf-8")
+    assert "itemId=root.dataset.itemId" in js
+    assert "player.activate(track,title,itemId)" in js
+
+
 def test_player_page_contains_audio_and_bilingual_subtitle_surfaces(tmp_path):
     client, track_id = _player_client(tmp_path)
 
@@ -115,6 +135,41 @@ def test_transcript_rows_include_time_and_translation_columns(tmp_path):
     assert "entry.start" in js and "entry.end" in js
     assert "transcript-time" in js           # 时间列 class
     assert "target[i]?.text" in js or "target[i]" in js
+
+
+def test_global_player_has_persistent_200_percent_volume_control():
+    js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "global-player.js").read_text(encoding="utf-8")
+
+    assert 'data-role="volume"' in js
+    assert 'max="2"' in js
+    assert "setVolume" in js
+    assert "createGain" in js
+    assert "volume * 100" in js
+
+
+def test_player_bar_puts_title_above_cover_and_progress():
+    js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "global-player.js").read_text(encoding="utf-8")
+    css = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "app.css").read_text(encoding="utf-8")
+
+    assert "player-bar-title-row" in js
+    assert "player-bar-lower-row" in js
+    assert "player-bar-cover" in js
+    assert "grid-template-rows:auto auto" in css
+
+
+def test_global_player_rebuilds_audio_frame_when_detail_track_changes():
+    js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "global-player.js").read_text(encoding="utf-8")
+    activate = js[js.index("activate(trackId"):js.index("close()", js.index("activate(trackId"))]
+
+    assert "this.frame.remove()" in activate
+    assert "this.frame = null" in activate
+    assert "this.audio = null" in activate
+
+
+def test_player_handles_missing_subtitles_without_blocking_audio():
+    js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "player.js").read_text(encoding="utf-8")
+    assert "暂无源语言字幕" in js
+    assert "暂无翻译字幕" in js
 
 
 def test_player_page_has_subtitle_mode_selector(tmp_path):

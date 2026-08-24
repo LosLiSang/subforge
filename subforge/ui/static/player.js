@@ -37,6 +37,10 @@ function wireAudio(){
   };
   player.on('timeupdate',render);player.on('play',render);player.on('pause',render);
   audio.addEventListener('loadedmetadata',render);
+  // 字幕/进度逐帧对齐 audio.currentTime；不依赖稀疏的 timeupdate 事件，
+  // 否则浏览器 timeupdate 频率低/不规律时字幕会滞后并随播放时长漂移。
+  const loop=()=>{ if(!audio.paused) render(); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
 }
 function updateSubs(){
   if(!audio)return;

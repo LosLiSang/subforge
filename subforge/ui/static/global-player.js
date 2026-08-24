@@ -170,7 +170,7 @@
       <div class="player-bar-lower-row">
         <div class="player-bar-cover">${coverUrl ? `<img src="${coverUrl}" alt="" onerror="this.hidden=true">` : ''}</div>
         <div class="player-bar-progress-wrap"><input type="range" class="player-bar-seek" data-role="seek" min="0" max="${st.duration || 0}" step="0.1" value="${st.currentTime || 0}" aria-label="播放进度"><span class="player-bar-time" data-role="time">${fmtT(st.currentTime)}</span></div>
-        <button type="button" class="ghost small" data-role="toggle" aria-label="播放/暂停">▶</button>
+        <button type="button" class="ghost small player-bar-toggle" data-role="toggle" aria-label="播放/暂停"><svg class="ic-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v13.72a1 1 0 0 0 1.52.86l11-6.86a1 1 0 0 0 0-1.72l-11-6.86A1 1 0 0 0 8 5.14z"/></svg><svg class="ic-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
         <label class="player-bar-volume" title="音量"><span aria-hidden="true">🔊</span><input type="range" data-role="volume" min="0" max="2" step="0.01" value="${volume}" aria-label="音量，最高 200%"><output data-role="volume-value">${Math.round(volume * 100)}%</output></label>
         <button type="button" class="ghost small" data-role="open" aria-label="打开播放页">⛶</button>
       </div>
@@ -190,7 +190,7 @@
     volumeInput.addEventListener('input', () => { const value = player.setVolume(volumeInput.value); volumeValue.value = `${Math.round(value * 100)}%`; volumeValue.textContent = `${Math.round(value * 100)}%`; });
     const syncUI = () => {
       bar.querySelector('[data-role="time"]').textContent = fmtT(player.currentTime);
-      toggleBtn.textContent = player.paused ? '▶' : '⏸';
+      toggleBtn.classList.toggle('playing', !player.paused);
       const dur = player.duration || st.duration || 0;
       seekInput.max = dur || 0;
       seekInput.value = player.currentTime || 0;

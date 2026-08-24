@@ -151,6 +151,80 @@ def test_import_flow_never_exposes_server_path_and_lists_waiting_item(tmp_path):
     assert "测试作品" in page.text
     assert "status-waiting" in page.text
     assert str(audio.parent) not in page.text
+    runtime = client.app.state.runtime
+    assert runtime.tasks is not None
+    stored = LibraryStore.open(library)
+    track_id = stored.list_items()[0].tracks[0].track_id
+    stored.close()
+    assert runtime.tasks.latest_for_track(track_id) is None
+
+
+def test_local_import_can_automatically_enqueue_subtitle_processing(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "auto.m4a"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, audio=audio, library=library)
+    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+        "Default", "https://api.example/v1", "chat", "sk-test",
+    )
+
+    selected = client.post("/picker/audio", headers=headers).json()
+    response = client.post("/items/import", headers=headers, data={
+        "selection_id": selected["selection_id"],
+        "kind": "rj_work",
+        "rj_code": "RJ00000201",
+        "title": "自动处理",
+        "auto_process": "on",
+    }, follow_redirects=False)
+
+    assert response.status_code == 303
+    stored = LibraryStore.open(library)
+    item = stored.list_items()[0]
+    stored.close()
+    runtime = client.app.state.runtime
+    task = runtime.tasks.latest_for_track(item.tracks[0].track_id)
+    assert task is not None
+    assert task.config_snapshot == {
+        "asr_provider": "local",
+        "scene": "asmr",
+        "whisper_model": "large-v3",
+        "llm_profile_id": profile.profile_id,
+    }
+    assert UiSettingsStore(tmp_path / "ui.json").get_last_processing_snapshot() == task.config_snapshot
+
+
+def test_auto_processing_reuses_the_most_recent_processing_configuration(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "recent.m4a"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, audio=audio, library=library)
+    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+        "Recent", "https://api.example/v1", "chat", "sk-test",
+    )
+    recent = {
+        "asr_provider": "deepgram",
+        "scene": "normal",
+        "whisper_model": "medium",
+        "llm_profile_id": profile.profile_id,
+    }
+    UiSettingsStore(tmp_path / "ui.json").set_last_processing_snapshot(recent)
+
+    selected = client.post("/picker/audio", headers=headers).json()
+    response = client.post("/items/import", headers=headers, data={
+        "selection_id": selected["selection_id"],
+        "kind": "stream_archive",
+        "title": "沿用最近配置",
+        "author": "主播",
+        "auto_process": "on",
+    }, follow_redirects=False)
+
+    assert response.status_code == 303, response.text
+    stored = LibraryStore.open(library)
+    item = stored.list_items()[0]
+    stored.close()
+    task = client.app.state.runtime.tasks.latest_for_track(item.tracks[0].track_id)
+    assert task is not None
+    assert task.config_snapshot == recent
 
 
 def test_profiles_page_renders_list_and_dialog_layout(tmp_path):
@@ -168,17 +242,20 @@ def test_profiles_page_renders_list_and_dialog_layout(tmp_path):
     assert 'data-open-dialog="profile-dialog"' in html
     assert 'id="profile-dialog"' in html
     assert "<dialog" in html
-    # 每个配置一行：名称/模型/端点摘要 + 操作（测试/编辑/删除）
+    # 每个配置一行：名称/模型/端点摘要 + 操作（测试/复制/编辑/删除）
     assert 'data-profile-row="DeepSeek"' in html
     deepseek_row = html[html.index('data-profile-row="DeepSeek"'):html.index('</article>')]
     assert 'data-test-endpoint="/profiles/' in deepseek_row
+    assert "data-copy-profile='" in deepseek_row
     assert "data-edit-profile='" in deepseek_row
     assert 'data-delete-profile="/profiles/' in deepseek_row
-    # 编辑表单在弹窗里，字段名不变
+    assert deepseek_row.count('class="profile-action') == 4
+    # 编辑/复制表单在弹窗里，字段名不变
     assert 'name="base_url"' in html
     assert 'name="verify_tls"' in html
     assert 'name="ca_bundle"' in html
     assert 'name="profile_id"' in html
+    assert 'name="copy_from_profile_id"' in html
 
 
 def test_profiles_page_dialog_prefills_edit_values(tmp_path):
@@ -193,7 +270,7 @@ def test_profiles_page_dialog_prefills_edit_values(tmp_path):
     # 编辑按钮携带完整配置 JSON，点击后回填弹窗表单（无 Key 回填）
     import json as _json
     start = html.index("data-edit-profile='")
-    end = html.index("'>编辑", start)  # 单引号属性内的双引号无需转义，直接解析
+    end = html.index("'>", start)  # 单引号属性内的双引号无需转义，直接解析
     payload = _json.loads(html[start + len("data-edit-profile='"):end])
     assert payload["profile_id"] == profile.profile_id
     assert payload["name"] == "DeepSeek"
@@ -221,9 +298,34 @@ def test_profiles_page_renders_one_row_per_profile(tmp_path):
     first, second = html[first_chunk:second_chunk], html[second_chunk:]
     for chunk in (first, second):
         assert chunk.count('data-test-endpoint') == 1
+        assert chunk.count('data-copy-profile=') == 1
         assert chunk.count('data-delete-profile') == 1
         assert chunk.count('data-edit-profile=') == 1
     assert "sk-test" not in html and "sk-2" not in html
+
+
+def test_copy_profile_submission_preserves_stored_key_without_sending_it_to_browser(tmp_path):
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+    profiles = LlmProfileStore(tmp_path / "profiles.json")
+    source = profiles.save("DeepSeek", "https://api.example/v1", "chat", "sk-secret-copy")
+
+    response = client.post("/profiles", headers=headers, data={
+        "copy_from_profile_id": source.profile_id,
+        "name": "DeepSeek 副本",
+        "base_url": "https://api-copy.example/v1",
+        "model": "chat-copy",
+        "api_key": "",
+        "verify_tls": "on",
+    }, follow_redirects=False)
+
+    assert response.status_code == 303
+    public = profiles.list_public()
+    assert [profile["name"] for profile in public] == ["DeepSeek", "DeepSeek 副本"]
+    copied = next(profile for profile in public if profile["name"] == "DeepSeek 副本")
+    assert profiles.resolve(copied["profile_id"]).api_key == "sk-secret-copy"
+    page = client.get("/profiles")
+    assert "sk-secret-copy" not in page.text
 
 
 def test_profile_connection_test_reports_success_without_exposing_key(tmp_path):
@@ -392,6 +494,53 @@ def test_index_renders_work_card_grid_like_asmr_one(tmp_path):
     assert '.library-toolbar .creator-picker-control{height:34px;min-height:34px' in css
 
 
+def test_library_paginates_twelve_works_and_searches_across_all_pages(tmp_path):
+    library = tmp_path / "Library"
+    client, _headers = _authenticated_client(tmp_path, library=library)
+    store = LibraryStore.open(library)
+    creator = store.create_creator("分页社团", CreatorKind.CIRCLE)
+    for index in range(1, 14):
+        audio = tmp_path / f"page-{index:02d}.mp3"
+        audio.write_bytes(f"audio-{index}".encode())
+        store.import_audio(ImportRequest(
+            source=audio,
+            kind=ItemKind.RJ_WORK,
+            title=f"分页作品 {index:02d}",
+            rj_code=f"RJ{index:08d}",
+            creator_ids=(creator.creator_id,),
+        ))
+    store.close()
+
+    first = client.get("/").text
+    assert first.count('class="work-card') == 12
+    assert "分页作品 01" in first
+    assert "分页作品 12" in first
+    assert "分页作品 13" not in first
+    assert 'class="library-pagination"' in first
+    assert 'href="/?page=2"' in first
+    assert "第 1 / 2 页" in first
+
+    second = client.get("/?page=2").text
+    assert second.count('class="work-card') == 1
+    assert "分页作品 13" in second
+    assert "第 2 / 2 页" in second
+
+    clamped = client.get("/?page=999").text
+    assert "分页作品 13" in clamped
+    assert "第 2 / 2 页" in clamped
+
+    searched = client.get("/?q=分页作品+13").text
+    assert searched.count('class="work-card') == 1
+    assert "分页作品 13" in searched
+    assert 'value="分页作品 13"' in searched
+
+    preserved = client.get(f"/?q=分页作品&creator={creator.creator_id}").text
+    assert (
+        f'href="/?q=%E5%88%86%E9%A1%B5%E4%BD%9C%E5%93%81&amp;creator={creator.creator_id}&amp;page=2"'
+        in preserved
+    )
+
+
 def test_rj_work_card_shows_total_item_directory_size(tmp_path):
     library = tmp_path / "Library"
     one = tmp_path / "one.mp3"
@@ -414,6 +563,31 @@ def test_rj_work_card_shows_total_item_directory_size(tmp_path):
     page = client.get("/")
 
     assert expected in page.text
+
+
+def test_single_stream_archive_card_shows_media_size_instead_of_zero(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "single-live.m4a"
+    audio.write_bytes(b"a" * 2097152)
+    client, _headers = _authenticated_client(tmp_path, library=library)
+    store = LibraryStore.open(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio,
+        kind=ItemKind.STREAM_ARCHIVE,
+        title="单文件直播归档",
+        author="miyadi",
+    ))
+    assert store.get_track(imported.track_id)[1].size == 2097152
+    store.close()
+
+    html = client.get("/").text
+    title_position = html.index("单文件直播归档")
+    card_start = html.rfind('<a class="work-card"', 0, title_position)
+    card_end = html.index("</a>", title_position)
+    card = html[card_start:card_end]
+
+    assert "2.0 MB" in card
+    assert "0.0 MB" not in card
 
 
 def test_detail_renders_track_rows_with_status_badges(tmp_path):
@@ -590,6 +764,12 @@ def test_process_item_enqueues_every_incomplete_track(tmp_path):
     assert tasks.latest_for_track(first.track_id) is not None
     assert tasks.latest_for_track(second.track_id) is not None
     assert tasks.latest_for_track(completed.track_id) is None
+    assert UiSettingsStore(tmp_path / "ui.json").get_last_processing_snapshot() == {
+        "asr_provider": "local",
+        "scene": "asmr",
+        "whisper_model": "medium",
+        "llm_profile_id": profile.profile_id,
+    }
 
 
 def test_track_rename_delete_and_subtitle_download_routes(tmp_path):
@@ -787,6 +967,16 @@ def test_frontend_uses_one_batch_poll_instead_of_per_task_sse():
 
     assert "new EventSource" not in script
     assert "/api/tasks/status?" in script
+    assert "['model','asr'].includes(stage)" in script
+    assert "return fastStage?250:1000" in script
+
+
+def test_processing_selector_syncs_display_and_confirms_from_scratch():
+    script = (Path(__file__).parents[1] / "subforge" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "form.elements.mode.dispatchEvent(new Event('change'" in script
+    assert "processingForm.elements.mode.value!=='from_scratch'" in script
+    assert "覆盖现有源字幕、翻译字幕" in script
 
 
 def test_task_center_shows_processing_and_download_status(tmp_path):
@@ -1153,15 +1343,25 @@ def test_shell_sidebar_contains_all_nav_entries(tmp_path):
     client, headers = _authenticated_client(tmp_path, library=library)
     shell = client.get("/", headers={"sec-fetch-dest": "document"}).text
     assert 'class="sidebar"' in shell
+    assert 'class="brand-icon"' in shell
+    assert 'src="/static/subforge-icon.svg"' in shell
+    assert 'rel="icon" href="/static/subforge-icon.svg"' in shell
     for entry in ("作品库", "翻译配置", "创作者", "设置", "统计", "任务中心", "关于"):
         assert entry in shell
     assert 'id="content-frame"' in shell
+
+    icon = client.get("/static/subforge-icon.svg")
+    assert icon.status_code == 200
+    assert "image/svg+xml" in icon.headers["content-type"]
 
 
 def test_import_dialog_has_media_tabs_without_the_old_selector(tmp_path):
     """导入 Dialog 使用无动画横向 Tab：本地、链接、RJ 文件夹。"""
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
+    LlmProfileStore(tmp_path / "profiles.json").save(
+        "Default", "https://api.example/v1", "chat", "sk-test",
+    )
     page = client.get("/").text
     assert 'id="import-dialog"' in page
     assert 'data-import-select' not in page
@@ -1173,6 +1373,8 @@ def test_import_dialog_has_media_tabs_without_the_old_selector(tmp_path):
     assert 'id="folder-import-preview"' in page
     assert 'name="url"' in page
     assert 'id="pick-audio"' in page
+    assert page.count('name="auto_process"') == 3
+    assert page.count('name="auto_process" checked') == 3
 
 
 def test_rj_folder_preview_and_background_import(tmp_path):
@@ -1183,6 +1385,9 @@ def test_rj_folder_preview_and_background_import(tmp_path):
     (folder / "本篇" / "01.m4a").write_bytes(b"one")
     (folder / "readme.txt").write_text("skip", encoding="utf-8")
     client, headers = _authenticated_client(tmp_path, library=library)
+    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+        "Default", "https://api.example/v1", "chat", "sk-test",
+    )
     client.app.state.runtime.deps.picker.media_folder = folder
 
     selected = client.post("/picker/media-folder", headers=headers).json()
@@ -1195,6 +1400,7 @@ def test_rj_folder_preview_and_background_import(tmp_path):
 
     started = client.post("/items/import-folder", headers=headers, data={
         "selection_id": selected["selection_id"], "rj_code": "rj01499022", "title": "",
+        "auto_process": "on",
     })
     assert started.status_code == 202
     task_id = started.json()["task_id"]
@@ -1206,9 +1412,14 @@ def test_rj_folder_preview_and_background_import(tmp_path):
         time.sleep(0.02)
     assert status["status"] == "done"
     assert status["imported"] == 1
+    assert status["auto_process_status"] == "queued"
+    assert status["auto_queued"] == 1
     item = LibraryStore.open(library).list_items()[0]
     assert item.title == "RJ01499022"
     assert item.tracks[0].original_relative_path == "本篇/01.m4a"
+    task = client.app.state.runtime.tasks.latest_for_track(item.tracks[0].track_id)
+    assert task is not None
+    assert task.config_snapshot["llm_profile_id"] == profile.profile_id
 
 
 def test_import_url_rejects_missing_url(tmp_path):
@@ -1274,6 +1485,9 @@ def test_import_url_returns_accepted_async(tmp_path):
     import tempfile as _tf
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
+    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+        "Default", "https://api.example/v1", "chat", "sk-test",
+    )
 
     fake_audio = tmp_path / "dl.m4a"
     fake_audio.write_bytes(b"\x00" * 2048)
@@ -1301,7 +1515,7 @@ def test_import_url_returns_accepted_async(tmp_path):
     ):
         resp = client.post("/items/import-url", headers=headers, data={
             "url": "https://www.bilibili.com/video/BV1x", "kind": "stream_archive",
-            "title": "异步作品", "author": "作者",
+            "title": "异步作品", "author": "作者", "auto_process": "on",
         })
         assert resp.status_code == 202
         data = resp.json()
@@ -1315,7 +1529,12 @@ def test_import_url_returns_accepted_async(tmp_path):
                 break
             time.sleep(0.2)
         assert status.get("status") == "done", status
+        assert status.get("auto_process_status") == "queued", status
+        assert status.get("auto_queued") == 1
     items = LibraryStore.open(library).list_items()
     assert any(it.title == "异步作品" for it in items)
     item = next(it for it in items if it.title == "异步作品")
     assert (library / ".subforge" / "covers" / f"{item.item_id}.jpg").exists()
+    task = client.app.state.runtime.tasks.latest_for_track(item.tracks[0].track_id)
+    assert task is not None
+    assert task.config_snapshot["llm_profile_id"] == profile.profile_id

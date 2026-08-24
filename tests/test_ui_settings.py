@@ -92,6 +92,20 @@ def test_ui_settings_persists_secret_and_distinct_processing_concurrency(tmp_pat
     assert reopened.get_translate_workers() == 7
 
 
+def test_ui_settings_persists_last_processing_snapshot(tmp_path):
+    store = UiSettingsStore(tmp_path / "ui.json")
+    snapshot = {
+        "asr_provider": "deepgram",
+        "scene": "normal",
+        "whisper_model": "medium",
+        "llm_profile_id": "profile-1",
+    }
+
+    store.set_last_processing_snapshot(snapshot)
+
+    assert UiSettingsStore(tmp_path / "ui.json").get_last_processing_snapshot() == snapshot
+
+
 def test_legacy_media_concurrency_migrates_to_asr_concurrency(tmp_path):
     config = tmp_path / "ui.json"
     config.write_text('{"media_concurrency": 3}', encoding="utf-8")

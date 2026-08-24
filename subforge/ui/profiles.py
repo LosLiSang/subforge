@@ -83,6 +83,37 @@ class LlmProfileStore:
         self._save_all(profiles)
         return profile
 
+    def copy(
+        self,
+        source_profile_id: str,
+        name: str,
+        base_url: str,
+        model: str,
+        api_key: str = "",
+        proxy_url: str = "",
+        verify_tls: bool = True,
+        ca_bundle: str = "",
+    ) -> LlmProfile:
+        if not name.strip() or not base_url.strip() or not model.strip():
+            raise ValueError("name, base_url and model are required")
+        profiles = self._load()
+        source = next((p for p in profiles if p.profile_id == source_profile_id), None)
+        if source is None:
+            raise KeyError(source_profile_id)
+        profile = LlmProfile(
+            uuid4().hex,
+            name.strip(),
+            base_url.strip(),
+            model.strip(),
+            api_key or source.api_key,
+            proxy_url.strip(),
+            bool(verify_tls),
+            ca_bundle.strip(),
+        )
+        profiles.append(profile)
+        self._save_all(profiles)
+        return profile
+
     def resolve(self, profile_id: str) -> LlmProfile:
         profile = next((p for p in self._load() if p.profile_id == profile_id), None)
         if profile is None:

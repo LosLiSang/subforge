@@ -8,9 +8,9 @@ import mimetypes
 import secrets
 import shutil
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 from uuid import uuid4
 
 from jinja2 import Environment, PackageLoader, select_autoescape
@@ -52,12 +52,77 @@ class UiRuntime:
         self.sessions: dict[str, str] = {}
         self.selections: dict[str, Path] = {}
         self.imports: dict[str, dict] = {}  # 后台 URL 下载导入任务状态
+        self.pending_auto_processing: dict[str, tuple[list[str], ProcessingSnapshot]] = {}
+        self.event_loop: asyncio.AbstractEventLoop | None = None
         self.library: LibraryStore | None = None
         self.tasks: TaskManager | None = None
         self.templates = Environment(
             loader=PackageLoader("subforge.ui", "templates"),
             autoescape=select_autoescape(["html", "xml"]),
         )
+
+    async def ensure_auto_processing(self, import_task_id: str) -> None:
+        task = self.imports.get(import_task_id)
+        pending = self.pending_auto_processing.get(import_task_id)
+        if task is None or pending is None:
+            return
+        if task.get("auto_process_status") in {"scheduling", "queued", "skipped"}:
+            return
+        track_ids, snapshot = pending
+        task["auto_process_status"] = "scheduling"
+        try:
+            if self.tasks is None:
+                raise RuntimeError("字幕任务队列不可用")
+            queued = 0
+            for track_id in track_ids:
+                try:
+                    _item, track = self.library.get_track(track_id) if self.library else (None, None)
+                except KeyError:
+                    continue
+                latest = self.tasks.latest_for_track(track_id)
+                if track is None or track.status == "playable" or (
+                    latest and latest.status in {"queued", "running"}
+                ):
+                    continue
+                await self.tasks.enqueue(track_id, snapshot, mode="from_scratch")
+                queued += 1
+            self.deps.settings.set_last_processing_snapshot(asdict(snapshot))
+            task["auto_process_status"] = "queued" if queued else "skipped"
+            task["auto_queued"] = queued
+            task["auto_process_message"] = (
+                f"已自动加入 {queued} 个字幕处理任务" if queued else "没有需要自动处理的新音轨"
+            )
+            self.pending_auto_processing.pop(import_task_id, None)
+        except Exception as exc:
+            task["auto_process_status"] = "pending"
+            task["auto_process_message"] = f"等待加入字幕处理队列：{exc}"
+
+    def schedule_auto_processing(
+        self,
+        import_task_id: str,
+        track_ids: list[str],
+        snapshot: ProcessingSnapshot,
+    ) -> None:
+        task = self.imports.get(import_task_id)
+        if task is None:
+            return
+        self.pending_auto_processing[import_task_id] = (track_ids, snapshot)
+        task["auto_process_status"] = "pending"
+        task["auto_queued"] = 0
+        loop = self.event_loop
+        if loop is None or loop.is_closed() or not loop.is_running():
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            self.ensure_auto_processing(import_task_id), loop,
+        )
+
+        def restore_pending(done) -> None:
+            if done.cancelled() or done.exception() is not None:
+                current = self.imports.get(import_task_id)
+                if current and current.get("auto_process_status") == "scheduling":
+                    current["auto_process_status"] = "pending"
+
+        future.add_done_callback(restore_pending)
 
     def open_active_library(self) -> LibraryStore | None:
         root = self.deps.settings.get_active_library()
@@ -75,6 +140,8 @@ class UiRuntime:
                 models_dir_resolver=self.deps.settings.get_models_dir,
                 direct_model_resolver=self.deps.settings.get_direct_model_path,
                 translate_workers=self.deps.settings.get_translate_workers(),
+                translate_workers_resolver=self.deps.settings.get_translate_workers,
+                translation_prompt_resolver=self.deps.settings.get_translation_prompt,
             )
         return self.library
 
@@ -132,17 +199,71 @@ def create_app(deps: UiDependencies) -> Starlette:
             except ValueError:
                 selected_creator_ids = []
         creators = library.list_creators()
+        creator_by_id = {creator.creator_id: creator for creator in creators}
         items = library.list_items(selected_creator_ids)
-        item_size_by_id = await asyncio.to_thread(_item_directory_sizes, library.root, items)
+        search_query = request.query_params.get("q", "").strip()
+        if search_query:
+            needle = search_query.casefold()
+            items = [
+                item for item in items
+                if needle in " ".join([
+                    item.title,
+                    item.rj_code or "",
+                    *(creator_by_id[creator_id].name for creator_id in item.creator_ids if creator_id in creator_by_id),
+                ]).casefold()
+            ]
+        total_items = len(items)
+        try:
+            requested_page = int(request.query_params.get("page", "1"))
+        except ValueError:
+            requested_page = 1
+        page_count = max(1, (total_items + 11) // 12)
+        current_page = min(max(1, requested_page), page_count)
+        page_start = (current_page - 1) * 12
+        page_items = items[page_start:page_start + 12]
+
+        def page_url(page_number: int) -> str:
+            params: list[tuple[str, str]] = []
+            if search_query:
+                params.append(("q", search_query))
+            params.extend(("creator", creator_id) for creator_id in selected_creator_ids)
+            if page_number > 1:
+                params.append(("page", str(page_number)))
+            query = urlencode(params)
+            return f"/?{query}" if query else "/"
+
+        visible_pages = sorted({
+            1, page_count,
+            *range(max(1, current_page - 2), min(page_count, current_page + 2) + 1),
+        })
+        pagination_items: list[dict | None] = []
+        previous_number = 0
+        for page_number in visible_pages:
+            if previous_number and page_number - previous_number > 1:
+                pagination_items.append(None)
+            pagination_items.append({
+                "number": page_number,
+                "url": page_url(page_number),
+                "current": page_number == current_page,
+            })
+            previous_number = page_number
+        item_size_by_id = await asyncio.to_thread(_item_directory_sizes, library.root, page_items)
         return runtime.render(
             "index.html",
             request,
-            items=items,
+            items=page_items,
             creators=creators,
-            creator_by_id={creator.creator_id: creator for creator in creators},
+            creator_by_id=creator_by_id,
             selected_creator_ids=set(selected_creator_ids),
             profiles=deps.profiles.list_public(),
             item_size_by_id=item_size_by_id,
+            search_query=search_query,
+            current_page=current_page,
+            page_count=page_count,
+            total_items=total_items,
+            pagination_items=pagination_items,
+            previous_page_url=page_url(current_page - 1) if current_page > 1 else None,
+            next_page_url=page_url(current_page + 1) if current_page < page_count else None,
         )
 
     async def session_info(request: Request) -> Response:
@@ -172,6 +293,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             models_dir_resolver=deps.settings.get_models_dir,
             direct_model_resolver=deps.settings.get_direct_model_path,
             translate_workers=deps.settings.get_translate_workers(),
+            translate_workers_resolver=deps.settings.get_translate_workers,
+            translation_prompt_resolver=deps.settings.get_translation_prompt,
         )
         deps.settings.set_active_library(selected)
         return RedirectResponse("/", status_code=303)
@@ -250,6 +373,11 @@ def create_app(deps: UiDependencies) -> Starlette:
             )
         except (ValueError, OSError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        if form.get("auto_process") == "on" and result.created and runtime.tasks is not None:
+            snapshot = _automatic_processing_snapshot(deps)
+            if snapshot is not None:
+                await runtime.tasks.enqueue(result.track_id, snapshot, mode="from_scratch")
+                deps.settings.set_last_processing_snapshot(asdict(snapshot))
         return RedirectResponse(f"/items/{result.item_id}", status_code=303)
 
     async def import_item_url(request: Request) -> Response:
@@ -273,6 +401,9 @@ def create_app(deps: UiDependencies) -> Starlette:
         kind = ItemKind(form.get("kind", "stream_archive"))
         task_id = uuid4().hex
         creator_ids = _creator_ids_from_form(library, values, kind)
+        auto_process = form.get("auto_process") == "on"
+        auto_snapshot = _automatic_processing_snapshot(deps) if auto_process else None
+        runtime.event_loop = asyncio.get_running_loop()
         runtime.imports[task_id] = {
             "task_id": task_id, "kind": "download", "status": "running",
             "stage": "download", "message": "开始下载…", "item_id": None,
@@ -282,6 +413,12 @@ def create_app(deps: UiDependencies) -> Starlette:
             "title": form.get("title") or None,
             "author": form.get("author") or None,
             "creator_ids": list(creator_ids),
+            "auto_process": auto_process,
+            "auto_process_status": "pending" if auto_snapshot else ("skipped" if auto_process else "disabled"),
+            "auto_process_message": (
+                "等待导入完成后自动处理" if auto_snapshot
+                else ("未配置翻译配置，无法自动处理" if auto_process else "")
+            ),
         }
         await _run_url_import(
             runtime, library, url, task_id,
@@ -290,6 +427,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             title=form.get("title") or None,
             author=form.get("author") or None,
             creator_ids=tuple(creator_ids),
+            auto_snapshot=auto_snapshot,
         )
         return JSONResponse({"task_id": task_id, "status": "running"}, status_code=202)
 
@@ -333,24 +471,38 @@ def create_app(deps: UiDependencies) -> Starlette:
         if not rj_code:
             return JSONResponse({"error": "RJ code is required"}, status_code=400)
         task_id = uuid4().hex
+        auto_process = form.get("auto_process") == "on"
+        auto_snapshot = _automatic_processing_snapshot(deps) if auto_process else None
+        runtime.event_loop = asyncio.get_running_loop()
         runtime.imports[task_id] = {
             "task_id": task_id, "kind": "media_import", "status": "running",
             "stage": "scan", "message": "扫描目录…", "item_id": None,
             "source_url": folder.name, "progress": 0.0,
             "completed": 0, "total": 0, "imported": 0, "duplicates": 0, "failed": 0,
+            "auto_process": auto_process,
+            "auto_process_status": "pending" if auto_snapshot else ("skipped" if auto_process else "disabled"),
+            "auto_process_message": (
+                "等待导入完成后自动处理" if auto_snapshot
+                else ("未配置翻译配置，无法自动处理" if auto_process else "")
+            ),
         }
         await _run_folder_import(
             runtime, library, folder, task_id,
             rj_code=rj_code, title=form.get("title") or None,
             creator_ids=tuple(_creator_ids_from_form(library, values, ItemKind.RJ_WORK)),
+            auto_snapshot=auto_snapshot,
         )
         return JSONResponse({"task_id": task_id, "status": "running"}, status_code=202)
 
     async def import_status(request: Request) -> Response:
         """查询后台下载导入任务状态（前端轮询）。"""
-        task = runtime.imports.get(request.path_params["task_id"])
+        task_id = request.path_params["task_id"]
+        task = runtime.imports.get(task_id)
         if task is None:
             return JSONResponse({"error": "not found"}, status_code=404)
+        if task.get("status") in {"done", "partial"} and task.get("auto_process_status") == "pending":
+            runtime.event_loop = asyncio.get_running_loop()
+            await runtime.ensure_auto_processing(task_id)
         return JSONResponse(task)
 
     async def item_detail(request: Request) -> Response:
@@ -514,6 +666,13 @@ def create_app(deps: UiDependencies) -> Starlette:
 
     async def downloads_page(request: Request) -> Response:
         library = runtime.open_active_library()
+        runtime.event_loop = asyncio.get_running_loop()
+        for import_task_id, import_task in list(runtime.imports.items()):
+            if (
+                import_task.get("status") in {"done", "partial"}
+                and import_task.get("auto_process_status") == "pending"
+            ):
+                await runtime.ensure_auto_processing(import_task_id)
         processing_tasks = []
         if library is not None and runtime.tasks is not None:
             queued_position = 0
@@ -568,6 +727,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                     deps.settings.set_deepgram_api_key(form["deepgram_api_key"])
                 deps.settings.set_asr_concurrency(int(form.get("asr_concurrency", "1")))
                 deps.settings.set_translate_workers(int(form.get("translate_workers", "8")))
+                deps.settings.set_translation_prompt(form.get("translation_prompt", ""))
                 deps.settings.set_proxy_url(form.get("proxy_url", ""))
                 models_dir = _resolve_selected_path(runtime, form, "models_dir")
                 if models_dir:
@@ -585,6 +745,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             deepgram_key_deletable=deps.settings.has_stored_deepgram_api_key(),
             asr_concurrency=deps.settings.get_asr_concurrency(),
             translate_workers=deps.settings.get_translate_workers(),
+            translation_prompt=deps.settings.get_translation_prompt(),
             proxy_url=deps.settings.get_proxy_url(),
             models_dir=deps.settings.get_models_dir(),
             direct_medium=deps.settings.get_direct_model_path("medium"),
@@ -708,16 +869,25 @@ def create_app(deps: UiDependencies) -> Starlette:
                 return error
             form = await _read_form(request)
             try:
-                deps.profiles.save(
-                    name=form.get("name", ""),
-                    base_url=form.get("base_url", ""),
-                    model=form.get("model", ""),
-                    api_key=form.get("api_key", ""),
-                    profile_id=form.get("profile_id") or None,
-                    proxy_url=form.get("proxy_url", ""),
-                    verify_tls=form.get("verify_tls") == "on",
-                    ca_bundle=form.get("ca_bundle", ""),
-                )
+                values = {
+                    "name": form.get("name", ""),
+                    "base_url": form.get("base_url", ""),
+                    "model": form.get("model", ""),
+                    "api_key": form.get("api_key", ""),
+                    "proxy_url": form.get("proxy_url", ""),
+                    "verify_tls": form.get("verify_tls") == "on",
+                    "ca_bundle": form.get("ca_bundle", ""),
+                }
+                copy_from_profile_id = form.get("copy_from_profile_id", "")
+                if copy_from_profile_id:
+                    deps.profiles.copy(copy_from_profile_id, **values)
+                else:
+                    deps.profiles.save(
+                        profile_id=form.get("profile_id") or None,
+                        **values,
+                    )
+            except KeyError:
+                return Response("Not found", status_code=404)
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
             return RedirectResponse("/profiles", status_code=303)
@@ -753,6 +923,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                     snapshot = ProcessingSnapshot(**latest.config_snapshot)
                     deps.profiles.resolve(snapshot.llm_profile_id)
                 await runtime.tasks.enqueue(track.track_id, snapshot, mode=mode)
+                deps.settings.set_last_processing_snapshot(asdict(snapshot))
         except KeyError:
             return JSONResponse({"error": "LLM profile not found"}, status_code=404)
         except ValueError as exc:
@@ -826,6 +997,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             task = await runtime.tasks.enqueue(
                 request.path_params["track_id"], snapshot, mode=mode,
             )
+            deps.settings.set_last_processing_snapshot(asdict(snapshot))
         except KeyError:
             return JSONResponse({"error": "Track or LLM profile not found"}, status_code=404)
         return RedirectResponse(f"/items/{library.get_track(task.track_id)[0].item_id}", status_code=303)
@@ -1026,6 +1198,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         except TypeError:
             return JSONResponse({"error": "任务配置快照损坏，无法重试"}, status_code=400)
         await runtime.tasks.enqueue(task.track_id, snapshot, mode="continue")
+        deps.settings.set_last_processing_snapshot(asdict(snapshot))
         return RedirectResponse(request.headers.get("referer", "/downloads"), status_code=303)
 
     async def retry_import(request: Request) -> Response:
@@ -1044,12 +1217,17 @@ def create_app(deps: UiDependencies) -> Starlette:
         url = task.get("source_url", "")
         if not url:
             return JSONResponse({"error": "缺少源 URL，无法重试"}, status_code=400)
-        task.update(status="running", stage="download", message="开始重试下载…", item_id=None)
+        auto_snapshot = _automatic_processing_snapshot(deps) if task.get("auto_process") else None
+        task.update(
+            status="running", stage="download", message="开始重试下载…", item_id=None,
+            auto_process_status=("pending" if auto_snapshot else task.get("auto_process_status", "disabled")),
+        )
         await _run_url_import(
             runtime, library, url, task["task_id"],
             kind=ItemKind(task.get("item_kind") or "stream_archive"),
             rj_code=task.get("rj_code"), title=task.get("title"), author=task.get("author"),
             creator_ids=tuple(task.get("creator_ids") or ()),
+            auto_snapshot=auto_snapshot,
         )
         return RedirectResponse(request.headers.get("referer", "/downloads"), status_code=303)
 
@@ -1132,6 +1310,7 @@ def create_app(deps: UiDependencies) -> Starlette:
     @asynccontextmanager
     async def lifespan(app):
         _quiet_proactor_reset_noise()
+        runtime.event_loop = asyncio.get_running_loop()
         yield
         await runtime.close()
 
@@ -1147,6 +1326,26 @@ def create_app(deps: UiDependencies) -> Starlette:
     app.add_middleware(BaseHTTPMiddleware, dispatch=require_read_session)
     app.state.runtime = runtime
     return app
+
+
+def _automatic_processing_snapshot(deps: UiDependencies) -> ProcessingSnapshot | None:
+    profiles = deps.profiles.list_public()
+    if not profiles:
+        return None
+    profile_ids = {profile["profile_id"] for profile in profiles}
+    saved = deps.settings.get_last_processing_snapshot() or {}
+    profile_id = str(saved.get("llm_profile_id", ""))
+    if profile_id not in profile_ids:
+        profile_id = profiles[0]["profile_id"]
+    asr_provider = str(saved.get("asr_provider", "local"))
+    scene = str(saved.get("scene", "asmr"))
+    whisper_model = str(saved.get("whisper_model", "large-v3"))
+    return ProcessingSnapshot(
+        asr_provider=asr_provider if asr_provider in {"local", "deepgram"} else "local",
+        scene=scene if scene in {"asmr", "normal"} else "asmr",
+        whisper_model=whisper_model or "large-v3",
+        llm_profile_id=profile_id,
+    )
 
 
 def _session_csrf(request: Request, runtime: UiRuntime) -> str | None:
@@ -1261,6 +1460,7 @@ async def _run_folder_import(
     rj_code: str,
     title: str | None,
     creator_ids: tuple[str, ...],
+    auto_snapshot: ProcessingSnapshot | None = None,
 ) -> None:
     import threading
 
@@ -1302,6 +1502,15 @@ async def _run_folder_import(
                         f"跳过 {result.skipped_count}，失败 {result.failed_count}"
                     ),
                 )
+            if auto_snapshot is not None and result.imported_track_ids:
+                runtime.schedule_auto_processing(
+                    task_id, list(result.imported_track_ids), auto_snapshot,
+                )
+            elif auto_snapshot is not None and task:
+                task.update(
+                    auto_process_status="skipped", auto_queued=0,
+                    auto_process_message="没有需要自动处理的新音轨",
+                )
         except (ValueError, OSError) as exc:
             if task:
                 task.update(status="error", stage="failed", message=str(exc))
@@ -1322,6 +1531,7 @@ async def _run_url_import(
     title: str | None,
     author: str | None,
     creator_ids: tuple[str, ...],
+    auto_snapshot: ProcessingSnapshot | None = None,
 ) -> None:
     """后台执行 URL 下载+导入。
 
@@ -1344,6 +1554,15 @@ async def _run_url_import(
                 creator_ids=creator_ids,
             )
             _set("done", "导入完成", result.item_id)
+            if auto_snapshot is not None and result.created:
+                runtime.schedule_auto_processing(task_id, [result.track_id], auto_snapshot)
+            elif auto_snapshot is not None:
+                task = runtime.imports.get(task_id)
+                if task:
+                    task.update(
+                        auto_process_status="skipped", auto_queued=0,
+                        auto_process_message="媒体已存在，没有新增字幕处理任务",
+                    )
         except (ValueError, OSError) as exc:
             _set("error", str(exc))
 
@@ -1474,6 +1693,7 @@ def _item_directory_sizes(root: Path, items: list) -> dict[str, int]:
     sizes: dict[str, int] = {}
     for item in items:
         if item.kind != ItemKind.RJ_WORK:
+            sizes[item.item_id] = sum(track.size for track in item.tracks)
             continue
         total = 0
         item_dir = root / item.directory

@@ -61,6 +61,8 @@ batch_size = 20
 context_size = 10
 # Max parallel LLM translation calls
 workers = 8
+# Optional extra instructions appended to the default subtitle rules.
+prompt = ""
 
 # ── LLM API ─────────────────────────────────────────────────────────────
 [llm]
@@ -118,6 +120,7 @@ class Config:
     batch_size: int = 20
     context_size: int = 10
     translate_workers: int = 8
+    translation_prompt: str = ""
     translation_global_workers: int = 0
     translation_limiter_dir: Path | None = None
     # LLM
@@ -216,6 +219,7 @@ def load_config(
     kwargs["batch_size"] = int(toml_data.get("translate", {}).get("batch_size", 20))
     kwargs["context_size"] = int(toml_data.get("translate", {}).get("context_size", 10))
     kwargs["translate_workers"] = int(toml_data.get("translate", {}).get("workers", 8))
+    kwargs["translation_prompt"] = str(toml_data.get("translate", {}).get("prompt", ""))
     kwargs["translation_global_workers"] = 0
     kwargs["translation_limiter_dir"] = None
     kwargs["llm_api_key"] = toml_data.get("llm", {}).get("api_key", "")

@@ -116,6 +116,23 @@ class UiSettingsStore:
         data.pop("media_concurrency", None)
         self._save(data)
 
+    def get_last_processing_snapshot(self) -> dict[str, str] | None:
+        value = self._load().get("last_processing_snapshot")
+        if not isinstance(value, dict):
+            return None
+        keys = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
+        snapshot = {key: str(value.get(key, "")) for key in keys}
+        return snapshot if all(snapshot.values()) else None
+
+    def set_last_processing_snapshot(self, snapshot: dict[str, str]) -> None:
+        keys = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
+        normalized = {key: str(snapshot.get(key, "")).strip() for key in keys}
+        if not all(normalized.values()):
+            raise ValueError("processing snapshot is incomplete")
+        data = self._load()
+        data["last_processing_snapshot"] = normalized
+        self._save(data)
+
     def get_translate_workers(self) -> int:
         value = int(self._load().get("translate_workers", 8))
         return max(1, value)
@@ -125,6 +142,18 @@ class UiSettingsStore:
             raise ValueError("translate_workers must be at least 1")
         data = self._load()
         data["translate_workers"] = value
+        self._save(data)
+
+    def get_translation_prompt(self) -> str:
+        return str(self._load().get("translation_prompt", ""))
+
+    def set_translation_prompt(self, value: str) -> None:
+        data = self._load()
+        prompt = value.strip()
+        if prompt:
+            data["translation_prompt"] = prompt
+        else:
+            data.pop("translation_prompt", None)
         self._save(data)
 
     # Compatibility for existing callers and settings files.

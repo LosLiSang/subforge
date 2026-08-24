@@ -27,7 +27,7 @@ document.addEventListener('click',event=>{for(const picker of document.querySele
 function appendCreatorOption(creator){for(const picker of document.querySelectorAll('[data-creator-picker]')){const list=picker.querySelector('[data-creator-suggestions]');if(!list||picker.querySelector(`[data-creator-option][data-creator-id="${creator.creator_id}"]`))continue;const option=document.createElement('button');option.type='button';option.className='creator-suggestion';option.dataset.creatorOption='';option.dataset.creatorId=creator.creator_id;option.dataset.creatorName=creator.name;option.dataset.creatorKind=creator.kind;option.innerHTML=`<span class="creator-tag creator-tag-${creator.kind}"></span><small>${creator.kind==='circle'?'社团':'声优'}</small>`;option.querySelector('span').textContent=creator.name;list.insertBefore(option,list.querySelector('[data-create-from-picker]'))}}
 function openCreatorCreateDialog(picker,name){const dialog=document.querySelector('[data-creator-create-dialog]');if(!dialog)return;const form=dialog.querySelector('[data-creator-create-form]');form.reset();form.elements.picker_id.value=picker.dataset.pickerId;form.elements.name.value=name||'';const stream=picker.dataset.contextKind==='stream_archive';form.elements.kind.value=stream?'voice_actor':'voice_actor';for(const radio of form.elements.kind)radio.disabled=stream&&radio.value!=='voice_actor';dialog.querySelector('[data-dialog-error]').hidden=true;dialog.showModal();form.elements.name.focus()}
 for(const form of document.querySelectorAll('[data-creator-create-form]'))form.addEventListener('submit',async event=>{event.preventDefault();const dialog=form.closest('dialog'),error=dialog.querySelector('[data-dialog-error]');error.hidden=true;const body=new URLSearchParams(new FormData(form)).toString();const response=await fetch('/api/creators',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const data=await response.json().catch(()=>({}));if(!response.ok){error.textContent=data.error||`创建失败（HTTP ${response.status}）`;error.hidden=false;return}appendCreatorOption(data);document.querySelector(`[data-picker-id="${form.elements.picker_id.value}"]`)?._addCreator(data);dialog.close()});
-for(const button of document.querySelectorAll('[data-test-endpoint]'))button.addEventListener('click',async()=>{const output=button.parentElement.querySelector('.check-result');if(!output)return;output.textContent='检查中…';try{const response=await fetch(button.dataset.testEndpoint,{method:'POST'});const data=await response.json().catch(()=>({ok:false,message:`HTTP ${response.status}`}));output.textContent=data.ok?`✅ ${data.message}`:`❌ ${data.message||data.ok}`;}catch(e){output.textContent=`❌ ${e.message||e}`;}});
+for(const button of document.querySelectorAll('[data-test-endpoint]'))button.addEventListener('click',async()=>{const output=button.closest('.profile-row-actions')?.querySelector('.check-result')||button.parentElement.querySelector('.check-result');if(!output)return;const label=button.querySelector('span'),originalLabel=label?.textContent;button.disabled=true;if(label)label.textContent='测试中';output.textContent='检查中…';try{const response=await fetch(button.dataset.testEndpoint,{method:'POST'});const data=await response.json().catch(()=>({ok:false,message:`HTTP ${response.status}`}));output.textContent=data.ok?`✅ ${data.message}`:`❌ ${data.message||data.ok}`;}catch(e){output.textContent=`❌ ${e.message||e}`;}finally{button.disabled=false;if(label)label.textContent=originalLabel;}});
 for(const button of document.querySelectorAll('[data-pick-directory]'))button.addEventListener('click',async()=>{const response=await fetch('/picker/directory',{method:'POST'});if(!response.ok)return;const data=await response.json();if(data.cancelled)return;const field=button.dataset.field,form=button.closest('form');form.elements[`${field}_selection`].value=data.selection_id;form.elements[field].value=data.name;});
 for(const button of document.querySelectorAll('[data-pick-cover]'))button.addEventListener('click',async()=>{const response=await fetch('/picker/image',{method:'POST'});if(!response.ok)return;const data=await response.json();if(data.cancelled)return;const form=button.closest('form');form.elements.selection_id.value=data.selection_id;form.querySelector('[data-cover-name]').textContent=data.filename;button.textContent='应用封面';button.type='submit';});
 const workEditDialog=document.getElementById('work-edit-dialog');
@@ -52,11 +52,13 @@ async function pollTaskRows(){
   if(reachedTerminal)location.reload();
  }catch(_error){}finally{taskPollInFlight=false}
 }
-if(taskRows.length){pollTaskRows();setInterval(pollTaskRows,1000);document.addEventListener('visibilitychange',pollTaskRows)}
+function taskPollDelay(){const fastStage=taskRows.some(row=>{const status=row.querySelector('.task-status')?.textContent.trim(),stage=row.querySelector('.task-stage')?.textContent.trim();return['queued','running'].includes(status)&&['model','asr'].includes(stage)});return fastStage?250:1000}
+async function scheduleTaskPoll(){await pollTaskRows();setTimeout(scheduleTaskPoll,taskPollDelay())}
+if(taskRows.length){scheduleTaskPoll();document.addEventListener('visibilitychange',pollTaskRows)}
 /* 设置页 Tab 切换：同屏只显示一个分区，表单仍是一个整体（保存语义不变） */
 for(const tab of document.querySelectorAll('.tab-bar .tab')){tab.addEventListener('click',()=>{const name=tab.dataset.tab;for(const t of document.querySelectorAll('.tab-bar .tab')){t.classList.toggle('active',t===tab);t.setAttribute('aria-selected',t===tab?'true':'false')}for(const panel of document.querySelectorAll('[data-tab-panel]'))panel.classList.toggle('active',panel.dataset.tabPanel===name);});}
-/* 配置弹窗：新增/编辑共用一个 dialog，编辑时用 data-edit-profile 回填（不含 Key） */
-for(const button of document.querySelectorAll('[data-open-dialog]')){button.addEventListener('click',()=>{const dialog=document.getElementById(button.dataset.openDialog);if(!dialog)return;const form=dialog.querySelector('form');form.reset();form.elements.profile_id.value='';const editRaw=button.dataset.editProfile;if(editRaw){const p=JSON.parse(editRaw);form.elements.profile_id.value=p.profile_id||'';form.elements.name.value=p.name||'';form.elements.base_url.value=p.base_url||'';form.elements.model.value=p.model||'';form.elements.api_key.value='';form.elements.proxy_url.value=p.proxy_url||'';form.elements.ca_bundle.value=p.ca_bundle||'';form.elements.verify_tls.checked=p.verify_tls!==false;dialog.querySelector('[data-dialog-title]').textContent='编辑配置';}else{dialog.querySelector('[data-dialog-title]').textContent='新增配置';}dialog.showModal();});}
+/* 配置弹窗：新增/复制/编辑共用一个 dialog，浏览器端始终不接触已有 Key。 */
+for(const button of document.querySelectorAll('[data-open-dialog]')){button.addEventListener('click',()=>{const dialog=document.getElementById(button.dataset.openDialog);if(!dialog)return;const form=dialog.querySelector('form'),title=dialog.querySelector('[data-dialog-title]'),submit=dialog.querySelector('[data-dialog-submit]');form.reset();form.elements.profile_id.value='';form.elements.copy_from_profile_id.value='';form.elements.api_key.placeholder='可选';const raw=button.dataset.copyProfile||button.dataset.editProfile;if(raw){const p=JSON.parse(raw);form.elements.name.value=p.name||'';form.elements.base_url.value=p.base_url||'';form.elements.model.value=p.model||'';form.elements.api_key.value='';form.elements.proxy_url.value=p.proxy_url||'';form.elements.ca_bundle.value=p.ca_bundle||'';form.elements.verify_tls.checked=p.verify_tls!==false;if(button.dataset.copyProfile){form.elements.copy_from_profile_id.value=p.profile_id||'';form.elements.name.value=`${p.name||'未命名配置'} 副本`;form.elements.api_key.placeholder='留空复制原配置凭据';title.textContent='复制配置';submit.textContent='创建副本';}else{form.elements.profile_id.value=p.profile_id||'';form.elements.api_key.placeholder='留空保持不变';title.textContent='编辑配置';submit.textContent='保存';}}else{title.textContent='新增配置';submit.textContent='创建配置';}dialog.showModal();form.elements.name.focus();if(button.dataset.copyProfile)form.elements.name.select();});}
 for(const button of document.querySelectorAll('[data-close-dialog]'))button.addEventListener('click',()=>button.closest('dialog')?.close());
 
 /* 创作者管理：分组搜索、行菜单，以及添加/修改/合并/删除 Dialog。 */
@@ -74,14 +76,30 @@ document.querySelector('[data-delete-to-merge]')?.addEventListener('click',event
 for(const button of document.querySelectorAll('[data-two-step]')){const confirmText='确认删除？';let armed=false,timer=null;button.addEventListener('click',e=>{if(!armed){e.preventDefault();armed=true;button.dataset.originalText=button.textContent;button.textContent=confirmText;button.classList.add('armed');timer=setTimeout(()=>{armed=false;button.textContent=button.dataset.originalText;button.classList.remove('armed')},3000);}else{clearTimeout(timer);}});}
 for(const button of document.querySelectorAll('[data-delete-deepgram]')){let armed=false,timer=null;button.addEventListener('click',async()=>{if(!armed){armed=true;button.textContent='确认';button.classList.add('armed');timer=setTimeout(()=>{armed=false;button.textContent='×';button.classList.remove('armed')},3000);return}clearTimeout(timer);const response=await fetch('/settings/deepgram/delete-key',{method:'POST'});if(!response.ok){armed=false;button.textContent='×';button.classList.remove('armed');return}const status=document.querySelector('[data-deepgram-status]');status.textContent='未配置';status.classList.remove('ok');button.remove()})}
 
-/* 作品库搜索过滤：标题 / RJ / 作者 实时过滤卡片 */
+/* 作品库搜索：服务端跨分页检索，输入停顿后刷新并回到第一页。 */
 const workSearch = document.getElementById('work-search');
 if (workSearch) {
-  workSearch.addEventListener('input', () => {
-    const q = workSearch.value.trim().toLowerCase();
-    for (const card of document.querySelectorAll('.work-card')) {
-      card.style.display = card.textContent.toLowerCase().includes(q) ? '' : 'none';
-    }
+  let searchTimer = null;
+  let composing = false;
+  const applyWorkSearch = () => {
+    clearTimeout(searchTimer);
+    const url = new URL(window.location.href);
+    const query = workSearch.value.trim();
+    if (query) url.searchParams.set('q', query); else url.searchParams.delete('q');
+    url.searchParams.delete('page');
+    const target = `${url.pathname}${url.search}`;
+    if (target !== `${window.location.pathname}${window.location.search}`) window.location.assign(target);
+  };
+  const scheduleWorkSearch = () => {
+    if (composing) return;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(applyWorkSearch, 350);
+  };
+  workSearch.addEventListener('input', scheduleWorkSearch);
+  workSearch.addEventListener('compositionstart', () => { composing = true; });
+  workSearch.addEventListener('compositionend', () => { composing = false; scheduleWorkSearch(); });
+  workSearch.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); applyWorkSearch(); }
   });
 }
 
@@ -94,7 +112,9 @@ if (window.parent !== window) {
 
 /* 作品详情：处理设置统一在 Dialog 中编辑，单音轨与整部作品共用。 */
 const processingDialog=document.getElementById('processing-dialog');
-for(const button of document.querySelectorAll('[data-open-processing]'))button.addEventListener('click',()=>{if(!processingDialog)return;const form=processingDialog.querySelector('[data-processing-form]');form.action=button.dataset.action;form.elements.mode.value=button.dataset.mode||'continue';processingDialog.querySelector('[data-processing-title]').textContent=button.dataset.title||'处理设置';button.closest('details')?.removeAttribute('open');processingDialog.showModal()});
+for(const button of document.querySelectorAll('[data-open-processing]'))button.addEventListener('click',()=>{if(!processingDialog)return;const form=processingDialog.querySelector('[data-processing-form]');form.action=button.dataset.action;form.elements.mode.value=button.dataset.mode||'continue';form.elements.mode.dispatchEvent(new Event('change',{bubbles:true}));processingDialog.querySelector('[data-processing-title]').textContent=button.dataset.title||'处理设置';button.closest('details')?.removeAttribute('open');processingDialog.showModal()});
+const processingForm=document.querySelector('[data-processing-form]');
+processingForm?.addEventListener('submit',event=>{if(processingForm.elements.mode.value!=='from_scratch')return;if(!window.confirm('从头进行 ASR 与翻译会覆盖现有源字幕、翻译字幕，并清除断点记录（原字幕会保留备份）。是否继续？'))event.preventDefault()});
 const trackRenameDialog=document.getElementById('track-rename-dialog');
 for(const button of document.querySelectorAll('[data-open-track-rename]'))button.addEventListener('click',()=>{if(!trackRenameDialog)return;const form=trackRenameDialog.querySelector('[data-track-rename-form]');form.action=button.dataset.action;form.elements.filename.value=button.dataset.filename||'';button.closest('details')?.removeAttribute('open');trackRenameDialog.showModal();form.elements.filename.focus();form.elements.filename.select()});
 function formatTrackDuration(value){if(!Number.isFinite(value))return'--:--';const total=Math.max(0,Math.round(value)),hours=Math.floor(total/3600),minutes=Math.floor(total%3600/60),seconds=total%60;return hours?`${hours}:${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')}`:`${minutes}:${String(seconds).padStart(2,'0')}`}
@@ -168,3 +188,85 @@ if (urlImportForm) {
     }
   });
 }
+
+/* ─── 自定义深色下拉：原生 <select> 的 popup 在真实浏览器无法用 option CSS 接管，改为自定义渲染 ─── */
+function enhanceSelects(root = document) {
+  const selects = root.querySelectorAll('select[data-custom-select]');
+  for (const sel of selects) {
+    if (sel.dataset.enhanced) continue;
+    sel.dataset.enhanced = 'true';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'custom-select-wrap';
+
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'custom-select-trigger';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+
+    const label = document.createElement('span');
+    label.className = 'custom-select-label';
+    label.textContent = sel.options[sel.selectedIndex]?.textContent || '';
+    trigger.append(label);
+
+    const chev = document.createElement('span');
+    chev.className = 'custom-select-chev';
+    chev.setAttribute('aria-hidden', 'true');
+    trigger.append(chev);
+
+    const menu = document.createElement('div');
+    menu.className = 'custom-select-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.hidden = true;
+
+    function renderOptions() {
+      menu.innerHTML = '';
+      for (const opt of sel.options) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'custom-select-option' + (opt.value === sel.value ? ' selected' : '');
+        item.setAttribute('role', 'option');
+        item.dataset.value = opt.value;
+        item.textContent = opt.textContent;
+        item.addEventListener('click', () => {
+          sel.value = item.dataset.value;
+          label.textContent = item.textContent;
+          for (const o of menu.querySelectorAll('.custom-select-option')) o.classList.toggle('selected', o === item);
+          close();
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          sel.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        menu.append(item);
+      }
+    }
+    function open() {
+      renderOptions();
+      menu.hidden = false;
+      trigger.setAttribute('aria-expanded', 'true');
+      trigger.classList.add('open');
+    }
+    function close() {
+      menu.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+      trigger.classList.remove('open');
+    }
+    trigger.addEventListener('click', () => (menu.hidden ? open() : close()));
+    document.addEventListener('click', (e) => {
+      if (!wrap.contains(e.target)) close();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') close();
+    });
+    sel.addEventListener('change', () => {
+      label.textContent = sel.options[sel.selectedIndex]?.textContent || '';
+    });
+
+    // 组装并替换：原 select 保留为表单字段（隐藏），仅视觉替换
+    const parent = sel.parentNode;
+    parent.insertBefore(wrap, sel);
+    wrap.append(trigger, menu, sel);
+    sel.style.display = 'none';
+  }
+}
+enhanceSelects();

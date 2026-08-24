@@ -35,6 +35,15 @@ class _SlotAllocator:
         await self._available.put(slot)
 
 
+def _target_srt_is_complete(source_entries: list, target_entries: list) -> bool:
+    """Return whether a target SRT has one non-empty translation per source entry."""
+    if len(source_entries) != len(target_entries):
+        return False
+    source_indices = [entry.index for entry in source_entries]
+    target_indices = [entry.index for entry in target_entries]
+    return source_indices == target_indices and all(entry.text.strip() for entry in target_entries)
+
+
 def _run_asr(job: Job, config: Config, progress_callback, model_ready_callback=None) -> list:
     if config.asr_provider == "local":
         if config.direct_model_path:
@@ -108,7 +117,10 @@ async def process_one(
 
             if target_srt_path.exists():
                 target_entries = read_reusable_srt(target_srt_path)
-                if target_entries is not None:
+                source_entries = read_reusable_srt(source_srt_path) if source_srt_path.exists() else None
+                if target_entries is not None and (
+                    source_entries is None or _target_srt_is_complete(source_entries, target_entries)
+                ):
                     job.asr_progress = 1.0
                     job.translate_progress = 1.0
                     job.status = JobStatus.DONE
@@ -122,6 +134,8 @@ async def process_one(
                         message="Existing target subtitle reused",
                     ))
                     return
+                logger.warning("[%s] %s: Existing target SRT is incomplete; resuming translation",
+                               job.id, job.file_path.name)
 
         entries = None
         if not config.force:
@@ -152,11 +166,13 @@ async def process_one(
             ))
             logger.info("[%s] %s: ASR model preparing", job.id, job.file_path.name)
             def _asr_progress(value: float) -> None:
+                progress = max(0.0, min(1.0, value))
+                job.asr_progress = progress
                 emit_event(event_sink, make_event(
                     EventType.ASR_PROGRESS,
                     job.id,
                     stage="asr",
-                    progress=max(0.0, min(1.0, value)),
+                    progress=progress,
                 ))
 
             def _model_ready() -> None:

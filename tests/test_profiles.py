@@ -66,6 +66,34 @@ def test_blank_key_keeps_existing_and_delete_is_explicit(tmp_path):
     assert store.resolve(profile.profile_id).api_key == ""
 
 
+def test_copy_creates_independent_profile_without_exposing_or_losing_stored_key(tmp_path):
+    store = LlmProfileStore(tmp_path / "profiles.json")
+    source = store.save(
+        "Source", "https://api.example/v1", "model-a", "secret-value-123",
+        proxy_url="http://127.0.0.1:7890", verify_tls=False, ca_bundle="custom-ca.pem",
+    )
+
+    copied = store.copy(
+        source.profile_id,
+        name="Source 副本",
+        base_url="https://api-copy.example/v1",
+        model="model-b",
+        proxy_url="",
+        verify_tls=True,
+        ca_bundle="",
+    )
+
+    assert copied.profile_id != source.profile_id
+    assert copied.name == "Source 副本"
+    assert copied.base_url == "https://api-copy.example/v1"
+    assert copied.model == "model-b"
+    assert copied.api_key == "secret-value-123"
+    assert copied.proxy_url == ""
+    assert copied.verify_tls is True
+    assert copied.ca_bundle == ""
+    assert store.resolve(source.profile_id).name == "Source"
+
+
 def test_delete_removes_entire_profile(tmp_path):
     store = LlmProfileStore(tmp_path / "profiles.json")
     keep = store.save("Keep", "http://127.0.0.1:1234/v1", "m1", "secret-value-123")

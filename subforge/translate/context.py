@@ -124,8 +124,21 @@ async def translate_all(
 
     for idx in range(len(batches)):
         cached_entries = completed_batches.get(str(idx))
-        # 自愈：历史坏缓存（text 全空）不算完成，必须重翻
-        if cached_entries and any(str(c.get("text", "")).strip() for c in cached_entries):
+        expected_entries = batches[idx]["batch"]
+        expected_indices = {entry.index for entry in expected_entries}
+        try:
+            cached_by_index = {int(cached["index"]): cached for cached in (cached_entries or [])}
+        except (KeyError, TypeError, ValueError):
+            cached_by_index = {}
+        # 自愈：只有整批条目齐全且每条都有非空译文，历史缓存才算完成。
+        # 过去使用 any()，导致一个批次只要有一条译文就会被跳过，留下批次内空字幕。
+        cache_is_complete = (
+            bool(cached_entries)
+            and len(cached_entries) == len(expected_entries)
+            and set(cached_by_index) == expected_indices
+            and all(str(cached_by_index[index].get("text", "")).strip() for index in expected_indices)
+        )
+        if cache_is_complete:
             for cached in cached_entries:
                 translated_map[int(cached["index"])] = str(cached["text"])
             completed_count += 1
@@ -157,38 +170,86 @@ async def translate_all(
         prev_entries = batch_info["prev_context"]
         next_entries = batch_info["next_context"]
 
-        user_msg = _build_user_message(batch, prev_entries, next_entries)
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT.format(
-                source_lang=config.source_lang,
-                target_lang=config.target_lang,
-            )},
-            {"role": "user", "content": user_msg},
-        ]
-
-        response = ""
-        translations: list[str] = []
         semantic_attempts = 3
-        for attempt in range(1, semantic_attempts + 1):
-            if attempt == 1:
-                response = await llm_translate_fn(messages, config)
-            else:
-                wait = 2 ** (attempt - 2)
-                logger.warning(
-                    "Batch %d/%d returned no parseable translations; semantic retry %d/%d in %ds",
-                    batch_idx + 1, len(batches), attempt, semantic_attempts, wait,
-                )
-                await asyncio.sleep(wait)
-                async with semantic_retry_lock:
+
+        async def _request_batch(target_batch: list[SubtitleEntry]) -> tuple[str, list[str]]:
+            user_msg = _build_user_message(target_batch, prev_entries, next_entries)
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT.format(
+                    source_lang=config.source_lang,
+                    target_lang=config.target_lang,
+                )},
+                {"role": "user", "content": user_msg},
+            ]
+            response = ""
+            translations: list[str] = []
+            for attempt in range(1, semantic_attempts + 1):
+                if attempt == 1:
                     response = await llm_translate_fn(messages, config)
-            translations = _parse_translations(response, batch)
-            if response.strip() and any(t.strip() for t in translations):
-                break
-        else:
+                else:
+                    wait = 2 ** (attempt - 2)
+                    logger.warning(
+                        "Batch %d/%d returned incomplete translations; semantic retry %d/%d in %ds",
+                        batch_idx + 1, len(batches), attempt, semantic_attempts, wait,
+                    )
+                    await asyncio.sleep(wait)
+                    async with semantic_retry_lock:
+                        response = await llm_translate_fn(messages, config)
+                translations = _parse_translations(response, target_batch)
+                if response.strip() and all(t.strip() for t in translations):
+                    break
+            return response, translations
+
+        response, translations = await _request_batch(batch)
+        missing_entries = [
+            entry for entry, translation in zip(batch, translations)
+            if not translation.strip()
+        ]
+        if missing_entries and len(missing_entries) < len(batch):
+            # Some local models omit individual [N] lines in a large response while
+            # successfully translating the rest. Repair only the missing entries in
+            # smaller requests instead of caching silent holes or failing the file.
+            repaired: dict[int, str] = {}
+            repair_size = 5
+            for start in range(0, len(missing_entries), repair_size):
+                repair_batch = missing_entries[start:start + repair_size]
+                _, repair_translations = await _request_batch(repair_batch)
+                unresolved = [
+                    entry for entry, translation in zip(repair_batch, repair_translations)
+                    if not translation.strip()
+                ]
+                repaired.update({
+                    entry.index: translation
+                    for entry, translation in zip(repair_batch, repair_translations)
+                    if translation.strip()
+                })
+                if unresolved:
+                    if len(repair_batch) == 1:
+                        raise RuntimeError(
+                            f"LLM returned incomplete repair translations after {semantic_attempts} "
+                            f"semantic attempts (batch {batch_idx + 1}, 1 entry empty)."
+                        )
+                    # If a repair group is still partial, fall back to one entry per
+                    # request. This handles local models that drop specific lines in
+                    # a multi-entry response but can translate them individually.
+                    for entry in unresolved:
+                        _, single_translation = await _request_batch([entry])
+                        if not single_translation or not single_translation[0].strip():
+                            raise RuntimeError(
+                                f"LLM returned incomplete repair translations after {semantic_attempts} "
+                                f"semantic attempts (batch {batch_idx + 1}, entry {entry.index} empty)."
+                            )
+                        repaired[entry.index] = single_translation[0]
+            translations = [
+                translation or repaired.get(entry.index, "")
+                for entry, translation in zip(batch, translations)
+            ]
+
+        if not response.strip() or not all(t.strip() for t in translations):
             # Never cache a batch whose response is non-empty at the HTTP layer but
             # contains no usable [N] translations after semantic retries.
             raise RuntimeError(
-                f"LLM returned an empty translation batch after {semantic_attempts} semantic attempts "
+                f"LLM returned an incomplete translation batch after {semantic_attempts} semantic attempts "
                 f"(batch {batch_idx + 1}: "
                 f"{sum(1 for t in translations if not t.strip())}/{len(batch)} entries empty). "
                 "This can be caused by reasoning token exhaustion or a transient "

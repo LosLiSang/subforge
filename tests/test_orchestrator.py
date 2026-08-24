@@ -39,6 +39,8 @@ class TestProcessOne:
 
         def fake_asr(*args, **kwargs):
             kwargs["model_ready_callback"]()
+            kwargs["progress_callback"](0.25)
+            kwargs["progress_callback"](0.75)
             return sample_entries
 
         with (
@@ -50,14 +52,17 @@ class TestProcessOne:
         assert [event.type for event in events] == [
             EventType.ASR_PREPARING,
             EventType.ASR_STARTED,
+            EventType.ASR_PROGRESS,
+            EventType.ASR_PROGRESS,
             EventType.ASR_COMPLETED,
             EventType.TRANSLATION_STARTED,
             EventType.TRANSLATION_PROGRESS,
             EventType.TRANSLATION_COMPLETED,
             EventType.TASK_COMPLETED,
         ]
-        assert events[4].completed == 1
-        assert events[4].total == 1
+        assert [events[2].progress, events[3].progress] == [0.25, 0.75]
+        assert events[6].completed == 1
+        assert events[6].total == 1
         assert all(str(job.file_path) not in (event.message or "") for event in events)
 
     async def test_empty_asr_finishes_as_no_speech_without_translation(self, config, tmp_path):
@@ -241,6 +246,30 @@ class TestProcessOne:
         assert job.translate_progress == 1.0
         mock_asr.assert_not_called()
         mock_translate.assert_not_called()
+
+    async def test_incomplete_target_srt_is_retranslated(self, config, sample_entries, tmp_path):
+        from subforge.translate.srt_io import read_srt, write_srt
+
+        job = Job(file_path=tmp_path / "test.mp3")
+        job.file_path.write_text("audio", encoding="utf-8")
+        write_srt(sample_entries, tmp_path / "test.ja.srt")
+        incomplete = [sample_entries[0], sample_entries[1].__class__(
+            sample_entries[1].index, sample_entries[1].start, sample_entries[1].end, "",
+        )]
+        write_srt(incomplete, tmp_path / "test.zh.srt")
+
+        async def fake_translate(msgs, cfg, activity_callback=None):
+            return "[1] 你好\n[2] 世界"
+
+        with (
+            patch("subforge.orchestrator.asr_transcribe") as mock_asr,
+            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
+        ):
+            await process_one(job, config, pbar_slot=0)
+
+        assert job.status == JobStatus.DONE
+        mock_asr.assert_not_called()
+        assert [entry.text for entry in read_srt(tmp_path / "test.zh.srt")] == ["你好", "世界"]
 
     async def test_legacy_source_srt_is_not_reused(self, config, sample_entries, tmp_path):
         from subforge.translate.srt_io import write_srt

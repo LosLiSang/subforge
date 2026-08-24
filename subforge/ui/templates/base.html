@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}SubForge Library{% endblock %}</title>
+  <link rel="icon" href="/static/subforge-icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -15,7 +16,7 @@
 {% else %}
 <div class="shell">
   <aside class="sidebar">
-    <a class="brand" href="/" target="content-frame"><span class="brand-mark">S</span><span class="brand-text">SubForge</span></a>
+    <a class="brand" href="/" target="content-frame"><img class="brand-icon" src="/static/subforge-icon.svg" alt=""><span class="brand-text">SubForge</span></a>
     <nav class="side-nav">
       <a href="/" target="content-frame" data-nav="/">作品库</a>
       <a href="/profiles" target="content-frame" data-nav="/profiles">翻译配置</a>

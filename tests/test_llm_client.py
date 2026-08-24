@@ -54,12 +54,16 @@ def _ok_response(content: str) -> MagicMock:
     return resp
 
 
-def _error_response(status: int, headers: dict | None = None) -> MagicMock:
+def _error_response(
+    status: int,
+    headers: dict | None = None,
+    body: dict | None = None,
+) -> MagicMock:
     """Create a mock error response that raises on raise_for_status()."""
     resp = MagicMock(spec=httpx.Response)
     resp.status_code = status
     resp.headers = headers or {}
-    resp.json.return_value = {"error": "error"}
+    resp.json.return_value = body or {"error": "error"}
     exc = httpx.HTTPStatusError("error", request=MagicMock(), response=resp)
     resp.raise_for_status.side_effect = exc
     return resp
@@ -139,6 +143,18 @@ class TestTranslateBatch:
         mock_client.post.return_value = _error_response(500)
 
         with pytest.raises(LLMError, match="Non-retryable HTTP error: 500"):
+            await translate_batch(messages, config, client=mock_client)
+
+        assert mock_client.post.call_count == 1
+
+    async def test_non_retryable_http_error_includes_provider_detail(self, config, messages):
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.post.return_value = _error_response(
+            400,
+            body={"error": {"message": "content policy violation", "code": "safety"}},
+        )
+
+        with pytest.raises(LLMError, match="400: content policy violation \\[safety\\]"):
             await translate_batch(messages, config, client=mock_client)
 
         assert mock_client.post.call_count == 1

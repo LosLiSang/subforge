@@ -20,17 +20,18 @@ function bindPlayerAudio(){
   if(seek)seek.addEventListener('input',()=>{player.seek(parseFloat(seek.value));});
   renderNow();
 }
+function setToggle(paused){const t=document.getElementById('play-toggle');if(t)t.classList.toggle('paused',paused);}
 function renderNow(){
   const time=player.currentTime,dur=player.duration||0;
   if(document.getElementById('play-time'))document.getElementById('play-time').textContent=`${fmt(time)} / ${fmt(dur)}`;
-  if(document.getElementById('play-toggle'))document.getElementById('play-toggle').textContent=player.paused?'▶':'⏸';
+  setToggle(player.paused);
   if(document.getElementById('play-seek')){const s=document.getElementById('play-seek');s.max=dur||0;s.value=time||0;}
   updateSubs();
 }
 function wireAudio(){
   const render=()=>{
     if(document.getElementById('play-time'))document.getElementById('play-time').textContent=`${fmt(audio.currentTime)} / ${fmt(audio.duration||0)}`;
-    if(document.getElementById('play-toggle'))document.getElementById('play-toggle').textContent=audio.paused?'▶':'⏸';
+    setToggle(audio.paused);
     if(document.getElementById('play-seek')){const s=document.getElementById('play-seek');s.max=audio.duration||0;s.value=audio.currentTime||0;}
     updateSubs();
   };
@@ -60,6 +61,11 @@ function applySubtitleMode(){
   });
   modeButtons.forEach(b=>b.classList.toggle('active',b.dataset.subtitleMode===subtitleMode));
 }
+modeButtons.forEach(btn=>btn.addEventListener('click',()=>{
+  subtitleMode=btn.dataset.subtitleMode;
+  localStorage.setItem('sf.subtitleMode',subtitleMode);
+  applySubtitleMode();
+}));
 
 async function load(lang,element,missingText){const r=await fetch(`/tracks/${track}/subtitles/${lang}`);if(!r.ok){element.textContent=r.status===404?missingText:'字幕无法读取';return []}return await r.json()}
 function locate(entries,time,old){if(entries[old]&&time>=entries[old].start&&time<=entries[old].end)return old;let lo=0,hi=entries.length-1;while(lo<=hi){const mid=(lo+hi)>>1,e=entries[mid];if(time<e.start)hi=mid-1;else if(time>e.end)lo=mid+1;else return mid}return -1}

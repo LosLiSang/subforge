@@ -50,6 +50,29 @@ def _describe_exception(exception: Exception | None) -> str:
     return " <- ".join(parts)
 
 
+def _response_error_detail(response: httpx.Response) -> str | None:
+    """Extract a short provider error detail without logging request content."""
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        payload = None
+
+    error = payload.get("error", payload) if isinstance(payload, dict) else None
+    if isinstance(error, dict):
+        message = str(error.get("message", "")).strip()
+        code = str(error.get("code", "")).strip()
+        error_type = str(error.get("type", "")).strip()
+        detail = message or code or error_type
+        if detail and code and code != detail:
+            detail = f"{detail} [{code}]"
+        return detail[:500] if detail else None
+    if isinstance(error, str) and error.strip():
+        return error.strip()[:500]
+
+    text = getattr(response, "text", "")
+    return text.strip()[:500] if isinstance(text, str) and text.strip() else None
+
+
 def _is_retryable(exception: Exception) -> bool:
     """Determine if an exception should trigger a retry."""
     if isinstance(exception, LLMAuthError):
@@ -191,7 +214,11 @@ async def translate_batch(
             if not _is_retryable(e):
                 if close_client:
                     await client.aclose()
-                raise LLMError(f"Non-retryable HTTP error: {status}") from e
+                detail = _response_error_detail(e.response)
+                message = f"Non-retryable HTTP error: {status}"
+                if detail:
+                    message += f": {detail}"
+                raise LLMError(message) from e
             if attempt < _MAX_RETRIES:
                 retry_after = _get_retry_after(e)
                 wait = retry_after if retry_after is not None else (2 ** (attempt - 1))
@@ -217,7 +244,12 @@ async def translate_batch(
 
     if close_client:
         await client.aclose()
+    last_error = _describe_exception(last_exception)
+    if isinstance(last_exception, httpx.HTTPStatusError):
+        detail = _response_error_detail(last_exception.response)
+        if detail:
+            last_error = f"{last_error}: {detail}"
     raise LLMError(
         f"LLM call failed after {_MAX_RETRIES} attempts. "
-        f"Last error: {_describe_exception(last_exception)}"
+        f"Last error: {last_error}"
     ) from last_exception

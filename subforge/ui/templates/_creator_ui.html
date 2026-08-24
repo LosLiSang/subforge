@@ -10,7 +10,7 @@
   </div>
   <div class="creator-suggestions" data-creator-suggestions hidden>
     {% for creator in creators %}<button type="button" class="creator-suggestion" data-creator-option data-creator-id="{{ creator.creator_id }}" data-creator-name="{{ creator.name }}" data-creator-kind="{{ creator.kind.value }}"><span class="creator-tag creator-tag-{{ creator.kind.value }}">{{ creator.name }}</span><small>{{ '社团' if creator.kind.value == 'circle' else '声优' }}</small></button>{% endfor %}
-    <button type="button" class="creator-suggestion creator-create-suggestion" data-create-from-picker hidden>＋ 创建“<span data-create-name></span>”</button>
+    <button type="button" class="creator-suggestion creator-create-suggestion" data-create-from-picker hidden>＋ 创建 <span data-create-name></span></button>
     <p class="creator-suggestion-empty" data-suggestion-empty hidden>没有匹配的创作者</p>
   </div>
 </div>

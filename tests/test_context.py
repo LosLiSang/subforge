@@ -310,23 +310,64 @@ class TestEmptyResponseGuard:
         with pytest.raises(RuntimeError, match="3 semantic attempts"):
             await translate_all(entries, config, mock_translate)
 
-    async def test_partially_parsed_batch_is_retried_then_cached(self, config):
-        """个别条目缺前缀：不算致命（翻译质量兜底），但全空才致命。"""
+    async def test_partial_batch_repairs_missing_entries_in_smaller_requests(self, config, monkeypatch):
         config.batch_size = 10
         entries = make_entries(3)
-        mock_translate = AsyncMock(return_value="[1] 你好\n[2] 世界")
+        mock_translate = AsyncMock(side_effect=[
+            "[1] 你好\n[2] 世界",
+            "[1] 你好\n[2] 世界",
+            "[1] 你好\n[2] 世界",
+            "[3] 补齐翻译",
+        ])
+        monkeypatch.setattr("subforge.translate.context.asyncio.sleep", AsyncMock())
 
         result = await translate_all(entries, config, mock_translate)
 
-        assert result[0].text == "你好"
-        assert result[1].text == "世界"
-        assert result[2].text == ""  # 单条缺失不致命
+        assert mock_translate.call_count == 4
+        assert [entry.text for entry in result] == ["你好", "世界", "补齐翻译"]
+
+    async def test_partially_parsed_batch_is_retried_until_complete(self, config, monkeypatch):
+        """批次内缺少任一条目时不能缓存，必须重试到整批完整。"""
+        config.batch_size = 10
+        entries = make_entries(3)
+        mock_translate = AsyncMock(side_effect=[
+            "[1] 你好\n[2] 世界",
+            "[1] 你好\n[2] 世界\n[3] 完整翻译",
+        ])
+        monkeypatch.setattr("subforge.translate.context.asyncio.sleep", AsyncMock())
+
+        result = await translate_all(entries, config, mock_translate)
+
+        assert mock_translate.call_count == 2
+        assert [entry.text for entry in result] == ["你好", "世界", "完整翻译"]
 
 
 class TestResumeHealsBlankCachedBatches:
     @pytest.fixture
     def config(self):
         return Config(source_lang="ja", target_lang="zh", batch_size=2, context_size=3)
+
+    async def test_resume_with_partial_cached_batch_is_retranslated(self, config, tmp_path):
+        """历史部分缓存也必须自愈重翻，不能跳过整批。"""
+        store = ResumeStore(tmp_path / "jobs")
+        state = ResumeState(
+            schema_version=1, job_key="t1", media={}, config_fingerprint={}, paths={},
+        )
+        state.translation["completed_batches"] = {
+            "0": [{"index": 1, "start": 0.0, "end": 1.0, "text": "旧1"},
+                  {"index": 2, "start": 1.0, "end": 2.0, "text": ""}],
+        }
+        state.translation["total_batches"] = 2
+        mock_translate = AsyncMock(return_value="[1] 新1\n[2] 新2\n[3] 新3\n[4] 新4")
+
+        result = await translate_all(
+            make_entries(4), config, mock_translate,
+            resume_state=state, resume_store=store,
+        )
+
+        assert mock_translate.call_count >= 1
+        assert result[0].text == "新1"
+        assert result[1].text == "新2"
 
     async def test_resume_with_blank_cached_batch_is_retranslated(self, config, tmp_path):
         """历史坏缓存（text 全空但被标记完成）：resume 必须自愈重翻，不能直接复用。"""

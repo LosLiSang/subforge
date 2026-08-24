@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import math
 import shutil
 import subprocess
 import tempfile
+import wave
 from pathlib import Path
 from typing import Callable
 
@@ -158,7 +160,35 @@ def _is_stereo(input_path: Path) -> bool:
     except (subprocess.SubprocessError, OSError, ValueError):
         return False
 
-    return out_path
+
+def _positive_duration(value) -> float:
+    try:
+        duration = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return duration if math.isfinite(duration) and duration > 0 else 0.0
+
+
+def _audio_duration_seconds(input_path: Path) -> float:
+    """Read media duration without relying on faster-whisper metadata."""
+    if input_path.suffix.lower() == ".wav":
+        try:
+            with wave.open(str(input_path), "rb") as audio:
+                frame_rate = audio.getframerate()
+                if frame_rate > 0:
+                    return audio.getnframes() / frame_rate
+        except (OSError, EOFError, wave.Error):
+            pass
+    ffprobe = shutil.which("ffprobe") or str(Path(_FFMPEG).with_name("ffprobe"))
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(input_path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        return _positive_duration(result.stdout.strip())
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return 0.0
 
 
 def transcribe(
@@ -248,8 +278,13 @@ def transcribe(
     if preprocess_audio:
         working_path = _preprocess_audio(file_path)
 
-    def _run_transcribe(wav_path: Path) -> list[SubtitleEntry]:
-        """Run ASR on one wav file, returning entries with absolute timestamps."""
+    def _run_transcribe(
+        wav_path: Path,
+        *,
+        progress_base: float = 0.0,
+        progress_span: float = 1.0,
+    ) -> list[SubtitleEntry]:
+        """Run ASR on one audio file, reporting progress on an absolute 0–1 range."""
         try:
             logger.info("ASR: Transcribing %s...", Path(wav_path).name)
             transcribe_kwargs: dict = {
@@ -274,24 +309,25 @@ def transcribe(
                     "max_speech_duration_s": vad_max_speech_duration_s,
                 }
             segments, info = model.transcribe(str(wav_path), **transcribe_kwargs)
+            total_duration = _positive_duration(getattr(info, "duration", 0.0))
+            if progress_callback and total_duration <= 0:
+                total_duration = _audio_duration_seconds(wav_path)
+            side_entries: list[SubtitleEntry] = []
+            for idx, segment in enumerate(segments, start=1):
+                entry = SubtitleEntry(
+                    index=idx,
+                    start=round(segment.start, 3),
+                    end=round(segment.end, 3),
+                    text=segment.text.strip(),
+                )
+                side_entries.append(entry)
+                if progress_callback and total_duration > 0:
+                    local_progress = min(max(entry.end / total_duration, 0.0), 1.0)
+                    progress_callback(progress_base + local_progress * progress_span)
+            return side_entries
         finally:
             if wav_path is not file_path:
                 wav_path.unlink(missing_ok=True)
-
-        total_duration = info.duration if info and info.duration else 0.0
-        side_entries: list[SubtitleEntry] = []
-        for idx, segment in enumerate(segments, start=1):
-            entry = SubtitleEntry(
-                index=idx,
-                start=round(segment.start, 3),
-                end=round(segment.end, 3),
-                text=segment.text.strip(),
-            )
-            side_entries.append(entry)
-            if progress_callback and total_duration > 0:
-                progress = min(entry.end / total_duration, 1.0)
-                progress_callback(progress)
-        return side_entries
 
     # 双声道（ASMR binaural）：语音可能在左耳或右耳交替出现。
     # 平均混音会砍半语音能量导致 VAD 整段丢失（实测 30s 语音块直接消失），
@@ -301,8 +337,24 @@ def transcribe(
         left_path = _extract_channel(file_path, "FL")
         right_path = _extract_channel(file_path, "FR")
         try:
-            left_entries = _run_transcribe(left_path) if left_path is not file_path else []
-            right_entries = _run_transcribe(right_path) if right_path is not file_path else []
+            available_sides = [
+                path for path in (left_path, right_path) if path is not file_path
+            ]
+            side_results: list[list[SubtitleEntry]] = []
+            span = 1.0 / len(available_sides) if available_sides else 1.0
+            for side_index, side_path in enumerate(available_sides):
+                side_results.append(_run_transcribe(
+                    side_path,
+                    progress_base=side_index * span,
+                    progress_span=span,
+                ))
+            left_entries = side_results[0] if left_path is not file_path and side_results else []
+            right_result_index = 1 if left_path is not file_path else 0
+            right_entries = (
+                side_results[right_result_index]
+                if right_path is not file_path and len(side_results) > right_result_index
+                else []
+            )
         finally:
             if left_path is not file_path:
                 left_path.unlink(missing_ok=True)

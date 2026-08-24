@@ -10,6 +10,7 @@
   <button type="button" class="tab active" data-tab="models" role="tab" aria-selected="true">模型</button>
   <button type="button" class="tab" data-tab="network" role="tab" aria-selected="false">网络与密钥</button>
   <button type="button" class="tab" data-tab="concurrency" role="tab" aria-selected="false">处理能力</button>
+  <button type="button" class="tab" data-tab="translation" role="tab" aria-selected="false">翻译</button>
 </nav>
 
 <form method="post" action="/settings" data-secure class="settings-dashboard">
@@ -21,7 +22,7 @@
         <div class="path-picker">
           <input name="models_dir" value="{{ models_dir }}">
           <input type="hidden" name="models_dir_selection">
-          <button type="button" class="ghost" data-pick-directory data-field="models_dir">选择</button>
+          <button type="button" class="pick-check-btn" data-pick-directory data-field="models_dir"><svg class="pcb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>选择</button>
         </div>
         <small>缺失模型会下载到这个 Hugging Face 缓存根目录。</small>
       </div>
@@ -30,24 +31,20 @@
         <div class="path-picker">
           <input name="direct_medium" value="{{ direct_medium or '' }}" placeholder="（未设置，从缓存加载）">
           <input type="hidden" name="direct_medium_selection">
-          <button type="button" class="ghost" data-pick-directory data-field="direct_medium">选择</button>
+          <button type="button" class="pick-check-btn" data-pick-directory data-field="direct_medium"><svg class="pcb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>选择</button>
+          <span class="field-check"><button type="button" class="pick-check-btn" data-test-endpoint="/settings/models/medium/check"><svg class="pcb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>检查</button><output class="check-result"></output></span>
         </div>
-        <div class="field-inline">
-          <small>设置后完全从此目录加载，不访问 Hugging Face。清空表示取消覆盖。</small>
-          <span class="field-check"><button type="button" class="ghost small" data-test-endpoint="/settings/models/medium/check">检查</button><output class="check-result"></output></span>
-        </div>
+        <small>设置后完全从此目录加载，不访问 Hugging Face。清空表示取消覆盖。</small>
       </div>
       <div class="field">
         <div class="field-label">large-v3 直接模型目录</div>
         <div class="path-picker">
           <input name="direct_large-v3" value="{{ direct_large_v3 or '' }}" placeholder="（未设置，从缓存加载）">
           <input type="hidden" name="direct_large-v3_selection">
-          <button type="button" class="ghost" data-pick-directory data-field="direct_large-v3">选择</button>
+          <button type="button" class="pick-check-btn" data-pick-directory data-field="direct_large-v3"><svg class="pcb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>选择</button>
+          <span class="field-check"><button type="button" class="pick-check-btn" data-test-endpoint="/settings/models/large-v3/check"><svg class="pcb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>检查</button><output class="check-result"></output></span>
         </div>
-        <div class="field-inline">
-          <small>设置后完全从此目录加载，不访问 Hugging Face。清空表示取消覆盖。</small>
-          <span class="field-check"><button type="button" class="ghost small" data-test-endpoint="/settings/models/large-v3/check">检查</button><output class="check-result"></output></span>
-        </div>
+        <small>设置后完全从此目录加载，不访问 Hugging Face。清空表示取消覆盖。</small>
       </div>
     </div>
   </section>
@@ -77,7 +74,17 @@
       <div class="field">
         <div class="field-label">全局翻译请求 Worker 数</div>
         <input class="narrow" type="number" name="translate_workers" min="1" value="{{ translate_workers }}">
-        <small>所有音轨和 Worker 进程共享此请求上限，不会再按同时处理的音轨数成倍放大。与 ASR 模型数量相互独立，重启 UI 后生效。</small>
+        <small>所有音轨和 Worker 进程共享此请求上限，不会再按同时处理的音轨数成倍放大。与 ASR 模型数量相互独立，修改后新任务立即使用。</small>
+      </div>
+    </div>
+  </section>
+
+  <section id="settings-translation" class="dash-section tab-panel" data-tab-panel="translation">
+    <div class="field-list">
+      <div class="field">
+        <div class="field-label">自定义翻译提示词</div>
+        <textarea name="translation_prompt" rows="8" placeholder="例如：译文使用简体中文，语气自然，专有名词保持一致。">{{ translation_prompt }}</textarea>
+        <small>会追加到 SubForge 默认翻译规则之后。默认的字幕编号、输出格式和仅输出译文规则仍然保留；修改后新任务立即使用。</small>
       </div>
     </div>
   </section>

@@ -166,6 +166,8 @@ class TaskManager:
         models_dir_resolver=None,
         direct_model_resolver=None,
         translate_workers: int = 8,
+        translate_workers_resolver=None,
+        translation_prompt_resolver=None,
         media_concurrency: int | None = None,
     ) -> None:
         if media_concurrency is not None:
@@ -178,6 +180,8 @@ class TaskManager:
         self.worker = worker
         self._semaphore = asyncio.Semaphore(asr_concurrency)
         self._translate_workers = translate_workers
+        self._translate_workers_resolver = translate_workers_resolver
+        self._translation_prompt_resolver = translation_prompt_resolver
         self._profile_resolver = profile_resolver
         self._deepgram_key_resolver = deepgram_key_resolver
         self._proxy_resolver = proxy_resolver
@@ -295,6 +299,20 @@ class TaskManager:
         model_name = snapshot.get("whisper_model", "medium")
         model_path = self._direct_model_resolver(model_name) if self._direct_model_resolver else None
         models_dir = self._models_dir_resolver() if self._models_dir_resolver else None
+        translate_workers = (
+            self._translate_workers_resolver()
+            if self._translate_workers_resolver is not None
+            else self._translate_workers
+        )
+        if not isinstance(translate_workers, int) or translate_workers < 1:
+            raise ValueError("translate_workers must be at least 1")
+        translation_prompt = (
+            self._translation_prompt_resolver()
+            if self._translation_prompt_resolver is not None
+            else ""
+        )
+        if not isinstance(translation_prompt, str):
+            raise ValueError("translation_prompt must be a string")
         overrides = {
             "asr_provider": snapshot.get("asr_provider", "local"),
             "model": model_name,
@@ -308,8 +326,9 @@ class TaskManager:
             "llm_proxy_url": profile.proxy_url if profile else "",
             "llm_verify_tls": profile.verify_tls if profile else True,
             "llm_ca_bundle": profile.ca_bundle if profile else "",
-            "translate_workers": self._translate_workers,
-            "translation_global_workers": self._translate_workers,
+            "translate_workers": translate_workers,
+            "translation_global_workers": translate_workers,
+            "translation_prompt": translation_prompt,
             "translation_limiter_dir": str(
                 (self.library.root / ".subforge" / "translation-slots").resolve()
             ),

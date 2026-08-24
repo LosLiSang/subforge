@@ -20,14 +20,33 @@
     </span>
   </div>
   <div class="profile-row-actions">
-    <button type="button" class="ghost small" data-test-endpoint="/profiles/{{ p.profile_id }}/test">测试</button>
-    <output class="check-result"></output>
-    <button type="button" class="ghost small"
-            data-open-dialog="profile-dialog"
-            data-dialog-mode="edit"
-            data-edit-profile='{{ p | tojson }}'>编辑</button>    <form method="post" action="/profiles/{{ p.profile_id }}/delete" data-secure data-delete-profile="/profiles/{{ p.profile_id }}/delete" data-confirm="delete-profile">
-      <button class="danger ghost small" data-two-step>删除</button>
-    </form>
+    <div class="profile-controls" role="group" aria-label="{{ p.name }} 配置操作">
+      <button type="button" class="profile-action profile-action-test" data-test-endpoint="/profiles/{{ p.profile_id }}/test">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.25a5.75 5.75 0 1 0 5.75 5.75M8 5v3l2 1.25"/></svg>
+        <span>测试</span>
+      </button>
+      <button type="button" class="profile-action"
+              data-open-dialog="profile-dialog"
+              data-dialog-mode="copy"
+              data-copy-profile='{{ p | tojson }}'>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.25" y="5.25" width="7.5" height="7.5" rx="1.25"/><path d="M10.75 5.25V4.5A1.25 1.25 0 0 0 9.5 3.25h-6A1.25 1.25 0 0 0 2.25 4.5v6A1.25 1.25 0 0 0 3.5 11.75h.75"/></svg>
+        <span>复制</span>
+      </button>
+      <button type="button" class="profile-action"
+              data-open-dialog="profile-dialog"
+              data-dialog-mode="edit"
+              data-edit-profile='{{ p | tojson }}'>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m10.9 2.6 2.5 2.5-7.75 7.75-3.25.75.75-3.25L10.9 2.6Z"/><path d="m9.5 4 2.5 2.5"/></svg>
+        <span>编辑</span>
+      </button>
+      <form method="post" action="/profiles/{{ p.profile_id }}/delete" data-secure data-delete-profile="/profiles/{{ p.profile_id }}/delete">
+        <button class="profile-action profile-action-delete" data-two-step>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 4.25h9M6 2.75h4M5 6.25v6.5m3-6.5v6.5m3-6.5v6.5M4.25 4.25l.5 9h6.5l.5-9"/></svg>
+          <span>删除</span>
+        </button>
+      </form>
+    </div>
+    <output class="check-result" aria-live="polite"></output>
   </div>
 </article>
 {% else %}
@@ -41,6 +60,7 @@
       <button type="button" class="ghost small" data-close-dialog>✕</button>
     </header>
     <input type="hidden" name="profile_id" value="">
+    <input type="hidden" name="copy_from_profile_id" value="">
     <label>名称<input name="name" required></label>
     <label>Base URL<input name="base_url" required placeholder="https://api.example.com/v1"></label>
     <label>模型<input name="model" required></label>
@@ -50,7 +70,7 @@
     <label class="check-field"><span><input type="checkbox" name="verify_tls" checked> 校验 TLS 证书</span><small>公网端点必须保持开启。仅在你完全信任的内网服务使用"不校验"。</small></label>
     <footer class="dialog-actions">
       <button type="button" class="ghost" data-close-dialog>取消</button>
-      <button class="primary">保存</button>
+      <button class="primary" data-dialog-submit>保存</button>
     </footer>
   </form>
 </dialog>

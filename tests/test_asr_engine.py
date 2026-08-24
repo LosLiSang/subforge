@@ -66,6 +66,31 @@ class TestTranscribe:
         assert entries[0].text == "こんにちは"
         assert entries[1].index == 2
 
+    def test_transcribe_reports_intermediate_progress_when_model_duration_is_missing(self, tmp_path):
+        """UI must not stay at ASR 0% until completion when Whisper omits duration metadata."""
+        audio_path = tmp_path / "progress.wav"
+        _generate_silent_wav(audio_path, duration_secs=4.0)
+        segments = []
+        for index in range(4):
+            segment = MagicMock()
+            segment.start = float(index)
+            segment.end = float(index + 1)
+            segment.text = f"segment {index}"
+            segments.append(segment)
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = (segments, MagicMock(duration=0.0))
+        progress: list[float] = []
+
+        with patch("faster_whisper.WhisperModel", return_value=mock_model):
+            transcribe(
+                audio_path, model_size="tiny", language="ja",
+                progress_callback=progress.append,
+            )
+
+        assert progress[-1] == 1.0
+        assert any(0.0 < value < 1.0 for value in progress), progress
+        assert progress == sorted(progress)
+
     def test_transcribe_monotonic_timestamps(self, tmp_path):
         """Unit test: verify timestamps are monotonic in output."""
         audio_path = tmp_path / "test2.wav"
@@ -168,6 +193,45 @@ class TestWindowsGpuCrashWorkaround:
 
 
 class TestStereoMerge:
+    def test_stereo_transcription_progress_is_monotonic_across_both_channels(self, tmp_path):
+        audio_path = tmp_path / "stereo.wav"
+        left_path = tmp_path / "left.wav"
+        right_path = tmp_path / "right.wav"
+        for path in (audio_path, left_path, right_path):
+            _generate_silent_wav(path, duration_secs=4.0)
+
+        def segments(prefix):
+            result = []
+            for index, end in enumerate((2.0, 4.0), start=1):
+                segment = MagicMock()
+                segment.start = end - 1.0
+                segment.end = end
+                segment.text = f"{prefix}-{index}"
+                result.append(segment)
+            return result
+
+        mock_model = MagicMock()
+        mock_model.transcribe.side_effect = [
+            (segments("left"), MagicMock(duration=4.0)),
+            (segments("right"), MagicMock(duration=4.0)),
+        ]
+        progress: list[float] = []
+
+        with (
+            patch("faster_whisper.WhisperModel", return_value=mock_model),
+            patch("subforge.asr.engine._preprocess_audio", return_value=audio_path),
+            patch("subforge.asr.engine._is_stereo", return_value=True),
+            patch("subforge.asr.engine._extract_channel", side_effect=[left_path, right_path]),
+        ):
+            transcribe(
+                audio_path, model_size="tiny", language="ja", preprocess_audio=True,
+                progress_callback=progress.append,
+            )
+
+        assert progress == sorted(progress)
+        assert progress[-1] == 1.0
+        assert any(0.0 < value < 1.0 for value in progress)
+
     def test_left_only_content_uses_left(self):
         """左侧有语音、右侧空 → 用左侧内容。"""
         from subforge.asr.engine import _merge_stereo_sides

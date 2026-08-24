@@ -205,6 +205,48 @@ async def test_task_request_uses_translate_workers_independent_of_asr_concurrenc
     await manager.close()
 
 
+async def test_task_request_reads_translate_workers_for_each_new_task(tmp_path):
+    store = LibraryStore.initialize(tmp_path / "Library")
+    audio_a = tmp_path / "audio-a.m4a"
+    audio_b = tmp_path / "audio-b.m4a"
+    audio_a.write_bytes(b"audio-a")
+    audio_b.write_bytes(b"audio-b")
+    imported_a = store.import_audio(ImportRequest(
+        source=audio_a, kind=ItemKind.RJ_WORK, title="Work A", rj_code="RJ00000110"
+    ))
+    imported_b = store.import_audio(ImportRequest(
+        source=audio_b, kind=ItemKind.RJ_WORK, title="Work B", rj_code="RJ00000111"
+    ))
+    captured = []
+    current_workers = 6
+
+    class CaptureWorker(FakeWorkerAdapter):
+        async def events(self, task, request):
+            captured.append(request["config_overrides"]["translate_workers"])
+            async for event in super().events(task, request):
+                yield event
+
+    manager = TaskManager(
+        store,
+        CaptureWorker([{"type": "task_completed", "stage": "complete"}]),
+        translate_workers=6,
+        translate_workers_resolver=lambda: current_workers,
+    )
+    task_a = await manager.enqueue(imported_a.track_id, ProcessingSnapshot(
+        asr_provider="local", scene="normal", whisper_model="medium", llm_profile_id="p"
+    ))
+    await _wait_until(lambda: manager.get_task(task_a.task_id).status == "completed")
+
+    current_workers = 1
+    task_b = await manager.enqueue(imported_b.track_id, ProcessingSnapshot(
+        asr_provider="local", scene="normal", whisper_model="medium", llm_profile_id="p"
+    ))
+    await _wait_until(lambda: manager.get_task(task_b.task_id).status == "completed")
+
+    assert captured == [6, 1]
+    await manager.close()
+
+
 async def test_task_request_uses_direct_model_path_when_configured(tmp_path):
     store = LibraryStore.initialize(tmp_path / "Library")
     audio = tmp_path / "audio.m4a"

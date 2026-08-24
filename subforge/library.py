@@ -108,6 +108,7 @@ class FolderImportResult:
     skipped_count: int
     failed_count: int
     failures: list[dict[str, str]]
+    imported_track_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -676,6 +677,7 @@ class LibraryStore:
         item_id = existing.item_id if existing else None
         used_names = {Path(track.media).name.casefold() for track in existing.tracks} if existing else set()
         imported = duplicates = failed = 0
+        imported_track_ids: list[str] = []
         failures: list[dict[str, str]] = []
         temporary_root = Path(tempfile.mkdtemp(prefix="subforge-folder-import-"))
         total = len(scan.media)
@@ -709,6 +711,7 @@ class LibraryStore:
                     item_id = result.item_id
                     if result.created:
                         imported += 1
+                        imported_track_ids.append(result.track_id)
                         used_names.add(archive_name.casefold())
                     else:
                         duplicates += 1
@@ -744,6 +747,7 @@ class LibraryStore:
             status=status, item_id=item_id, imported_count=imported,
             duplicate_count=duplicates, skipped_count=scan.skipped_count,
             failed_count=failed, failures=failures,
+            imported_track_ids=tuple(imported_track_ids),
         )
 
     def _convert_video_to_m4a(self, source: Path, destination: Path) -> None:

@@ -20,7 +20,7 @@ function bindPlayerAudio(){
   if(seek)seek.addEventListener('input',()=>{player.seek(parseFloat(seek.value));});
   renderNow();
 }
-function setToggle(paused){const t=document.getElementById('play-toggle');if(t)t.classList.toggle('paused',paused);}
+function setToggle(paused){const t=document.getElementById('play-toggle');if(t)t.classList.toggle('playing',!paused);}
 function renderNow(){
   const time=player.currentTime,dur=player.duration||0;
   if(document.getElementById('play-time'))document.getElementById('play-time').textContent=`${fmt(time)} / ${fmt(dur)}`;

@@ -181,5 +181,5 @@ dialog.import-dialog{background:#0f131a;color:#e6edf3;border:1px solid var(--lin
 .play-btn:focus-visible{outline:2px solid rgba(83,155,245,.45);outline-offset:1px;border-color:var(--accent)}
 .play-btn svg{width:20px;height:20px;display:block}
 .play-btn .ic-pause{display:none}
-.play-btn.paused .ic-play{display:none}
-.play-btn.paused .ic-pause{display:block}
+.play-btn.playing .ic-play{display:none}
+.play-btn.playing .ic-pause{display:block}

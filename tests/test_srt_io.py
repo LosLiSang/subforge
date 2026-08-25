@@ -82,3 +82,33 @@ class TestWriteReadRoundtrip:
         path = tmp_path / "empty.srt"
         write_srt([], path)
         assert path.read_text() == ""
+
+    def test_read_srt_caches_by_mtime(self, tmp_path):
+        """read_srt 进程内缓存：同文件重复读取返回副本且不重新解析；
+        修改文件（mtime 变化）后失效，读到新内容。"""
+        from subforge.translate.srt_io import _srt_cache
+
+        path = tmp_path / "cached.srt"
+        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="one")], path)
+        first = read_srt(path)
+        second = read_srt(path)
+        assert first == second
+        assert first is not second  # 返回副本，未暴露内部缓存对象
+
+        # 修改文件后 mtime 应变化；某些文件系统 mtime 精度有限，强制更新以保证失效
+        import os
+        import time
+
+        write_srt([SubtitleEntry(index=1, start=0.0, end=2.0, text="two")], path)
+        os.utime(path, (time.time() + 5, time.time() + 5))
+        refreshed = read_srt(path)
+        assert refreshed[0].text == "two"
+
+    def test_read_srt_mutation_does_not_poison_cache(self, tmp_path):
+        """调用方原地修改返回列表不污染缓存：缓存键命中的是缓存副本。"""
+        path = tmp_path / "mutable.srt"
+        write_srt([SubtitleEntry(index=1, start=0.0, end=1.0, text="hello")], path)
+        first = read_srt(path)
+        first[0].text = "hacked"
+        second = read_srt(path)
+        assert second[0].text == "hello"

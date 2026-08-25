@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import re
+import threading
 from pathlib import Path
 
 from subforge.models import SubtitleEntry
@@ -56,8 +58,20 @@ def write_srt(entries: list[SubtitleEntry], path: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+# 进程内 SRT 解析缓存：按 (path, mtime, size) 失效，避免播放页每次请求都重新解析文件。
+# 返回深拷贝，避免缓存被调用方原地修改（污染缓存命中）。
+_srt_cache: dict[tuple[str, float, int], list[SubtitleEntry]] = {}
+_srt_cache_lock = threading.Lock()
+
+
 def read_srt(path: Path) -> list[SubtitleEntry]:
     """Parse an SRT file into a list of SubtitleEntries."""
+    stat = path.stat()
+    key = (str(path), stat.st_mtime, stat.st_size)
+    with _srt_cache_lock:
+        cached = _srt_cache.get(key)
+        if cached is not None:
+            return copy.deepcopy(cached)
     content = path.read_text(encoding="utf-8")
     blocks = content.strip().split("\n\n")
     entries: list[SubtitleEntry] = []
@@ -75,4 +89,6 @@ def read_srt(path: Path) -> list[SubtitleEntry]:
         start = _parse_timestamp(start_str.strip())
         end = _parse_timestamp(end_str.strip())
         entries.append(SubtitleEntry(index=index, start=start, end=end, text=text))
-    return entries
+    with _srt_cache_lock:
+        _srt_cache[key] = entries
+    return copy.deepcopy(entries)

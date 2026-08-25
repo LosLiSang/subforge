@@ -137,6 +137,17 @@ def test_transcript_rows_include_time_and_translation_columns(tmp_path):
     assert "target[i]?.text" in js or "target[i]" in js
 
 
+def test_transcript_is_lazily_rendered_on_details_open():
+    """全部字幕懒加载：transcript DOM 仅在 <details> 展开（toggle）时才构建，
+    折叠时跳过，避免几千条字幕一次性挤进 DOM。"""
+    js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "player.js").read_text(encoding="utf-8")
+    assert "loadSubtitleData" in js and "renderTranscript" in js
+    assert "armTranscriptToggle" in js
+    # renderTranscript 仅在 <details> open 后才被调用
+    assert "details.open" in js
+    assert "toggle" in js
+
+
 def test_global_player_has_persistent_200_percent_volume_control():
     js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "global-player.js").read_text(encoding="utf-8")
 

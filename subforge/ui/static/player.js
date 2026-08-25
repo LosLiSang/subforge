@@ -75,21 +75,45 @@ async function load(lang,element,missingText){const r=await fetch(`/tracks/${tra
 function locate(entries,time,old){if(entries[old]&&time>=entries[old].start&&time<=entries[old].end)return old;let lo=0,hi=entries.length-1;while(lo<=hi){const mid=(lo+hi)>>1,e=entries[mid];if(time<e.start)hi=mid-1;else if(time>e.end)lo=mid+1;else return mid}return -1}
 function fmt(t){if(t==null||!isFinite(t))return '--:--';const s=Math.max(0,Math.floor(t)),h=Math.floor(s/3600),m=Math.floor(s%3600/60),sec=s%60,p=n=>String(n).padStart(2,'0');return h?`${h}:${p(m)}:${p(sec)}`:`${m}:${p(sec)}`}
 
-function loadTranscripts(){
-  Promise.all([load(sourceLang,document.getElementById('source-subtitle'),'暂无源语言字幕'),load(targetLang,document.getElementById('target-subtitle'),'暂无翻译字幕')]).then(values=>{
+/* ===== 字幕加载 =====
+ * 双轨字幕数据（source/target）在播放页初始化时即加载，供字幕条即时显示；
+ * 完整 transcript（全部字幕 <details>）懒加载——点开才构建 DOM，折叠时跳过，
+ * 避免几千条字幕一次性挤进 DOM 造成卡顿。 */
+let transcriptsLoaded=false;
+
+/* 双轨数据：初始化即加载，供字幕条/逐帧定位使用。 */
+function loadSubtitleData(){
+  Promise.all([
+    load(sourceLang,document.getElementById('source-subtitle'),'暂无源语言字幕'),
+    load(targetLang,document.getElementById('target-subtitle'),'暂无翻译字幕'),
+  ]).then(values=>{
     [source,target]=values;
-    const transcript=document.getElementById('transcript');
-    const markInteract=()=>{lastTranscriptInteract=Date.now()};
-    window.addEventListener('wheel',markInteract,{passive:true});
-    window.addEventListener('touchmove',markInteract,{passive:true});
-    transcript.addEventListener('pointerdown',markInteract,{passive:true});
-    source.forEach((entry,i)=>{
-      const row=document.createElement('button');row.type='button';row.dataset.entry=i;row.className='transcript-row';
-      row.innerHTML=`<span class="transcript-time">${fmt(entry.start)}<br>${fmt(entry.end)}</span><span>${entry.text}</span><span>${target[i]?.text||'（未翻译）'}</span>`;
-      row.onclick=()=>{lastTranscriptInteract=Date.now();player.seek(entry.start);player.play()};
-      transcript.append(row);
-    });
     updateSubs();
+    if(transcriptsLoaded){renderTranscript();}
+  });
+}
+
+/* 全部字幕列表：仅当 <details> 展开后调用。 */
+function renderTranscript(){
+  const transcript=document.getElementById('transcript');
+  if(!transcript)return;
+  const markInteract=()=>{lastTranscriptInteract=Date.now()};
+  window.addEventListener('wheel',markInteract,{passive:true});
+  window.addEventListener('touchmove',markInteract,{passive:true});
+  transcript.addEventListener('pointerdown',markInteract,{passive:true});
+  source.forEach((entry,i)=>{
+    const row=document.createElement('button');row.type='button';row.dataset.entry=i;row.className='transcript-row';
+    row.innerHTML=`<span class="transcript-time">${fmt(entry.start)}<br>${fmt(entry.end)}</span><span>${entry.text}</span><span>${target[i]?.text||'（未翻译）'}</span>`;
+    row.onclick=()=>{lastTranscriptInteract=Date.now();player.seek(entry.start);player.play()};
+    transcript.append(row);
+  });
+  updateSubs();
+}
+function armTranscriptToggle(){
+  const details=document.getElementById('player')?.querySelector('.track-actions');
+  if(!details)return;
+  details.addEventListener('toggle',()=>{
+    if(details.open&&!transcriptsLoaded){transcriptsLoaded=true;renderTranscript();}
   });
 }
 
@@ -100,7 +124,8 @@ if(!embed){
     let tries=0;
     const iv=setInterval(()=>{tries++;if(window.top.SubForgePlayer||window.SubForgePlayer||tries>50){clearInterval(iv);if(window.top.SubForgePlayer||window.SubForgePlayer)init();}},100);
   }
-  loadTranscripts();
+  loadSubtitleData();
+  armTranscriptToggle();
   applySubtitleMode();
 }else{
   /* embed 模式：全局播放器 iframe 内。不自动播放——由父页面播放栏控制。

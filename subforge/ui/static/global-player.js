@@ -18,9 +18,12 @@
     audioContext: null,
     sourceNode: null,
     gainNode: null,
-    _listeners: { timeupdate: [], play: [], pause: [], loadedmetadata: [] },
-    on(evt, fn) { this._listeners[evt]?.push(fn); },
-    _emit(evt) { for (const fn of this._listeners[evt] || []) fn(this.audio); },
+    /* 监听器按 tag 注册：同 tag 重复注册时替换而非追加。
+     * 本单例跨 iframe 导航存活，无 tag 的 push 会让闭包（及其捕获的死文档）永久滞留。 */
+    _listeners: { timeupdate: new Map(), play: new Map(), pause: new Map(), loadedmetadata: new Map() },
+    on(evt, fn, tag) { const m = this._listeners[evt]; if (m) m.set(tag || fn, fn); },
+    off(evt, tag) { this._listeners[evt]?.delete(tag); },
+    _emit(evt) { for (const fn of this._listeners[evt]?.values() || []) fn(this.audio); },
     get currentTime() { return this.audio ? this.audio.currentTime : 0; },
     get paused() { return this.audio ? this.audio.paused : true; },
     get duration() { return this.audio ? this.audio.duration || 0 : 0; },
@@ -166,12 +169,13 @@
     const volume = Number.isFinite(st.volume) ? Math.max(0, Math.min(2, st.volume)) : 1;
     const coverUrl = st.itemId ? `/covers/${st.itemId}` : '';
     bar.innerHTML = `
-      <div class="player-bar-title-row"><a class="player-bar-title" href="/tracks/${st.trackId}/play" target="content-frame" title="${safeTitle}">${safeTitle}</a></div>
-      <div class="player-bar-lower-row">
+      <div class="player-bar-row">
         <div class="player-bar-cover">${coverUrl ? `<img src="${coverUrl}" alt="" onerror="this.hidden=true">` : ''}</div>
+        <a class="player-bar-title" href="/tracks/${st.trackId}/play" target="content-frame" title="${safeTitle}">${safeTitle}</a>
         <div class="player-bar-progress-wrap"><input type="range" class="player-bar-seek" data-role="seek" min="0" max="${st.duration || 0}" step="0.1" value="${st.currentTime || 0}" aria-label="播放进度"><span class="player-bar-time" data-role="time">${fmtT(st.currentTime)}</span></div>
         <button type="button" class="ghost small player-bar-toggle" data-role="toggle" aria-label="播放/暂停"><svg class="ic-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v13.72a1 1 0 0 0 1.52.86l11-6.86a1 1 0 0 0 0-1.72l-11-6.86A1 1 0 0 0 8 5.14z"/></svg><svg class="ic-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
         <label class="player-bar-volume" title="音量"><span aria-hidden="true">🔊</span><input type="range" data-role="volume" min="0" max="2" step="0.01" value="${volume}" aria-label="音量，最高 200%"><output data-role="volume-value">${Math.round(volume * 100)}%</output></label>
+        <button type="button" class="ghost small" data-role="float" aria-label="悬浮歌词" title="悬浮歌词">词</button>
         <button type="button" class="ghost small" data-role="open" aria-label="打开播放页">⛶</button>
       </div>
     `;
@@ -180,6 +184,13 @@
     const volumeInput = bar.querySelector('[data-role="volume"]');
     const volumeValue = bar.querySelector('[data-role="volume-value"]');
     bar.querySelector('[data-role="toggle"]').addEventListener('click', () => player.toggle());
+    const floatBtn = bar.querySelector('[data-role="float"]');
+    const floatApi = window.SubForgeFloatLyrics;
+    if (floatApi) {
+      floatBtn.classList.toggle('active', floatApi.isActive());
+      floatBtn.addEventListener('click', () => floatApi.toggle(st.trackId));
+      floatApi.onChange(() => floatBtn.classList.toggle('active', floatApi.isActive()), 'bar');
+    } else floatBtn.hidden = true;
     // iframe 外壳：打开播放页 = iframe 内导航（顶层外壳保持不变）
     bar.querySelector('[data-role="open"]').addEventListener('click', () => {
       const frame = document.getElementById('content-frame');
@@ -198,10 +209,10 @@
       volumeValue.value = `${Math.round(player.volume * 100)}%`;
       volumeValue.textContent = `${Math.round(player.volume * 100)}%`;
     };
-    player.on('timeupdate', syncUI);
-    player.on('play', syncUI);
-    player.on('pause', syncUI);
-    player.on('loadedmetadata', syncUI);
+    player.on('timeupdate', syncUI, 'bar');
+    player.on('play', syncUI, 'bar');
+    player.on('pause', syncUI, 'bar');
+    player.on('loadedmetadata', syncUI, 'bar');
     syncUI();
   };
 

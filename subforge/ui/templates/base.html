@@ -6,6 +6,7 @@
   <title>{% block title %}SubForge Library{% endblock %}</title>
   <link rel="icon" href="/static/subforge-icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/theme-overrides.css">
 </head>
 <body>
 {% if is_frame %}
@@ -18,14 +19,19 @@
   <aside class="sidebar">
     <a class="brand" href="/" target="content-frame"><img class="brand-icon" src="/static/subforge-icon.svg" alt=""><span class="brand-text">SubForge</span></a>
     <nav class="side-nav">
-      <a href="/" target="content-frame" data-nav="/">作品库</a>
-      <a href="/profiles" target="content-frame" data-nav="/profiles">翻译配置</a>
-      <a href="/creators" target="content-frame" data-nav="/creators">创作者</a>
-      <a href="/settings" target="content-frame" data-nav="/settings">设置</a>
-      <a href="/stats" target="content-frame" data-nav="/stats">统计</a>
-      <a href="/downloads" target="content-frame" data-nav="/downloads">任务中心</a>
-      <a href="/about" target="content-frame" data-nav="/about">关于</a>
+      <a href="/" target="content-frame" data-nav="/"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>作品库</a>
+      <a href="/profiles" target="content-frame" data-nav="/profiles"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><path d="M2 12h20"/></svg>翻译配置</a>
+      <a href="/creators" target="content-frame" data-nav="/creators"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>创作者</a>
+      <a href="/settings" target="content-frame" data-nav="/settings"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>设置</a>
+      <a href="/stats" target="content-frame" data-nav="/stats"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="16"/></svg>统计</a>
+      <a href="/downloads" target="content-frame" data-nav="/downloads"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>任务中心</a>
+      <a href="/about" target="content-frame" data-nav="/about"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>关于</a>
     </nav>
+    <button class="theme-toggle" type="button" data-theme-toggle aria-label="切换主题">
+      <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.4A8.5 8.5 0 0 1 8.6 3.8 8.5 8.5 0 1 0 20.2 15.4Z"/></svg>
+      <span data-theme-label>白色主题</span>
+    </button>
   </aside>
   <iframe id="content-frame" name="content-frame" src="/" title="内容"></iframe>
 </div>
@@ -33,6 +39,7 @@
 <script>window.SUBFORGE_CSRF={{ csrf_token|tojson }};</script>
 <script src="/static/app.js"></script>
 <script src="/static/global-player.js"></script>
+<script src="/static/float-lyrics.js"></script>
 <script>
 /* 侧边栏高亮：点击立即高亮；iframe 内页通过 postMessage 通知路径变化 */
 const navLinks = [...document.querySelectorAll('.side-nav a')];

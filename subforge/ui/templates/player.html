@@ -1,12 +1,12 @@
 {% extends "base.html" %}{% block title %}播放 · {{ item.title }}{% endblock %}{% block content %}
 {% if embed %}
-<section class="player" id="player" data-embed="1" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}" data-item-id="{{ item.item_id }}">
+<section class="player" id="player" data-embed="1" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}" data-item-id="{{ item.item_id }}" data-next-track-id="{{ next_track_id or '' }}">
 <audio id="audio" preload="auto" src="/tracks/{{ track.track_id }}/media"></audio>
 </section>
 <script src="/static/player.js"></script>
 {% else %}
 <a class="back-link" href="/items/{{ item.item_id }}">← 返回作品</a>
-<section class="player" id="player" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}" data-item-id="{{ item.item_id }}">
+<section class="player" id="player" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}" data-item-id="{{ item.item_id }}" data-next-track-id="{{ next_track_id or '' }}">
 <div class="work-hero">
   <div class="work-hero-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}">
     <img class="work-cover-img" src="/covers/{{ item.item_id }}" alt="" loading="lazy" onerror="this.remove()">
@@ -34,6 +34,8 @@
   <button type="button" data-subtitle-mode="source">仅原文</button>
   <button type="button" data-subtitle-mode="target">仅译文</button>
   <button type="button" data-subtitle-mode="off">关闭</button>
+  <span class="subtitle-mode-divider" aria-hidden="true"></span>
+  <button type="button" class="ghost" id="float-lyrics-btn" aria-label="悬浮歌词">悬浮歌词</button>
 </div>
 <div class="subtitles">
   <div data-subtitle-panel="source"><small>{{ track.source_language }}</small><p id="source-subtitle">正在加载源字幕…</p></div>

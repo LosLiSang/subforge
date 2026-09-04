@@ -1,9 +1,12 @@
 (()=>{
 const root=document.getElementById('player');if(!root)return;
-const track=root.dataset.trackId,sourceLang=root.dataset.sourceLanguage,targetLang=root.dataset.targetLanguage,itemId=root.dataset.itemId||'';
+const track=root.dataset.trackId,sourceLang=root.dataset.sourceLanguage,targetLang=root.dataset.targetLanguage,itemId=root.dataset.itemId||'',nextTrackId=root.dataset.nextTrackId||'';
 const embed=root.dataset.embed==='1';
 const STORAGE_KEY='sf.playback';
 let source=[],target=[],sourceIndex=0,targetIndex=0;
+let lastRenderedSourceIndex=-2;
+let transcriptRows=[];
+let lastSourceText='',lastTargetText='';
 let lastTranscriptInteract=0;
 let player=window.top.SubForgePlayer||window.SubForgePlayer;
 
@@ -13,7 +16,7 @@ function bindPlayerAudio(){
   if(!player)return;
   const title=root.querySelector('.work-hero-info h1')?.textContent||track;
   player.activate(track,title,itemId);
-  player.ensureAudio().then(a=>{audio=a;if(audio)wireAudio();});
+  player.ensureAudio().then(async a=>{audio=a;if(audio){wireAudio();await player.play().catch(()=>{});}});
   const toggle=document.getElementById('play-toggle');
   if(toggle)toggle.addEventListener('click',()=>player.toggle());
   const seek=document.getElementById('play-seek');
@@ -35,8 +38,11 @@ function wireAudio(){
     if(document.getElementById('play-seek')){const s=document.getElementById('play-seek');s.max=audio.duration||0;s.value=audio.currentTime||0;}
     updateSubs();
   };
-  player.on('timeupdate',render);player.on('play',render);player.on('pause',render);
+  player.on('timeupdate',render,'page');player.on('play',render,'page');player.on('pause',render,'page');
   audio.addEventListener('loadedmetadata',render);
+  audio.addEventListener('ended',()=>{
+    if(nextTrackId) window.location.href=`/tracks/${encodeURIComponent(nextTrackId)}/play`;
+  });
   // 字幕/进度逐帧对齐 audio.currentTime；不依赖稀疏的 timeupdate 事件，
   // 否则浏览器 timeupdate 频率低/不规律时字幕会滞后并随播放时长漂移。
   const loop=()=>{ if(!audio.paused) render(); requestAnimationFrame(loop); };
@@ -45,13 +51,23 @@ function wireAudio(){
 function updateSubs(){
   if(!audio)return;
   const time=audio.currentTime;
-  sourceIndex=locate(source,time,sourceIndex);targetIndex=locate(target,time,targetIndex);
+  const nextSourceIndex=locate(source,time,sourceIndex);
+  const nextTargetIndex=locate(target,time,targetIndex);
   const srcEl=document.getElementById('source-subtitle'),tgtEl=document.getElementById('target-subtitle');
-  if(srcEl)srcEl.textContent=sourceIndex>=0?source[sourceIndex].text:'…';
-  if(tgtEl)tgtEl.textContent=targetIndex>=0?target[targetIndex].text:'…';
-  document.querySelectorAll('[data-entry]').forEach(e=>e.classList.toggle('active',Number(e.dataset.entry)===sourceIndex));
-  const active=document.querySelector('.transcript-row.active');
-  if(active&&'scrollIntoViewIfNeeded' in active&&Date.now()-lastTranscriptInteract>3000)active.scrollIntoViewIfNeeded(false);
+  const sourceText=nextSourceIndex>=0?source[nextSourceIndex].text:'…';
+  const targetText=nextTargetIndex>=0?target[nextTargetIndex].text:'…';
+  sourceIndex=nextSourceIndex;targetIndex=nextTargetIndex;
+  if(srcEl&&sourceText!==lastSourceText){srcEl.textContent=sourceText;lastSourceText=sourceText;}
+  if(tgtEl&&targetText!==lastTargetText){tgtEl.textContent=targetText;lastTargetText=targetText;}
+
+  // 只有当前字幕行变化时才更新列表 DOM；播放中的每一帧不再遍历全部字幕。
+  if(sourceIndex!==lastRenderedSourceIndex){
+    if(transcriptRows[lastRenderedSourceIndex])transcriptRows[lastRenderedSourceIndex].classList.remove('active');
+    if(transcriptRows[sourceIndex])transcriptRows[sourceIndex].classList.add('active');
+    lastRenderedSourceIndex=sourceIndex;
+    const active=transcriptRows[sourceIndex];
+    if(active&&'scrollIntoViewIfNeeded' in active&&Date.now()-lastTranscriptInteract>3000)active.scrollIntoViewIfNeeded(false);
+  }
 }
 
 /* 字幕模式：双语 / 仅原文 / 仅译文 / 关闭，localStorage 记忆 */
@@ -70,6 +86,18 @@ modeButtons.forEach(btn=>btn.addEventListener('click',()=>{
   localStorage.setItem('sf.subtitleMode',subtitleMode);
   applySubtitleMode();
 }));
+
+/* ===== 悬浮歌词：实现在顶层模块 float-lyrics.js（PiP 只允许顶层开窗），这里只做入口委托 ===== */
+const floatBtn=document.getElementById('float-lyrics-btn');
+if(floatBtn){
+  const floatApi=(window.top===window?window:window.top).SubForgeFloatLyrics;
+  if(!floatApi){floatBtn.disabled=true;floatBtn.title='悬浮歌词模块未加载';}
+  else{
+    const syncFloat=()=>floatBtn.classList.toggle('active',floatApi.isActive());
+    floatApi.onChange(syncFloat,'page');syncFloat();
+    floatBtn.addEventListener('click',()=>floatApi.toggle(track));
+  }
+}
 
 async function load(lang,element,missingText){const r=await fetch(`/tracks/${track}/subtitles/${lang}`);if(!r.ok){element.textContent=r.status===404?missingText:'字幕无法读取';return []}return await r.json()}
 function locate(entries,time,old){if(entries[old]&&time>=entries[old].start&&time<=entries[old].end)return old;let lo=0,hi=entries.length-1;while(lo<=hi){const mid=(lo+hi)>>1,e=entries[mid];if(time<e.start)hi=mid-1;else if(time>e.end)lo=mid+1;else return mid}return -1}
@@ -101,12 +129,16 @@ function renderTranscript(){
   window.addEventListener('wheel',markInteract,{passive:true});
   window.addEventListener('touchmove',markInteract,{passive:true});
   transcript.addEventListener('pointerdown',markInteract,{passive:true});
+  const fragment=document.createDocumentFragment();
   source.forEach((entry,i)=>{
     const row=document.createElement('button');row.type='button';row.dataset.entry=i;row.className='transcript-row';
     row.innerHTML=`<span class="transcript-time">${fmt(entry.start)}<br>${fmt(entry.end)}</span><span>${entry.text}</span><span>${target[i]?.text||'（未翻译）'}</span>`;
     row.onclick=()=>{lastTranscriptInteract=Date.now();player.seek(entry.start);player.play()};
-    transcript.append(row);
+    fragment.append(row);
   });
+  transcript.append(fragment);
+  transcriptRows=[...transcript.children];
+  lastRenderedSourceIndex=-2;
   updateSubs();
 }
 function armTranscriptToggle(){

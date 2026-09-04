@@ -1,0 +1,392 @@
+/* A 类玻璃拟态主题：黑色 / 白色两套配色 */
+/* 暗色：OLED 专用——真实黑背景、深灰层级、柔和灰白文本(非纯白)、
+ * 低对比次要文字、柔和蓝色强调、暗色微妙阴影。减少眩光与眼疲劳。 */
+:root{
+  --glass-bg:#000000;
+  --glass-panel:rgba(24,24,29,.62);
+  --glass-panel-solid:#17171c;
+  --glass-line:rgba(148,148,158,.10);
+  --glass-line-strong:rgba(148,148,158,.20);
+  --glass-text:#e7e7ea;
+  --glass-dim:#9b9ba3;
+  --glass-faint:#66666e;
+  --glass-accent:#6f97d4;
+  --glass-accent-soft:rgba(111,151,212,.14);
+  --glass-shadow:0 10px 30px rgba(0,0,0,.5);
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --glass-bg:#f4f7fb;
+  --glass-panel:rgba(255,255,255,.82);
+  --glass-panel-solid:#fff;
+  --glass-line:rgba(71,85,105,.16);
+  --glass-line-strong:rgba(71,85,105,.26);
+  --glass-text:#172033;
+  --glass-dim:#526176;
+  --glass-faint:#7a8798;
+  --glass-accent:#2563c7;
+  --glass-accent-soft:rgba(37,99,199,.10);
+  --glass-shadow:0 12px 32px rgba(30,41,59,.10);
+}
+
+html,body{background:var(--glass-bg);color:var(--glass-text)}
+/* OLED：暗色用纯黑背景（省电、无眩光），去掉辉光径向渐变；白色主题保留柔和渐变 */
+body{background-image:none}
+:root[data-theme="light"] body{background-image:radial-gradient(circle at 8% -10%,rgba(96,165,250,.12),transparent 34%),radial-gradient(circle at 92% 0%,rgba(196,181,253,.12),transparent 30%)}
+
+header,.sidebar,.player-bar{background:var(--glass-panel);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-color:var(--glass-line-strong)}
+.sidebar{box-shadow:var(--glass-shadow)}
+.sidebar .brand,.stat-num,.creator-stat-row strong{color:var(--glass-text)}
+.side-nav a{color:var(--glass-dim)}
+.side-nav a:hover{background:var(--glass-accent-soft);color:var(--glass-text)}
+.side-nav a.active{background:var(--glass-accent-soft);color:var(--glass-accent)}
+
+.panel,.hero,.empty,.task-box,.stat-card,.profile-row,.creator-row,.task-center-row,.model-status-row,.item-sources,.subtitles>div,.track-row,.player-controls,.creator-picker-control,.creator-kind-field,.folder-preview-files,.folder-preview-summary>div{background:var(--glass-panel);border-color:var(--glass-line-strong);box-shadow:var(--glass-shadow)}
+input,select,textarea,.creator-picker-control{background:var(--glass-panel-solid);border-color:var(--glass-line-strong);color:var(--glass-text)}
+input::placeholder,textarea::placeholder,.field small,.page-sub,.stat-label,.section-heading p{color:var(--glass-faint)}
+input:focus,select:focus,textarea:focus{border-color:var(--glass-accent)}
+button,.button{border-color:transparent}
+.ghost,.theme-toggle{background:var(--glass-panel);border-color:var(--glass-line-strong);color:var(--glass-dim);box-shadow:none}
+.ghost:hover,.theme-toggle:hover{background:var(--glass-accent-soft);border-color:var(--glass-accent);color:var(--glass-text)}
+.tab-bar{border-color:var(--glass-line)}
+.tab.active{background:var(--glass-panel);border-color:var(--glass-line-strong);border-bottom-color:var(--glass-panel)}
+.tab:hover{background:var(--glass-accent-soft);color:var(--glass-text)}
+
+.work-card{background:var(--glass-panel);border-color:var(--glass-line-strong);box-shadow:var(--glass-shadow)}
+.work-card:hover{border-color:var(--glass-accent)}
+.transcript-row{background:var(--glass-panel);border-color:var(--glass-line)}
+.transcript-row.active{background:var(--glass-accent-soft);border-color:var(--glass-accent)}
+.status-bar-track{background:var(--glass-accent-soft)}
+
+.theme-toggle{margin-top:auto;width:100%;padding:8px 10px;font-size:.78rem;text-align:left;white-space:nowrap}
+@media(max-width:700px){.theme-toggle{font-size:0;text-align:center;padding:9px 0}.theme-toggle::before{content:'◐';font-size:1rem}}
+
+/* 主题按钮：沿用统一圆角按钮形状，使用太阳/月亮图标 */
+.theme-toggle{display:inline-flex;align-items:center;justify-content:flex-start;gap:8px;min-height:36px;padding:7px 11px;font-size:.84rem;font-weight:600;line-height:1}
+.theme-toggle .theme-icon{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.theme-toggle .theme-icon-sun{display:block}.theme-toggle .theme-icon-moon{display:none}
+.theme-toggle.is-light .theme-icon-sun{display:none}.theme-toggle.is-light .theme-icon-moon{display:block}
+@media(max-width:700px){.theme-toggle{justify-content:center;font-size:0;padding:9px 0}.theme-toggle .theme-icon{width:17px;height:17px}.theme-toggle::before{display:none}}
+
+/* 白色主题：覆盖旧版固定浅色字，避免白底上文字褪色 */
+:root[data-theme="light"] .work-card,
+:root[data-theme="light"] .work-card h2,
+:root[data-theme="light"] .work-card a,
+:root[data-theme="light"] .work-card .work-body,
+:root[data-theme="light"] .track-row,
+:root[data-theme="light"] .track-row h2,
+:root[data-theme="light"] .item-sources,
+:root[data-theme="light"] .stat-card,
+:root[data-theme="light"] .profile-row,
+:root[data-theme="light"] .creator-row,
+:root[data-theme="light"] .task-center-row,
+:root[data-theme="light"] .model-status-row,
+:root[data-theme="light"] .subtitles>div,
+:root[data-theme="light"] .player-controls,
+:root[data-theme="light"] .transcript-row{color:var(--glass-text)}
+:root[data-theme="light"] .page-head h1,
+:root[data-theme="light"] .section-heading h2,
+:root[data-theme="light"] .dash-h2,
+:root[data-theme="light"] .field-label,
+:root[data-theme="light"] .work-hero-info h1,
+:root[data-theme="light"] .stat-num,
+:root[data-theme="light"] .creator-stat-row strong,
+:root[data-theme="light"] .profile-row-name,
+:root[data-theme="light"] .task-center-main strong{color:var(--glass-text)}
+:root[data-theme="light"] .work-body h2{color:#253247}
+:root[data-theme="light"] .work-card a{color:var(--glass-accent)}
+:root[data-theme="light"] .work-meta,
+:root[data-theme="light"] .work-meta a,
+:root[data-theme="light"] .track-row-main,
+:root[data-theme="light"] .creator-row-main{color:var(--glass-dim)}
+:root[data-theme="light"] .player-bar{color:var(--glass-text)}
+:root[data-theme="light"] .player-bar-title{color:var(--glass-text)}
+:root[data-theme="light"] .player-bar-time,
+:root[data-theme="light"] .player-bar-volume{color:var(--glass-dim)}
+:root[data-theme="light"] .creator-row-menu{background:var(--glass-panel-solid);color:var(--glass-text)}
+:root[data-theme="light"] .creator-row-menu button{color:var(--glass-text)}
+:root[data-theme="light"] .creator-row-menu button:hover{background:var(--glass-accent-soft)}
+
+/* 白色主题第二层覆盖：弹窗、菜单、播放器和状态组件 */
+:root[data-theme="light"] dialog,
+:root[data-theme="light"] dialog.profile-dialog,
+:root[data-theme="light"] dialog.import-dialog,
+:root[data-theme="light"] .work-edit-dialog{background:rgba(255,255,255,.94);color:var(--glass-text);border-color:var(--glass-line-strong);box-shadow:0 18px 48px rgba(30,41,59,.18)}
+:root[data-theme="light"] dialog::backdrop{background:rgba(15,23,42,.28)}
+:root[data-theme="light"] .tab.active{color:var(--glass-text)}
+:root[data-theme="light"] .tab:hover{color:var(--glass-text)}
+:root[data-theme="light"] .secondary{background:#e8edf5;color:#344054;border-color:#d0d8e5}
+:root[data-theme="light"] .secondary:hover{background:#dbe4f1}
+:root[data-theme="light"] .status-bar-track{background:#dfe7f2}
+:root[data-theme="light"] .task-error{background:#fff1f0;color:#7f1d1d;border-color:#fca5a5}
+:root[data-theme="light"] .task-error pre{background:#fff7f7;color:#7f1d1d}
+:root[data-theme="light"] .work-hero-actions .work-action-button{background:var(--glass-panel-solid);border-color:var(--glass-line-strong);color:#344054}
+:root[data-theme="light"] .work-hero-actions .work-action-button:hover{background:var(--glass-accent-soft);border-color:var(--glass-accent);color:#1d4f9b}
+:root[data-theme="light"] .library-menu>summary:hover,
+:root[data-theme="light"] .library-menu[open]>summary{background:var(--glass-accent-soft);color:var(--glass-text)}
+:root[data-theme="light"] .library-menu-popover,
+:root[data-theme="light"] .custom-select-menu{background:rgba(255,255,255,.98);border-color:var(--glass-line-strong);box-shadow:0 12px 32px rgba(30,41,59,.16)}
+:root[data-theme="light"] .library-menu-popover .menu-action,
+:root[data-theme="light"] .custom-select-option{color:var(--glass-text)}
+:root[data-theme="light"] .library-menu-popover .menu-action:hover,
+:root[data-theme="light"] .custom-select-option:hover,
+:root[data-theme="light"] .custom-select-option.selected{background:var(--glass-accent-soft);color:#1d4f9b}
+:root[data-theme="light"] .subtitle-mode button.active{background:var(--glass-accent-soft);border-color:rgba(37,99,199,.35);color:#1d4f9b}
+:root[data-theme="light"] .play-btn:hover{background:var(--glass-accent-soft);border-color:var(--glass-accent);color:var(--glass-text)}
+:root[data-theme="light"] .track-row[data-track-player]:hover{border-color:var(--glass-accent)}
+:root[data-theme="light"] .track-row[data-track-player]:focus-visible{outline-color:var(--glass-accent)}
+:root[data-theme="light"] .pagination-page.active{color:#fff}
+:root[data-theme="light"] .pagination-page:hover,
+:root[data-theme="light"] .pagination-nav:hover{background:var(--glass-accent-soft);color:#1d4f9b}
+
+/* 白色主题第三层覆盖：补齐列表、配置组、下拉层和统计卡片 */
+:root[data-theme="light"] .creator-stat-row,
+:root[data-theme="light"] .creator-row,
+:root[data-theme="light"] .profile-controls,
+:root[data-theme="light"] .creator-kind-field,
+:root[data-theme="light"] .creator-dialog-kind,
+:root[data-theme="light"] .merge-source,
+:root[data-theme="light"] .task-center-row,
+:root[data-theme="light"] .model-status-row,
+:root[data-theme="light"] .stat-card{background:var(--glass-panel);border-color:var(--glass-line-strong);color:var(--glass-text);box-shadow:var(--glass-shadow)}
+:root[data-theme="light"] .creator-stat-row strong,
+:root[data-theme="light"] .creator-row-main,
+:root[data-theme="light"] .profile-row-model,
+:root[data-theme="light"] .profile-row-url,
+:root[data-theme="light"] .task-center-main>span,
+:root[data-theme="light"] .task-center-main>a,
+:root[data-theme="light"] .task-center-state,
+:root[data-theme="light"] .task-center-progress{color:var(--glass-dim)}
+:root[data-theme="light"] .profile-controls{background:rgba(241,245,249,.86);padding:3px;border-color:var(--glass-line)}
+:root[data-theme="light"] .profile-action{background:transparent;color:#536174}
+:root[data-theme="light"] .profile-action:hover{background:var(--glass-accent-soft);color:#1d4f9b}
+:root[data-theme="light"] .profile-action-test{color:#1670c5}
+:root[data-theme="light"] .profile-action-delete{color:#d92d20}
+:root[data-theme="light"] .profile-action-delete:hover{background:rgba(217,45,32,.09);color:#b42318}
+
+:root[data-theme="light"] .creator-suggestions,
+:root[data-theme="light"] .creator-suggestion,
+:root[data-theme="light"] .creator-suggestion-empty{background:var(--glass-panel-solid);color:var(--glass-text)}
+:root[data-theme="light"] .creator-suggestions{border-color:var(--glass-line-strong);box-shadow:0 14px 34px rgba(30,41,59,.16)}
+:root[data-theme="light"] .creator-suggestion:hover,
+:root[data-theme="light"] .creator-suggestion:focus-visible{background:var(--glass-accent-soft);color:#1d4f9b}
+:root[data-theme="light"] .creator-suggestion small{color:var(--glass-faint)}
+
+:root[data-theme="light"] .import-tabs{background:rgba(241,245,249,.8);border-bottom-color:var(--glass-line)}
+:root[data-theme="light"] .import-tab{color:var(--glass-dim);background:transparent}
+:root[data-theme="light"] .import-tab:hover{color:var(--glass-text);background:rgba(37,99,199,.06)}
+:root[data-theme="light"] .import-tab.active{color:#1d4f9b;background:#fff;border-bottom-color:var(--glass-accent)}
+
+:root[data-theme="light"] .custom-select-control,
+:root[data-theme="light"] .custom-select-button,
+:root[data-theme="light"] [data-custom-select]{background:var(--glass-panel-solid);color:var(--glass-text);border-color:var(--glass-line-strong)}
+:root[data-theme="light"] .custom-select-option{background:transparent;color:var(--glass-text)}
+:root[data-theme="light"] .custom-select-option small{color:var(--glass-faint)}
+
+:root[data-theme="light"] .field-check,
+:root[data-theme="light"] .field-check span,
+:root[data-theme="light"] .dialog-note,
+:root[data-theme="light"] .selected-name{color:var(--glass-dim)}
+:root[data-theme="light"] .dialog-actions{border-top-color:var(--glass-line)}
+:root[data-theme="light"] .dialog-head{border-bottom-color:var(--glass-line)}
+:root[data-theme="light"] .dialog-head h2,
+:root[data-theme="light"] dialog label,
+:root[data-theme="light"] dialog legend{color:var(--glass-text)}
+
+/* 兼容原生 select 和自定义 select，确保白色主题不会出现黑色控件 */
+:root[data-theme="light"] select,
+:root[data-theme="light"] select option{background-color:#fff;color:#253247}
+:root[data-theme="light"] .select-wrap,
+:root[data-theme="light"] .custom-select{color:var(--glass-text)}
+:root[data-theme="light"] .custom-select-wrap{color:var(--glass-text)}
+:root[data-theme="light"] .custom-select-trigger{background:var(--glass-panel-solid);border-color:var(--glass-line-strong);color:var(--glass-text);box-shadow:none}
+:root[data-theme="light"] .custom-select-trigger:hover,
+:root[data-theme="light"] .custom-select-trigger:focus-visible{background:#fff;border-color:var(--glass-accent);color:var(--glass-text)}
+:root[data-theme="light"] .custom-select-label{color:inherit}
+:root[data-theme="light"] .custom-select-chev{color:var(--glass-faint)}
+
+/* ─── 玻璃主题性能优化 ───
+ * 模糊只保留给固定层，普通列表卡片使用纯色/半透明面板，
+ * 避免点击和 hover 时触发大范围 backdrop 重绘。 */
+.panel,.hero,.empty,.task-box,.stat-card,.profile-row,.creator-row,
+.task-center-row,.model-status-row,.item-sources,.subtitles>div,.track-row,
+.player-controls,.work-card,.creator-stat-row,.creator-dialog-kind,.merge-source,
+.folder-preview-summary>div,.folder-preview-files,.creator-picker-control,
+.creator-suggestions,.library-menu-popover,.custom-select-menu,
+dialog.profile-dialog,dialog.import-dialog,.work-edit-dialog{
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
+
+.work-card,.stat-card,.profile-row,.creator-row,.creator-stat-row,
+.task-center-row,.model-status-row,.track-row{
+  contain:layout paint;
+  box-shadow:0 6px 18px rgba(15,23,42,.12);
+  transition:border-color .15s,transform .15s;
+}
+.work-card:hover{
+  box-shadow:0 8px 22px rgba(15,23,42,.16);
+}
+:root[data-theme="light"] .work-card,
+:root[data-theme="light"] .stat-card,
+:root[data-theme="light"] .profile-row,
+:root[data-theme="light"] .creator-row,
+:root[data-theme="light"] .creator-stat-row,
+:root[data-theme="light"] .task-center-row,
+:root[data-theme="light"] .model-status-row,
+:root[data-theme="light"] .track-row{
+  box-shadow:0 5px 16px rgba(30,41,59,.08);
+}
+:root[data-theme="light"] .work-card:hover{
+  box-shadow:0 7px 18px rgba(30,41,59,.11);
+}
+
+/* 下拉层和弹窗不使用大范围模糊阴影，打开时减少合成压力 */
+.creator-suggestions,.library-menu-popover,.custom-select-menu{
+  box-shadow:0 8px 20px rgba(15,23,42,.18);
+}
+dialog.profile-dialog,dialog.import-dialog,.work-edit-dialog{
+  box-shadow:0 12px 32px rgba(15,23,42,.22);
+}
+:root[data-theme="light"] .creator-suggestions,
+:root[data-theme="light"] .library-menu-popover,
+:root[data-theme="light"] .custom-select-menu{
+  box-shadow:0 8px 20px rgba(30,41,59,.12);
+}
+:root[data-theme="light"] dialog.profile-dialog,
+:root[data-theme="light"] dialog.import-dialog,
+:root[data-theme="light"] .work-edit-dialog{
+  box-shadow:0 12px 32px rgba(30,41,59,.14);
+}
+
+/* 弹窗性能关键修复：禁止遮罩模糊整个页面。
+ * 作品库包含大量封面，dialog::backdrop 的 blur 会导致打开弹窗时整页重绘。 */
+dialog::backdrop{
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  background:rgba(0,0,0,.68)!important;
+}
+:root[data-theme="light"] dialog::backdrop{
+  background:rgba(15,23,42,.30)!important;
+}
+dialog.profile-dialog,
+dialog.import-dialog,
+dialog.work-edit-dialog,
+dialog.folder-preview-dialog{
+  background:#17171c!important;
+  opacity:1;
+}
+:root[data-theme="light"] dialog.profile-dialog,
+:root[data-theme="light"] dialog.import-dialog,
+:root[data-theme="light"] dialog.work-edit-dialog,
+:root[data-theme="light"] dialog.folder-preview-dialog{
+  background:#fff!important;
+}
+
+/* 弹窗视觉重做：实色面板 + 轻遮罩，避免“透明发灰”的雾面效果 */
+dialog.profile-dialog,
+dialog.import-dialog,
+dialog.work-edit-dialog,
+dialog.folder-preview-dialog{
+  border-radius:16px!important;
+  border:1px solid rgba(148,148,158,.22)!important;
+  overflow:visible;
+  box-shadow:0 24px 64px rgba(0,0,0,.6)!important;
+}
+dialog .dialog-head{
+  padding:18px 20px 14px;
+  border-bottom:1px solid rgba(148,148,158,.13);
+}
+dialog .dialog-head h2{letter-spacing:-.015em}
+dialog .dialog-actions{padding:16px 20px 20px}
+.import-tabs{
+  padding:0 20px!important;
+  margin:0!important;
+  background:#121218!important;
+  border-bottom:1px solid rgba(148,148,158,.12);
+}
+.import-tab{min-height:48px!important}
+:root[data-theme="light"] dialog.profile-dialog,
+:root[data-theme="light"] dialog.import-dialog,
+:root[data-theme="light"] dialog.work-edit-dialog,
+:root[data-theme="light"] dialog.folder-preview-dialog{
+  border-color:#d7dee9!important;
+  box-shadow:0 24px 64px rgba(30,41,59,.20)!important;
+}
+:root[data-theme="light"] dialog .dialog-head{border-bottom-color:#e5eaf1}
+:root[data-theme="light"] .import-tabs{background:#f5f7fb!important;border-bottom-color:#e1e7ef}
+:root[data-theme="light"] .import-tab{color:#64748b}
+:root[data-theme="light"] .import-tab.active{background:#fff;color:#1d4f9b}
+:root[data-theme="light"] dialog input,
+:root[data-theme="light"] dialog select,
+:root[data-theme="light"] dialog textarea,
+:root[data-theme="light"] dialog .creator-picker-control,
+:root[data-theme="light"] dialog .custom-select-trigger{background:#fff}
+
+/* ─── OLED 暗色主题：统一 app.css 残留的 GitHub-dark 硬编码色值 ───
+ * 仅作用于暗色(:root:not([data-theme="light"])),白色主题不受影响。
+ * 让 tabs / 菜单 / 下拉 / 建议 / 分页 / 字幕模式等元素也吃 OLED 调色板。 */
+:root:not([data-theme="light"]){
+  --panel:#141419;
+  --panel-2:#1a1a20;
+  --line:#1e1e24;
+  --line-strong:#2b2b32;
+  --fg-dim:#9b9ba3;
+  --fg-faint:#66666e;
+  --accent:#6f97d4;
+  color:#e7e7ea;
+}
+/* 交互 hover/选中：统一为柔和强调底，避免刺眼亮色块 */
+:root:not([data-theme="light"]) header nav a:hover,
+:root:not([data-theme="light"]) .tab:hover,
+:root:not([data-theme="light"]) .ghost:hover,
+:root:not([data-theme="light"]) .profile-action:hover,
+:root:not([data-theme="light"]) .track-menu>summary:hover,
+:root:not([data-theme="light"]) .track-menu[open]>summary,
+:root:not([data-theme="light"]) .pagination-page:hover,
+:root:not([data-theme="light"]) .pagination-nav:hover,
+:root:not([data-theme="light"]) .creator-suggestion:hover,
+:root:not([data-theme="light"]) .creator-suggestion:focus-visible{
+  background:var(--glass-accent-soft);
+  border-color:var(--glass-line-strong);
+  color:var(--glass-text);
+}
+/* 下拉/菜单/建议实色面板改用 OLED 面板色 */
+:root:not([data-theme="light"]) .track-menu-popover,
+:root:not([data-theme="light"]) .library-menu-popover,
+:root:not([data-theme="light"]) .creator-row-menu,
+:root:not([data-theme="light"]) .creator-suggestions{
+  background:var(--glass-panel-solid);
+  border-color:var(--glass-line-strong);
+}
+:root:not([data-theme="light"]) .track-menu-popover>a:hover,
+:root:not([data-theme="light"]) .track-menu-popover>.menu-action:hover,
+:root:not([data-theme="light"]) .track-menu-popover>form>.menu-action:hover,
+:root:not([data-theme="light"]) .library-menu-popover .menu-action:hover,
+:root:not([data-theme="light"]) .creator-row-menu button:hover{
+  background:var(--glass-accent-soft);
+  color:var(--glass-text);
+}
+/* 字幕模式 / 分页 / 字幕行 */
+:root:not([data-theme="light"]) .subtitle-mode button.active{
+  background:var(--glass-accent-soft);
+  border-color:color-mix(in srgb,var(--glass-accent) 42%,transparent);
+  color:var(--glass-accent);
+}
+:root:not([data-theme="light"]) .pagination-page.active{
+  background:var(--glass-accent);
+  border-color:transparent;
+  color:#0b0b0f;
+}
+:root:not([data-theme="light"]) .transcript-row.active{
+  background:var(--glass-accent-soft);
+  border-color:var(--glass-accent);
+}
+:root:not([data-theme="light"]) .transcript-row.active .transcript-time{color:var(--glass-dim)}
+/* 播放器封面 / 编辑封面占位：暗化到 OLED 灰，避免亮色块刺眼 */
+:root:not([data-theme="light"]) .player-bar-cover{background:linear-gradient(135deg,#1a1a20,#24242b)}
+:root:not([data-theme="light"]) .work-edit-cover-preview{background:#0a0a0e}
+/* 谨慎处理图像资源：暗色下封面轻微压暗，减少刺眼亮度跳变 */
+:root:not([data-theme="light"]) .work-cover-img{
+  filter:brightness(.94) saturate(.97);
+}

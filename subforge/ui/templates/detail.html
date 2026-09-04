@@ -1,27 +1,19 @@
 {% extends "base.html" %}{% from "_creator_ui.html" import picker, create_dialog %}{% block title %}{{ item.title }} · SubForge{% endblock %}{% block content %}
 <a class="back-link" href="/">← 返回作品库</a>
 <section class="work-hero">
-  <div class="work-hero-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}"><img class="work-cover-img" src="/covers/{{ item.item_id }}" alt="" loading="lazy" onerror="this.remove()"><span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span></div>
+  <div class="work-hero-left">
+    <div class="work-hero-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}"><img class="work-cover-img" src="/covers/{{ item.item_id }}" alt="" loading="lazy" onerror="this.remove()"><span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span></div>
+  </div>
   <div class="work-hero-info">
     <h1>{{ item.title }}</h1>
     <div class="work-meta">{% if item.rj_code %}<a class="chip chip-rj" href="https://www.dlsite.com/maniax/work/=/product_id/{{ item.rj_code }}" target="_blank" rel="noreferrer">{{ item.rj_code }}</a>{% endif %}{% for creator_id in item.creator_ids %}{% set creator = creator_by_id.get(creator_id) %}{% if creator %}<span class="creator-tag creator-tag-{{ creator.kind.value }}">{{ creator.name }}</span>{% endif %}{% endfor %}{% if item.author %}<span class="chip">{{ item.author }}</span>{% endif %}<span class="chip">{{ item.tracks|length }} 音轨</span></div>
+    {% if overview.status_counts %}<div class="status-summary"><h3 class="dash-h2">音轨状态</h3><div class="status-bars">{% for status, count in overview.status_counts %}<div class="status-bar-row sc-{{ status }}"><span class="status-label"><span class="status-dot"></span>{{ {'playable':'可播放','completed':'完成','queued':'排队','running':'处理中','processing':'处理中','failed':'失败','no_speech':'无语音','waiting':'等待','interrupted':'中断'}.get(status, status) }}</span><div class="status-bar-track"><div class="status-bar-fill" style="width: {{ (count / overview.track_count * 100) if overview.track_count else 0 }}%"></div></div><span class="status-count">{{ count }}</span></div>{% endfor %}</div><dl class="item-facts">{% if item.created_at %}<div class="fact"><dt>创建</dt><dd>{{ item.created_at[:10] }}</dd></div>{% endif %}{% if item.updated_at %}<div class="fact"><dt>更新</dt><dd>{{ item.updated_at[:10] }}</dd></div>{% endif %}{% if item.directory %}<div class="fact fact-wide"><dt>目录</dt><dd class="dir">{{ item.directory }}</dd></div>{% endif %}</dl></div>{% endif %}
   </div>
   <div class="work-hero-actions"><form method="post" action="/items/{{ item.item_id }}/process" class="work-action-direct" data-secure data-process-incomplete-form><input type="hidden" name="asr_provider" value="{{ latest_snapshot.asr_provider if latest_snapshot else 'local' }}"><input type="hidden" name="scene" value="{{ latest_snapshot.scene if latest_snapshot else 'asmr' }}"><input type="hidden" name="whisper_model" value="{{ latest_snapshot.whisper_model if latest_snapshot else default_model }}"><input type="hidden" name="llm_profile_id" value="{{ default_profile_id }}"><input type="hidden" name="mode" value="continue"><button class="small work-action-button" {% if not profiles %}disabled title="请先添加翻译配置"{% endif %}>处理全部未完成音轨</button></form><button type="button" class="small work-action-button work-action-settings" data-open-processing data-action="/items/{{ item.item_id }}/process" data-title="处理全部未完成音轨" data-mode="from_scratch" {% if not profiles %}disabled{% endif %}>处理设置…</button><button type="button" class="small work-action-button work-edit-button work-action-edit" data-open-work-edit>编辑作品</button></div>
-
-  <section class="item-overview" data-overview>
+</section>
+<section class="item-overview work-overview-below" data-overview>
   <h2 class="dash-h2">概览</h2>
-  <div class="stats-grid">
-    <div class="stat-card"><span class="stat-num">{{ overview.track_count }}</span><span class="stat-label">音轨</span></div>
-    <div class="stat-card"><span class="stat-num">{{ overview.total_duration_label }}</span><span class="stat-label">总时长</span></div>
-    <div class="stat-card"><span class="stat-num">{{ (overview.total_size / 1048576)|round(1) }} MB</span><span class="stat-label">总大小</span></div>
-    <div class="stat-card"><span class="stat-num">{{ overview.playable_count }}</span><span class="stat-label">可播放</span></div>
-    <div class="stat-card"><span class="stat-num">{{ overview.processing_count }}</span><span class="stat-label">处理中</span></div>
-    <div class="stat-card"><span class="stat-num small">{{ overview.failed_count }}</span><span class="stat-label">失败</span></div>
-    <div class="stat-card"><span class="stat-num small">{{ overview.no_speech_count }}</span><span class="stat-label">无语音</span></div>
-  </div>
-  {% if overview.status_counts %}<div class="status-summary"><h3 class="dash-h2">音轨状态</h3><div class="status-bars">{% for status, count in overview.status_counts %}<div class="status-bar-row sc-{{ status }}"><span class="status-label"><span class="status-dot"></span>{{ {'playable':'可播放','completed':'完成','queued':'排队','running':'处理中','processing':'处理中','failed':'失败','no_speech':'无语音','waiting':'等待','interrupted':'中断'}.get(status, status) }}</span><div class="status-bar-track"><div class="status-bar-fill" style="width: {{ (count / overview.track_count * 100) if overview.track_count else 0 }}%"></div></div><span class="status-count">{{ count }}</span></div>{% endfor %}</div></div>{% endif %}
-  <dl class="item-facts">{% if item.created_at %}<div class="fact"><dt>创建</dt><dd>{{ item.created_at[:10] }}</dd></div>{% endif %}{% if item.updated_at %}<div class="fact"><dt>更新</dt><dd>{{ item.updated_at[:10] }}</dd></div>{% endif %}{% if item.directory %}<div class="fact fact-wide"><dt>目录</dt><dd class="dir">{{ item.directory }}</dd></div>{% endif %}</dl>
-  </section>
+  <div class="stats-grid"><div class="stat-card"><span class="stat-num">{{ overview.track_count }}</span><span class="stat-label">音轨</span></div><div class="stat-card"><span class="stat-num">{{ overview.total_duration_label }}</span><span class="stat-label">总时长</span></div><div class="stat-card"><span class="stat-num">{{ (overview.total_size / 1048576)|round(1) }} MB</span><span class="stat-label">总大小</span></div><div class="stat-card"><span class="stat-num">{{ overview.playable_count }}</span><span class="stat-label">可播放</span></div><div class="stat-card"><span class="stat-num">{{ overview.processing_count }}</span><span class="stat-label">处理中</span></div><div class="stat-card"><span class="stat-num small">{{ overview.failed_count }}</span><span class="stat-label">失败</span></div><div class="stat-card"><span class="stat-num small">{{ overview.no_speech_count }}</span><span class="stat-label">无语音</span></div></div>
 </section>
 
 {% if latest_snapshot %}<section class="item-config" data-config>

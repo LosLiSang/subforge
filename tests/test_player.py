@@ -158,14 +158,15 @@ def test_global_player_has_persistent_200_percent_volume_control():
     assert "volume * 100" in js
 
 
-def test_player_bar_puts_title_above_cover_and_progress():
+def test_player_bar_single_row_layout():
+    """播放条为单行紧凑网格：封面、标题、进度、控制键同排等高。"""
     js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "global-player.js").read_text(encoding="utf-8")
     css = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "app.css").read_text(encoding="utf-8")
 
-    assert "player-bar-title-row" in js
-    assert "player-bar-lower-row" in js
+    assert "player-bar-row" in js
     assert "player-bar-cover" in js
-    assert "grid-template-rows:auto auto" in css
+    assert "player-bar-row{display:grid" in css
+    assert "grid-template-columns:36px minmax(100px,1fr)" in css
 
 
 def test_global_player_rebuilds_audio_frame_when_detail_track_changes():

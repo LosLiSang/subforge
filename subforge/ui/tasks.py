@@ -235,6 +235,22 @@ class TaskManager:
         self._tasks[task.task_id] = asyncio.create_task(self._run(task))
         return task
 
+    async def retry(self, task: TaskRecord) -> TaskRecord:
+        """重试失败任务：复用同一条任务记录（同一 task_id），从断点继续。
+
+        这样在任务中心只有一行，点击重试后该行由 failed 转回 running，
+        不会另起一行新任务。
+        """
+        self.library.prepare_processing(task.track_id, "continue")
+        task = self.get_task(task.task_id)  # 重新读取，确保拿到最新 completed 等字段
+        task.status = "queued"
+        task.stage = "queue"
+        task.message = "重新排队（重试）"
+        self._save(task)
+        self.library.update_track_status(task.track_id, "queued")
+        self._tasks[task.task_id] = asyncio.create_task(self._run(task))
+        return task
+
     async def _run(self, task: TaskRecord) -> None:
         try:
             async with self._semaphore:
@@ -288,6 +304,10 @@ class TaskManager:
             task.message = str(exc)
             self._save(task)
             self.library.update_track_status(task.track_id, "failed")
+        finally:
+            # 终态后从 _tasks 移除：asyncio.Task 协程帧、config_snapshot、
+            # 失败异常及其 traceback 若滞留字典会随任务数无上界累积（内存泄露）。
+            self._tasks.pop(task.task_id, None)
 
     def _build_request(self, task: TaskRecord) -> dict:
         item, track = self.library.get_track(task.track_id)

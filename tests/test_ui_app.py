@@ -20,6 +20,33 @@ from subforge.ui.settings import UiSettingsStore
 from subforge.ui.tasks import FakeWorkerAdapter, ProcessingSnapshot
 
 
+class FakePopen:
+    """模拟 subprocess.Popen：_spawn_and_wait 用它运行 yt-dlp（可捕获 cmd、可触发超时）。"""
+
+    def __init__(self, cmd, **kwargs):
+        self.cmd = cmd
+        self.stdout = None
+        self.stderr = None
+        self.returncode = 0
+        self._timeout = kwargs.pop("_timeout", False)
+
+    def communicate(self, timeout=None):
+        if self._timeout:
+            import subprocess as sp
+            raise sp.TimeoutExpired(self.cmd, timeout=timeout)
+        return ("", "")
+
+    def terminate(self):
+        self.returncode = 1
+
+    def kill(self):
+        self.returncode = 1
+
+
+def _fake_popen(cmd, **kwargs):
+    return FakePopen(cmd, **kwargs)
+
+
 def _authenticated_client(tmp_path, *, audio=None, library=None, worker=None):
     settings = UiSettingsStore(tmp_path / "ui.json")
     if library:
@@ -662,7 +689,7 @@ def test_detail_renders_enriched_overview_summary(tmp_path):
     store.close()
 
     page = client.get(f"/items/{first.item_id}").text
-    assert 'class="item-overview"' in page
+    assert "item-overview" in page
     assert 'class="stat-label">音轨' in page
     assert 'class="stat-label">总时长' in page
     assert ">1:02" in page
@@ -1050,12 +1077,23 @@ def test_task_center_shows_retry_for_failed_subtitle_and_download(tmp_path):
     assert "/api/imports/dl-ok/retry" not in page2
 
 
-def test_retry_failed_subtitle_task_re_enqueues(tmp_path):
-    """POST /tasks/{id}/retry：为失败字幕任务复用配置快照重新排队。"""
+def test_retry_failed_subtitle_task_reuses_same_task(tmp_path):
+    """POST /tasks/{id}/retry：复用同一条失败任务记录（同一 task_id），从断点继续。
+
+    这样任务中心只有一行，点击重试后由 failed 转回 running，而不是另起一行新任务。
+    """
     library = tmp_path / "Library"
     audio = tmp_path / "t.mp3"
     audio.write_bytes(b"audio")
-    client, headers = _authenticated_client(tmp_path, library=library)
+
+    class CompleteWorker:
+        async def events(self, task, request):
+            yield {"type": "task_completed", "stage": "translation",
+                   "progress": 1.0, "completed": 5, "total": 5}
+        async def cancel(self, task_id):
+            pass
+
+    client, headers = _authenticated_client(tmp_path, library=library, worker=CompleteWorker())
     client.get("/")
     runtime = client.app.state.runtime
     store = runtime.library
@@ -1073,11 +1111,15 @@ def test_retry_failed_subtitle_task_re_enqueues(tmp_path):
         )
     resp = client.post("/tasks/fail-1/retry", headers=headers, follow_redirects=False)
     assert resp.status_code == 303
-    # 重试后为新任务复用同一配置快照重新排队
+    # 重试后复用同一条任务记录：同一 task_id，断点完成后状态为 completed
     latest = runtime.tasks.latest_for_track(imported.track_id)
     assert latest is not None
-    assert latest.task_id != "fail-1"
+    assert latest.task_id == "fail-1"
     assert latest.config_snapshot == asdict(snapshot)
+    assert latest.status == "completed"
+    # 该音轨只应有这一条任务记录（不再另起一行）
+    track_tasks = [t for t in runtime.tasks.list_tasks() if t.track_id == imported.track_id]
+    assert len(track_tasks) == 1
 
 
 def test_retry_rejects_non_failed_subtitle_task(tmp_path):
@@ -1133,7 +1175,7 @@ def test_retry_failed_url_download(tmp_path):
     with (
         patch.object(app_mod.shutil, "which", lambda n: "yt-dlp" if n == "yt-dlp" else app_mod.shutil.which(n)),
         patch.object(_tf, "mkdtemp", fake_mkdtemp),
-        patch.object(sp, "run", fake_run),
+        patch.object(sp, "Popen", _fake_popen),
     ):
         resp = client.post(f"/api/imports/{task_id}/retry", headers=headers, follow_redirects=False)
         assert resp.status_code == 303
@@ -1447,12 +1489,7 @@ def test_import_url_downloads_and_imports(tmp_path, monkeypatch):
     fake_audio = tmp_path / "downloaded.m4a"
     fake_audio.write_bytes(b"\x00" * 2048)
 
-    def fake_run(cmd, **kwargs):
-        # 模拟 yt-dlp：把 fake_audio 复制到输出目录
-        out = Path([a for a in cmd if str(a).startswith(str(tmp_path))][0] if any(str(a).startswith(str(tmp_path)) for a in cmd) else "")
-        return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", _fake_popen)
     # 直接调用 helper 验证：yt-dlp 输出目录里放一个 m4a
     from subforge.ui.app import _download_and_import
     import shutil
@@ -1511,7 +1548,7 @@ def test_import_url_returns_accepted_async(tmp_path):
     with (
         patch.object(app_mod.shutil, "which", lambda n: "yt-dlp" if n == "yt-dlp" else app_mod.shutil.which(n)),
         patch.object(_tf, "mkdtemp", fake_mkdtemp),
-        patch.object(sp, "run", fake_run),
+        patch.object(sp, "Popen", _fake_popen),
     ):
         resp = client.post("/items/import-url", headers=headers, data={
             "url": "https://www.bilibili.com/video/BV1x", "kind": "stream_archive",
@@ -1538,3 +1575,239 @@ def test_import_url_returns_accepted_async(tmp_path):
     task = client.app.state.runtime.tasks.latest_for_track(item.tracks[0].track_id)
     assert task is not None
     assert task.config_snapshot["llm_profile_id"] == profile.profile_id
+
+
+def _run_download_with_popen(tmp_path, monkeypatch, *, url, proxy, returncodes):
+    """运行 _download_and_import，用脚本化 Popen 记录每次 cmd 并按序返回 returncode。"""
+    import subprocess as sp
+    import tempfile as _tf
+    import shutil as _sh
+    import subforge.ui.app as app_mod
+    from unittest.mock import patch
+
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+    fake_audio = tmp_path / "dl.m4a"
+    fake_audio.write_bytes(b"\x00" * 2048)
+    real_mkdtemp = _tf.mkdtemp
+    attempts = []
+
+    def fake_mkdtemp(*a, **k):
+        d = real_mkdtemp(*a, **k)
+        _sh.copy(str(fake_audio), str(Path(d) / "video.m4a"))
+        return d
+
+    codes = iter(returncodes)
+
+    def fake_popen(cmd, **kwargs):
+        attempts.append(cmd)
+        p = FakePopen(cmd, **kwargs)
+        try:
+            p.returncode = next(codes)
+        except StopIteration:
+            p.returncode = 0
+        return p
+
+    with (
+        patch.object(app_mod.shutil, "which", lambda n: "yt-dlp" if n == "yt-dlp" else app_mod.shutil.which(n)),
+        patch.object(_tf, "mkdtemp", fake_mkdtemp),
+        patch.object(sp, "Popen", fake_popen),
+    ):
+        store = LibraryStore.open(library)
+        app_mod._download_and_import(
+            store, url,
+            kind=ItemKind.STREAM_ARCHIVE, rj_code=None, title="t", author="a",
+            proxy=proxy,
+        )
+        store.close()
+    return attempts
+
+
+def test_bilibili_download_prefers_direct_then_proxy(tmp_path, monkeypatch):
+    """Bilibili 经代理会 412：应优先直连；直连失败后再代理兜底。"""
+    import time as _t
+    monkeypatch.setattr(_t, "sleep", lambda *a, **k: None)
+    # 直连三次失败（反爬 412），代理一次成功
+    attempts = _run_download_with_popen(
+        tmp_path, monkeypatch,
+        url="https://www.bilibili.com/video/BV1x",
+        proxy="http://127.0.0.1:7890",
+        returncodes=[1, 1, 1, 0],
+    )
+    # 第一次尝试（直连）不应带 --proxy
+    assert "--proxy" not in attempts[0]
+    # 直连失败后确有代理兜底且指向配置的代理
+    proxy_attempt = next(a for a in attempts if "--proxy" in a)
+    idx = proxy_attempt.index("--proxy")
+    assert proxy_attempt[idx + 1] == "http://127.0.0.1:7890"
+    # 兜底代理尝试排在直连尝试之后
+    assert attempts.index(proxy_attempt) > 0
+
+
+def test_youtube_download_uses_proxy_first(tmp_path, monkeypatch):
+    """YouTube 直连常被重置：配置代理时应先试代理，失败后直连兜底。"""
+    import time as _t
+    monkeypatch.setattr(_t, "sleep", lambda *a, **k: None)
+    # 代理成功
+    attempts = _run_download_with_popen(
+        tmp_path, monkeypatch,
+        url="https://www.youtube.com/watch?v=test",
+        proxy="http://127.0.0.1:7890",
+        returncodes=[0],
+    )
+    assert "--proxy" in attempts[0]
+    idx = attempts[0].index("--proxy")
+    assert attempts[0][idx + 1] == "http://127.0.0.1:7890"
+
+
+def test_youtube_download_falls_back_to_direct(tmp_path, monkeypatch):
+    """代理失败时其他站点应直连兜底。"""
+    import time as _t
+    monkeypatch.setattr(_t, "sleep", lambda *a, **k: None)
+    attempts = _run_download_with_popen(
+        tmp_path, monkeypatch,
+        url="https://www.youtube.com/watch?v=test",
+        proxy="http://127.0.0.1:7890",
+        returncodes=[1, 1, 1, 0],
+    )
+    assert "--proxy" in attempts[0]
+    assert any("--proxy" not in a for a in attempts)  # 兜底直连
+
+
+def test_no_proxy_never_adds_proxy_flag(tmp_path, monkeypatch):
+    """未配置代理时 yt-dlp 命令不应带 --proxy。"""
+    import time as _t
+    monkeypatch.setattr(_t, "sleep", lambda *a, **k: None)
+    attempts = _run_download_with_popen(
+        tmp_path, monkeypatch,
+        url="https://www.bilibili.com/video/BV1x",
+        proxy="",
+        returncodes=[0],
+    )
+    assert all("--proxy" not in a for a in attempts)
+
+
+def test_url_import_subprocess_timeout_moves_task_to_error(tmp_path):
+    """yt-dlp 超时（subprocess.TimeoutExpired）时任务应转 error，而非卡在 running。"""
+    import subprocess as sp
+    import tempfile as _tf
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+
+    real_mkdtemp = _tf.mkdtemp
+
+    def fake_mkdtemp(*a, **k):
+        return real_mkdtemp(*a, **k)
+
+    def fake_run(cmd, **kwargs):
+        return FakePopen(cmd, _timeout=True)
+
+    import subforge.ui.app as app_mod
+    from unittest.mock import patch
+    with (
+        patch.object(app_mod.shutil, "which", lambda n: "yt-dlp" if n == "yt-dlp" else app_mod.shutil.which(n)),
+        patch.object(_tf, "mkdtemp", fake_mkdtemp),
+        patch.object(sp, "Popen", fake_run),
+    ):
+        resp = client.post("/items/import-url", headers=headers, data={
+            "url": "https://www.bilibili.com/video/BV1x", "kind": "stream_archive",
+            "title": "超时作品", "author": "作者",
+        })
+        assert resp.status_code == 202
+        data = resp.json()
+        import time
+        deadline = time.time() + 10
+        status = {"status": "running"}
+        while time.time() < deadline:
+            status = client.get(f"/api/imports/{data['task_id']}").json()
+            if status.get("status") in ("error", "done"):
+                break
+            time.sleep(0.2)
+        assert status.get("status") == "error", status
+        assert "timeout" in (status.get("message") or "").lower() or "timed out" in (status.get("message") or "").lower(), status
+
+
+def test_cancel_running_import(tmp_path):
+    """POST /api/imports/{id}/cancel：运行中下载任务转为 cancelled，且不再被覆盖为 error。"""
+    import subprocess as sp
+    import tempfile as _tf
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+    runtime = client.app.state.runtime
+    real_mkdtemp = _tf.mkdtemp
+
+    def fake_mkdtemp(*a, **k):
+        return real_mkdtemp(*a, **k)
+
+    # 用真实 Popen 模拟：communicate 阻塞直到被 terminate，此时记录到 download_procs
+    captured = {}
+
+    class BlockingPopen:
+        def __init__(self, cmd, **kwargs):
+            self.cmd = cmd
+            self.stdout = None
+            self.stderr = None
+            captured["proc"] = self
+            self._killed = False
+            self.returncode = 0
+
+        def communicate(self, timeout=None):
+            # 模拟挂起：除非被 terminate/kill 否则一直等待 (由外层 deadline 控制)
+            import time as _t
+            while not self._killed:
+                _t.sleep(0.02)
+            self.returncode = 1
+            return ("", "")
+
+        def terminate(self):
+            self._killed = True
+            self.returncode = 1
+
+        def kill(self):
+            self._killed = True
+            self.returncode = 1
+
+    import subforge.ui.app as app_mod
+    from unittest.mock import patch
+
+    def fake_popen(cmd, **kwargs):
+        p = BlockingPopen(cmd, **kwargs)
+        captured["cmd"] = cmd
+        return p
+
+    with (
+        patch.object(app_mod.shutil, "which", lambda n: "yt-dlp" if n == "yt-dlp" else app_mod.shutil.which(n)),
+        patch.object(_tf, "mkdtemp", fake_mkdtemp),
+        patch.object(sp, "Popen", fake_popen),
+    ):
+        resp = client.post("/items/import-url", headers=headers, data={
+            "url": "https://www.bilibili.com/video/BV1x", "kind": "stream_archive",
+            "title": "可取消", "author": "作者",
+        })
+        assert resp.status_code == 202
+        task_id = resp.json()["task_id"]
+        # 等待下载线程把 Popen 注册进 runtime.download_procs
+        import time as _t
+        deadline = _t.time() + 5
+        while _t.time() < deadline and task_id not in runtime.download_procs:
+            _t.sleep(0.05)
+        assert task_id in runtime.download_procs, "下载子进程应被注册以便取消"
+
+        # 下载页应对运行中任务渲染取消按钮
+        page = client.get("/downloads").text
+        assert f"/api/imports/{task_id}/cancel" in page
+
+        cancel = client.post(f"/api/imports/{task_id}/cancel", headers=headers, follow_redirects=False)
+        assert cancel.status_code == 303
+        # 状态应为 cancelled，且不会被 worker 覆盖回 error
+        deadline = _t.time() + 5
+        st = {"status": "running"}
+        while _t.time() < deadline:
+            st = client.get(f"/api/imports/{task_id}").json()
+            if st.get("status") == "cancelled":
+                break
+            _t.sleep(0.05)
+        assert st.get("status") == "cancelled", st
+        # 再次取消运行中的任务应 409
+        dup = client.post(f"/api/imports/{task_id}/cancel", headers=headers)
+        assert dup.status_code == 409

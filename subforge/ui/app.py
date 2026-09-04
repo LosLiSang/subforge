@@ -52,6 +52,7 @@ class UiRuntime:
         self.sessions: dict[str, str] = {}
         self.selections: dict[str, Path] = {}
         self.imports: dict[str, dict] = {}  # 后台 URL 下载导入任务状态
+        self.download_procs: dict[str, "subprocess.Popen"] = {}  # task_id -> yt-dlp 子进程（用于取消）
         self.pending_auto_processing: dict[str, tuple[list[str], ProcessingSnapshot]] = {}
         self.event_loop: asyncio.AbstractEventLoop | None = None
         self.library: LibraryStore | None = None
@@ -1010,7 +1011,17 @@ def create_app(deps: UiDependencies) -> Starlette:
             item, track = library.get_track(request.path_params["track_id"])
         except KeyError:
             return Response("Not found", status_code=404)
+        next_track_id = None
+        try:
+            index = next(i for i, candidate in enumerate(item.tracks) if candidate.track_id == track.track_id)
+            for candidate in item.tracks[index + 1:]:
+                if candidate.status in {"playable", "completed", "no_speech"} and library.track_media_path(candidate.track_id).is_file():
+                    next_track_id = candidate.track_id
+                    break
+        except (StopIteration, KeyError, OSError):
+            pass
         return runtime.render("player.html", request, item=item, track=track,
+                              next_track_id=next_track_id,
                               embed=request.query_params.get("embed") == "1")
 
     async def track_media(request: Request) -> Response:
@@ -1114,6 +1125,34 @@ def create_app(deps: UiDependencies) -> Starlette:
             for entry in entries
         ])
 
+    async def track_subtitles_both(request: Request) -> Response:
+        """双轨字幕合并接口：悬浮歌词等调用方一次取回语言对与双轨内容。"""
+        library = runtime.open_active_library()
+        if library is None:
+            return Response("Not found", status_code=404)
+        track_id = request.path_params["track_id"]
+        try:
+            _, track = library.get_track(track_id)
+        except KeyError:
+            return Response("Not found", status_code=404)
+
+        def read_lang(language: str) -> list:
+            path = library.track_subtitle_path(track_id, language)
+            if not path.exists():
+                return []
+            try:
+                entries = read_srt(path)
+            except Exception:
+                return []
+            return [{"start": e.start, "end": e.end, "text": e.text} for e in entries]
+
+        return JSONResponse({
+            "source_language": track.source_language,
+            "target_language": track.target_language,
+            "source": read_lang(track.source_language),
+            "target": read_lang(track.target_language),
+        })
+
     async def task_statuses(request: Request) -> Response:
         if runtime.tasks is None:
             return JSONResponse([])
@@ -1197,7 +1236,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             return JSONResponse({"error": "LLM 配置不存在，无法重试"}, status_code=404)
         except TypeError:
             return JSONResponse({"error": "任务配置快照损坏，无法重试"}, status_code=400)
-        await runtime.tasks.enqueue(task.track_id, snapshot, mode="continue")
+        await runtime.tasks.retry(task)
         deps.settings.set_last_processing_snapshot(asdict(snapshot))
         return RedirectResponse(request.headers.get("referer", "/downloads"), status_code=303)
 
@@ -1229,6 +1268,28 @@ def create_app(deps: UiDependencies) -> Starlette:
             creator_ids=tuple(task.get("creator_ids") or ()),
             auto_snapshot=auto_snapshot,
         )
+        return RedirectResponse(request.headers.get("referer", "/downloads"), status_code=303)
+
+    async def cancel_import(request: Request) -> Response:
+        """取消正在运行的 URL 下载/导入任务：kill 掉 yt-dlp 子进程并转 cancelled。"""
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        task_id = request.path_params["task_id"]
+        task = runtime.imports.get(task_id)
+        if task is None:
+            return Response("Not found", status_code=404)
+        if task.get("status") != "running":
+            return JSONResponse({"error": "只有运行中的下载任务可以取消"}, status_code=409)
+        # 标记取消，避免后台 worker 把状态覆盖回 error
+        task.update(status="cancelled", stage="download", message="已取消")
+        # kill 正在运行的 yt-dlp 子进程
+        proc = runtime.download_procs.get(task_id)
+        if proc is not None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
         return RedirectResponse(request.headers.get("referer", "/downloads"), status_code=303)
 
     async def rescan(request: Request) -> Response:
@@ -1275,6 +1336,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/api/import-folders/preview", preview_folder_import, methods=["POST"]),
         Route("/items/import-folder", import_folder, methods=["POST"]),
         Route("/api/imports/{task_id}", import_status),
+        Route("/api/imports/{task_id}/cancel", cancel_import, methods=["POST"]),
         Route("/api/creators", create_creator_api, methods=["POST"]),
         Route("/items/{item_id}", item_detail),
         Route("/items/{item_id}/edit", edit_item, methods=["POST"]),
@@ -1298,6 +1360,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/tracks/{track_id}/delete", delete_track, methods=["POST"]),
         Route("/tracks/{track_id}/play", player_page),
         Route("/tracks/{track_id}/media", track_media),
+        Route("/tracks/{track_id}/subtitles", track_subtitles_both),
         Route("/tracks/{track_id}/subtitles/{language}", track_subtitles),
         Route("/tracks/{track_id}/subtitles/{language}/download", download_track_subtitle),
         Route("/api/tasks/status", task_statuses),
@@ -1545,6 +1608,17 @@ async def _run_url_import(
         if task:
             task.update(status=status, message=message, item_id=item_id)
 
+    def _is_cancelled() -> bool:
+        task = runtime.imports.get(task_id)
+        return bool(task and task.get("status") == "cancelled")
+
+    def _register_proc(proc: "object | None") -> None:
+        # 记录当前 yt-dlp 子进程，取消时据此 kill；None 表示已结束
+        if proc is None:
+            runtime.download_procs.pop(task_id, None)
+        else:
+            runtime.download_procs[task_id] = proc
+
     def _worker() -> None:
         try:
             _set("running", "下载中…")
@@ -1552,7 +1626,12 @@ async def _run_url_import(
                 library, url,
                 kind=kind, rj_code=rj_code, title=title, author=author,
                 creator_ids=creator_ids,
+                proxy=runtime.deps.settings.get_proxy_url(),
+                proc_cb=_register_proc,
+                cancelled=_is_cancelled,
             )
+            if _is_cancelled():
+                return
             _set("done", "导入完成", result.item_id)
             if auto_snapshot is not None and result.created:
                 runtime.schedule_auto_processing(task_id, [result.track_id], auto_snapshot)
@@ -1563,10 +1642,39 @@ async def _run_url_import(
                         auto_process_status="skipped", auto_queued=0,
                         auto_process_message="媒体已存在，没有新增字幕处理任务",
                     )
-        except (ValueError, OSError) as exc:
-            _set("error", str(exc))
+        except Exception as exc:  # 含 subprocess.TimeoutExpired：超时也转 error，避免卡 running
+            if _is_cancelled():
+                return  # 用户已取消，保留 cancelled 状态，不覆盖为 error
+            _set("error", str(exc) or exc.__class__.__name__)
 
     threading.Thread(target=_worker, daemon=True, name=f"url-import-{task_id[:8]}").start()
+
+
+class _DownloadCancelled(Exception):
+    """用户主动取消 URL 下载任务。"""
+
+
+def _spawn_and_wait(
+    cmd: list[str],
+    proc_cb: "Callable[[object | None], None]" | None,
+    *, timeout: int = 600,
+) -> "subprocess.CompletedProcess":
+    """用 Popen 运行子进程以便中途 kill（取消），超时时终止进程并抛出。"""
+    import subprocess as _sp
+
+    proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+    if proc_cb:
+        proc_cb(proc)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except _sp.TimeoutExpired:
+        proc.kill()
+        out, err = proc.communicate()
+        raise
+    finally:
+        if proc_cb:
+            proc_cb(None)
+    return _sp.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def _download_and_import(
@@ -1578,6 +1686,9 @@ def _download_and_import(
     title: str | None,
     author: str | None,
     creator_ids: tuple[str, ...] = (),
+    proxy: str = "",
+    proc_cb: "Callable[[object | None], None]" | None = None,
+    cancelled: "Callable[[], bool]" | None = None,
 ) -> ImportResult:
     """Download audio from a YouTube/Bilibili URL via yt-dlp and import it.
 
@@ -1594,8 +1705,9 @@ def _download_and_import(
     tmp_dir = Path(_tf.mkdtemp(prefix="subforge-dl-"))
     try:
         # Bilibili 反爬：元数据 API 间歇性返回 412/403/405。模拟浏览器 UA + referer
-        # + 浏览器 cookie（--cookies-from-browser）提高通过率；cookie 缺失时降级重试。
-        cmd = [
+        # 提高通过率；关键点：Bilibili 常直接拒绝代理出口 IP（HTTP 412），所以
+        # 代理线路按站点决定尝试顺序，失败时切换另一线路宿底（见下方 attempts）。
+        base = [
             ytdlp,
             "--no-playlist",
             "--extract-audio",
@@ -1607,22 +1719,48 @@ def _download_and_import(
             "--referer", "https://www.bilibili.com/",
             "--add-header", "Origin:https://www.bilibili.com",
             "--no-check-certificates",
+            "--socket-timeout", "45",
             "--retries", "3",
             "--fragment-retries", "3",
             "-o", str(tmp_dir / "%(title)s.%(ext)s"),
-            url,
         ]
-        result = _sp.run(cmd, capture_output=True, text=True, timeout=600)
-        # Bilibili 反爬间歇性（412/403/405）：重试原始命令（短延时错开频控）
-        if result.returncode != 0 and "bilibili.com" in url.lower():
-            import time as _time
+        # 站点相关的代理顺序：Bilibili 直连通常更可靠（代理出口 IP 被反爬 412）；
+        # YouTube 等直连常被重置、依赖代理。故按站点决定先试哪条，失败切另一条宿底。
+        url_arg = [url]
+        if proxy:
+            proxy_cmd = base + ["--proxy", proxy]
+            direct_cmd = base
+            if "bilibili.com" in url.lower():
+                attempts = [direct_cmd, proxy_cmd]   # Bilibili：直连优先，代理宿底
+            else:
+                attempts = [proxy_cmd, direct_cmd]   # 其他站点：代理优先，直连宿底
+        else:
+            attempts = [base]
+        attempts = [c + url_arg for c in attempts]
+
+        import time as _time
+        result = None
+        for attempt in attempts:
+            if cancelled and cancelled():
+                break
+            result = _spawn_and_wait(attempt, proc_cb, timeout=600)
+            if result.returncode == 0:
+                break
+            # 反爬间歇性（412/403/405）：短延时错开频控后重试同一线路
             for _ in range(2):
+                if cancelled and cancelled():
+                    break
                 _time.sleep(2)
-                result = _sp.run(cmd, capture_output=True, text=True, timeout=600)
+                result = _spawn_and_wait(attempt, proc_cb, timeout=600)
                 if result.returncode == 0:
                     break
-        if result.returncode != 0:
-            raise ValueError(f"yt-dlp 下载失败：{result.stderr.strip()[-300:] or '未知错误'}")
+            if result and result.returncode == 0:
+                break
+        # 用户已取消：不再覆盖为错误
+        if cancelled and cancelled():
+            raise _DownloadCancelled()
+        if result is None or result.returncode != 0:
+            raise ValueError(f"yt-dlp 下载失败：{(result.stderr.strip()[-300:] if result else '') or '未知错误'}")
         logger.info("yt-dlp downloaded files: %s", [p.name for p in tmp_dir.iterdir()])
         audio_files = [p for p in tmp_dir.iterdir() if p.is_file() and p.suffix.lower() in {".m4a", ".mp3", ".opus", ".wav", ".flac"}]
         if not audio_files:

@@ -46,6 +46,7 @@ body.locked #float-close{display:none}
     const cs = getComputedStyle(document.documentElement);
     const root = pipWin.document.documentElement;
     root.dataset.theme = document.documentElement.dataset.theme;
+    root.dataset.accent = document.documentElement.dataset.accent;
     root.style.setProperty('--float-bg', cs.backgroundColor);
     root.style.setProperty('--float-fg', cs.color);
     ['--panel', '--line', '--line-strong', '--fg-dim', '--fg-faint', '--accent'].forEach(v => root.style.setProperty(v, cs.getPropertyValue(v)));
@@ -114,7 +115,7 @@ body.locked #float-close{display:none}
     locked = false; lastMain = lastSub = lastIdle = null;
     syncTheme(); render();
     themeObserver = new MutationObserver(syncTheme);
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-accent'] });
     doc.getElementById('float-lock').onclick = () => { locked = !locked; applyLock(); };
     doc.getElementById('float-close').onclick = () => pipWin.close();
     pipWin.addEventListener('pagehide', cleanup);

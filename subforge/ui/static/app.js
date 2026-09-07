@@ -1,7 +1,8 @@
-/* 主题：黑色/白色两套玻璃拟态配色，主页面与 iframe 共享选择。 */
+/* 外观：黑/白主题 + 有限强调色预设，主页面、iframe 与悬浮歌词共享选择。 */
 (()=>{
-  const key='subforge.theme';
-  const apply=theme=>{
+  const themeKey='subforge.theme',accentKey='subforge.accent';
+  const accents=new Set(['blue','cyan','green','violet','amber','rose']);
+  const applyTheme=theme=>{
     const value=theme==='light'?'light':'dark';
     document.documentElement.dataset.theme=value;
     const toggle=document.querySelector('[data-theme-toggle]');
@@ -12,12 +13,28 @@
       toggle.title=value==='light'?'切换到黑色主题':'切换到白色主题';
     }
   };
-  apply(localStorage.getItem(key)||'dark');
+  const applyAccent=accent=>{
+    const value=accents.has(accent)?accent:'blue';
+    document.documentElement.dataset.accent=value;
+    for(const button of document.querySelectorAll('[data-accent]')){
+      const active=button.dataset.accent===value;
+      button.classList.toggle('active',active);
+      button.setAttribute('aria-pressed',active?'true':'false');
+    }
+  };
+  applyTheme(localStorage.getItem(themeKey)||'dark');
+  applyAccent(localStorage.getItem(accentKey)||'blue');
   document.querySelector('[data-theme-toggle]')?.addEventListener('click',()=>{
     const next=document.documentElement.dataset.theme==='light'?'dark':'light';
-    localStorage.setItem(key,next);apply(next);
+    localStorage.setItem(themeKey,next);applyTheme(next);
   });
-  window.addEventListener('storage',event=>{if(event.key===key)apply(event.newValue||'dark');});
+  for(const button of document.querySelectorAll('[data-accent]'))button.addEventListener('click',()=>{
+    localStorage.setItem(accentKey,button.dataset.accent);applyAccent(button.dataset.accent);
+  });
+  window.addEventListener('storage',event=>{
+    if(event.key===themeKey)applyTheme(event.newValue||'dark');
+    if(event.key===accentKey)applyAccent(event.newValue||'blue');
+  });
 })();
 for(const form of document.querySelectorAll('form[data-secure]')){form.addEventListener('submit',e=>{if(form.dataset.confirm&&!confirm(form.dataset.confirm)){e.preventDefault();return}let input=form.querySelector('input[name=csrf_token]');if(!input){input=document.createElement('input');input.type='hidden';input.name='csrf_token';form.append(input)}input.value=window.SUBFORGE_CSRF||'';});}
 const originalFetch=window.fetch;window.fetch=(input,init={})=>{init.headers=new Headers(init.headers||{});if(init.method&&init.method.toUpperCase()!=='GET'){init.headers.set('X-CSRF-Token',window.SUBFORGE_CSRF||'');}return originalFetch(input,init)};

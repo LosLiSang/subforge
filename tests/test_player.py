@@ -169,6 +169,21 @@ def test_player_bar_single_row_layout():
     assert "grid-template-columns:36px minmax(100px,1fr)" in css
 
 
+def test_shell_exposes_shared_player_spacing_and_accent_presets(tmp_path):
+    """固定播放栏只通过共享变量预留空间；侧栏提供有限强调色预设。"""
+    client, _track_id = _player_client(tmp_path)
+    shell = client.get("/", headers={"sec-fetch-dest": "document"}).text
+    css = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "theme-overrides.css").read_text(encoding="utf-8")
+    js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'data-accent-picker' in shell
+    assert shell.count('data-accent="') >= 5
+    assert 'data-label="作品库"' in shell
+    assert "--player-bar-height" in css
+    assert "--content-bottom-gap" in css
+    assert "subforge.accent" in js
+
+
 def test_global_player_rebuilds_audio_frame_when_detail_track_changes():
     js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "global-player.js").read_text(encoding="utf-8")
     activate = js[js.index("activate(trackId"):js.index("close()", js.index("activate(trackId"))]

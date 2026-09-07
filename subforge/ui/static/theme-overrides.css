@@ -11,9 +11,20 @@
   --glass-dim:#9b9ba3;
   --glass-faint:#66666e;
   --glass-accent:#6f97d4;
+  --glass-accent-hover:#8aabe0;
   --glass-accent-soft:rgba(111,151,212,.14);
+  --glass-accent-border:rgba(111,151,212,.38);
+  --accent:var(--glass-accent);
+  --player-bar-height:64px;
+  --content-bottom-gap:18px;
   --glass-shadow:0 10px 30px rgba(0,0,0,.5);
 }
+:root[data-accent="blue"]{--glass-accent:#6f97d4;--glass-accent-hover:#8aabe0;--glass-accent-soft:rgba(111,151,212,.14);--glass-accent-border:rgba(111,151,212,.38)}
+:root[data-accent="cyan"]{--glass-accent:#4fa7b8;--glass-accent-hover:#70bdca;--glass-accent-soft:rgba(79,167,184,.14);--glass-accent-border:rgba(79,167,184,.38)}
+:root[data-accent="green"]{--glass-accent:#5aa783;--glass-accent-hover:#78ba99;--glass-accent-soft:rgba(90,167,131,.14);--glass-accent-border:rgba(90,167,131,.38)}
+:root[data-accent="violet"]{--glass-accent:#967bc4;--glass-accent-hover:#ad96d2;--glass-accent-soft:rgba(150,123,196,.14);--glass-accent-border:rgba(150,123,196,.38)}
+:root[data-accent="amber"]{--glass-accent:#bb8b4a;--glass-accent-hover:#cda264;--glass-accent-soft:rgba(187,139,74,.14);--glass-accent-border:rgba(187,139,74,.38)}
+:root[data-accent="rose"]{--glass-accent:#bd6f83;--glass-accent-hover:#cc899a;--glass-accent-soft:rgba(189,111,131,.14);--glass-accent-border:rgba(189,111,131,.38)}
 :root[data-theme="light"]{
   color-scheme:light;
   --glass-bg:#f4f7fb;
@@ -24,10 +35,12 @@
   --glass-text:#172033;
   --glass-dim:#526176;
   --glass-faint:#7a8798;
-  --glass-accent:#2563c7;
-  --glass-accent-soft:rgba(37,99,199,.10);
+  --glass-accent-soft:color-mix(in srgb,var(--glass-accent) 10%,transparent);
+  --glass-accent-border:color-mix(in srgb,var(--glass-accent) 32%,transparent);
   --glass-shadow:0 12px 32px rgba(30,41,59,.10);
 }
+
+@media(max-width:700px){:root{--player-bar-height:92px;--content-bottom-gap:16px}}
 
 html,body{background:var(--glass-bg);color:var(--glass-text)}
 /* OLED：暗色用纯黑背景（省电、无眩光），去掉辉光径向渐变；白色主题保留柔和渐变 */
@@ -44,7 +57,12 @@ header,.sidebar,.player-bar{background:var(--glass-panel);backdrop-filter:blur(1
 .panel,.hero,.empty,.task-box,.stat-card,.profile-row,.creator-row,.task-center-row,.model-status-row,.item-sources,.subtitles>div,.track-row,.player-controls,.creator-picker-control,.creator-kind-field,.folder-preview-files,.folder-preview-summary>div{background:var(--glass-panel);border-color:var(--glass-line-strong);box-shadow:var(--glass-shadow)}
 input,select,textarea,.creator-picker-control{background:var(--glass-panel-solid);border-color:var(--glass-line-strong);color:var(--glass-text)}
 input::placeholder,textarea::placeholder,.field small,.page-sub,.stat-label,.section-heading p{color:var(--glass-faint)}
-input:focus,select:focus,textarea:focus{border-color:var(--glass-accent)}
+input:focus,select:focus,textarea:focus{border-color:var(--glass-accent);outline-color:var(--glass-accent-border)}
+a{color:var(--glass-accent)}
+button.primary,.pagination-page.active{background:var(--glass-accent);border-color:var(--glass-accent-border);color:#fff}
+button.primary:hover,.pagination-page.active:hover{background:var(--glass-accent-hover)}
+.pick-check-btn{background:var(--glass-accent-soft);border-color:var(--glass-accent-border);color:var(--glass-accent)}
+.pick-check-btn:hover{background:color-mix(in srgb,var(--glass-accent) 22%,transparent);border-color:var(--glass-accent);color:var(--glass-text)}
 button,.button{border-color:transparent}
 .ghost,.theme-toggle{background:var(--glass-panel);border-color:var(--glass-line-strong);color:var(--glass-dim);box-shadow:none}
 .ghost:hover,.theme-toggle:hover{background:var(--glass-accent-soft);border-color:var(--glass-accent);color:var(--glass-text)}
@@ -58,8 +76,13 @@ button,.button{border-color:transparent}
 .transcript-row.active{background:var(--glass-accent-soft);border-color:var(--glass-accent)}
 .status-bar-track{background:var(--glass-accent-soft)}
 
-.theme-toggle{margin-top:auto;width:100%;padding:8px 10px;font-size:.78rem;text-align:left;white-space:nowrap}
-@media(max-width:700px){.theme-toggle{font-size:0;text-align:center;padding:9px 0}.theme-toggle::before{content:'◐';font-size:1rem}}
+.appearance-controls{margin-top:auto;display:grid;gap:8px}
+.theme-toggle{width:100%;padding:8px 10px;font-size:.78rem;text-align:left;white-space:nowrap}
+.accent-picker{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;padding:7px;border:1px solid var(--glass-line-strong);border-radius:9px;background:var(--glass-panel)}
+.accent-picker button{width:100%;aspect-ratio:1;padding:0;border:2px solid transparent;border-radius:99px;background:var(--swatch);min-width:0;box-shadow:none}
+.accent-picker button[data-accent="blue"]{--swatch:#6f97d4}.accent-picker button[data-accent="cyan"]{--swatch:#4fa7b8}.accent-picker button[data-accent="green"]{--swatch:#5aa783}.accent-picker button[data-accent="violet"]{--swatch:#967bc4}.accent-picker button[data-accent="amber"]{--swatch:#bb8b4a}.accent-picker button[data-accent="rose"]{--swatch:#bd6f83}
+.accent-picker button:hover{transform:scale(1.08)}.accent-picker button.active{border-color:var(--glass-text);box-shadow:0 0 0 2px var(--glass-accent-border)}
+@media(max-width:700px){.appearance-controls{gap:6px}.accent-picker{grid-template-columns:repeat(2,1fr);padding:5px;gap:4px}.accent-picker button{width:16px;justify-self:center}.theme-toggle{font-size:0;text-align:center;padding:9px 0}.theme-toggle::before{content:'◐';font-size:1rem}}
 
 /* 主题按钮：沿用统一圆角按钮形状，使用太阳/月亮图标 */
 .theme-toggle{display:inline-flex;align-items:center;justify-content:flex-start;gap:8px;min-height:36px;padding:7px 11px;font-size:.84rem;font-weight:600;line-height:1}
@@ -333,7 +356,7 @@ dialog .dialog-actions{padding:16px 20px 20px}
   --line-strong:#2b2b32;
   --fg-dim:#9b9ba3;
   --fg-faint:#66666e;
-  --accent:#6f97d4;
+  --accent:var(--glass-accent);
   color:#e7e7ea;
 }
 /* 交互 hover/选中：统一为柔和强调底，避免刺眼亮色块 */

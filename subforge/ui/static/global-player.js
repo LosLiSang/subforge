@@ -9,6 +9,13 @@
   const read = () => { try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { return null; } };
   const write = (s) => localStorage.setItem(KEY, JSON.stringify(s));
   const fmtT = (t) => { if (t == null || !isFinite(t)) return '--:--'; const s = Math.max(0, Math.floor(t)), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60; const p = n => String(n).padStart(2, '0'); return h ? `${h}:${p(m)}:${p(sec)}` : `${m}:${p(sec)}`; };
+  const syncBarHeight = () => {
+    if (!bar.hidden && bar.getBoundingClientRect().height) {
+      document.documentElement.style.setProperty('--player-bar-height', `${Math.ceil(bar.getBoundingClientRect().height)}px`);
+    }
+  };
+  if ('ResizeObserver' in window) new ResizeObserver(syncBarHeight).observe(bar);
+  else window.addEventListener('resize', syncBarHeight);
 
   /* ── 全局单例：播放页与播放条共用 ── */
   const player = {
@@ -214,6 +221,7 @@
     player.on('pause', syncUI, 'bar');
     player.on('loadedmetadata', syncUI, 'bar');
     syncUI();
+    requestAnimationFrame(syncBarHeight);
   };
 
   renderBar();

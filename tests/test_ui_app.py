@@ -13,6 +13,8 @@ from unittest.mock import patch
 from starlette.testclient import TestClient
 
 from subforge.library import CreatorKind, ImportRequest, ItemKind, LibraryStore
+from subforge.models import SubtitleEntry
+from subforge.translate.srt_io import write_srt
 from subforge.ui.app import UiDependencies, create_app
 from subforge.ui.picker import FakeFilePicker
 from subforge.ui.profiles import LlmProfileStore
@@ -78,6 +80,51 @@ def _authenticated_client(tmp_path, *, audio=None, library=None, worker=None):
 
     client.get = _get
     return client, headers
+
+
+def test_player_can_atomically_edit_and_restore_subtitle_entry(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "edit.m4a"
+    audio.write_bytes(b"audio")
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="Edit", author="Author"
+    ))
+    write_srt([
+        SubtitleEntry(1, 0.0, 1.0, "原文"), SubtitleEntry(2, 1.1, 2.0, "原文二")
+    ], store.track_subtitle_path(imported.track_id, "ja"))
+    write_srt([
+        SubtitleEntry(1, 0.0, 1.0, "译文"), SubtitleEntry(2, 1.1, 2.0, "译文二")
+    ], store.track_subtitle_path(imported.track_id, "zh"))
+    store.close()
+    client, headers = _authenticated_client(tmp_path, library=library)
+
+    page = client.get(f"/tracks/{imported.track_id}/play").text
+    assert 'id="subtitle-edit-dialog"' in page
+    assert 'data-subtitle-edit-form' in page
+
+    response = client.post(
+        f"/tracks/{imported.track_id}/subtitles/edit",
+        data={"index": "1", "source_text": "修正原文", "target_text": "修正译文", "start": "0.1", "end": "0.9"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["source"][0] == {"start": 0.1, "end": 0.9, "text": "修正原文"}
+
+    response = client.post(
+        f"/tracks/{imported.track_id}/subtitles/restore/baseline",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["source"][0]["text"] == "原文"
+
+    response = client.post(
+        f"/tracks/{imported.track_id}/subtitles/structure",
+        data={"action": "merge", "index": "1", "source_text": "合并原文", "target_text": "合并译文"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["source"] == [{"start": 0.0, "end": 2.0, "text": "合并原文"}]
 
 
 async def test_http_remains_responsive_while_background_worker_is_running(tmp_path):

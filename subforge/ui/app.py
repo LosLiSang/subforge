@@ -25,6 +25,7 @@ from subforge.asr.model_manager import cached_models
 from subforge import __version__
 from subforge.config import DEFAULT_MODELS_DIR
 from subforge.library import CreatorKind, ImportRequest, ItemKind, LibraryStore
+from subforge.subtitle_revision import SubtitleRevisionStore
 from subforge.translate.srt_io import read_srt
 from subforge.ui.checks import check_model_configuration, test_profile_connection
 from subforge.ui.covers import cover_for_item, covers_dir, replace_cover
@@ -1153,6 +1154,109 @@ def create_app(deps: UiDependencies) -> Starlette:
             "target": read_lang(track.target_language),
         })
 
+    def _revision_payload(document) -> dict:
+        def serialize(entries):
+            return [{"start": entry.start, "end": entry.end, "text": entry.text} for entry in entries]
+        return {
+            "source_language": document.source_language,
+            "target_language": document.target_language,
+            "source": serialize(document.source_entries),
+            "target": serialize(document.target_entries),
+        }
+
+    async def edit_track_subtitle(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        library = runtime.open_active_library()
+        if library is None:
+            return Response("Not found", status_code=404)
+        track_id = request.path_params["track_id"]
+        try:
+            form = await _read_form_values(request)
+            value = lambda name: form.get(name, [""])[-1]
+            index = int(value("index"))
+            start = float(value("start"))
+            end = float(value("end"))
+            store = SubtitleRevisionStore(library)
+            document = store.load(track_id)
+            if index < 1 or index > max(len(document.source_entries), len(document.target_entries)):
+                return JSONResponse({"error": "字幕序号不存在"}, status_code=404)
+            source_text = value("source_text").strip()
+            target_text = value("target_text").strip()
+            if index <= len(document.source_entries):
+                entry = document.source_entries[index - 1]
+                entry.text, entry.start, entry.end = source_text, start, end
+            elif source_text:
+                return JSONResponse({"error": "源字幕对应关系不存在"}, status_code=409)
+            if index <= len(document.target_entries):
+                entry = document.target_entries[index - 1]
+                entry.text, entry.start, entry.end = target_text, start, end
+            elif target_text:
+                return JSONResponse({"error": "翻译字幕对应关系不存在"}, status_code=409)
+            document = store.commit(track_id, document.source_entries, document.target_entries)
+        except KeyError:
+            return Response("Not found", status_code=404)
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(_revision_payload(document))
+
+    async def change_track_subtitle_structure(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        library = runtime.open_active_library()
+        if library is None:
+            return Response("Not found", status_code=404)
+        try:
+            form = await _read_form_values(request)
+            value = lambda name: form.get(name, [""])[-1]
+            action = value("action")
+            index = int(value("index"))
+            store = SubtitleRevisionStore(library)
+            if action == "merge":
+                document = store.merge(
+                    request.path_params["track_id"], index, index + 1,
+                    source_text=value("source_text"), target_text=value("target_text"),
+                )
+            elif action == "split":
+                document = store.split(
+                    request.path_params["track_id"], index,
+                    split_time=float(value("split_time")),
+                    source_texts=(value("source_first"), value("source_second")),
+                    target_texts=(value("target_first"), value("target_second")),
+                )
+            elif action == "delete":
+                document = store.delete(request.path_params["track_id"], index)
+            else:
+                return JSONResponse({"error": "未知字幕结构操作"}, status_code=400)
+        except KeyError:
+            return Response("Not found", status_code=404)
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(_revision_payload(document))
+
+    async def restore_track_subtitles(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        library = runtime.open_active_library()
+        if library is None:
+            return Response("Not found", status_code=404)
+        snapshot = request.path_params["snapshot"]
+        if snapshot not in {"previous", "baseline"}:
+            return Response("Not found", status_code=404)
+        try:
+            store = SubtitleRevisionStore(library)
+            document = store.restore_previous(request.path_params["track_id"]) if snapshot == "previous" else store.restore_baseline(request.path_params["track_id"])
+        except KeyError:
+            return Response("Not found", status_code=404)
+        except FileNotFoundError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(_revision_payload(document))
+
     async def task_statuses(request: Request) -> Response:
         if runtime.tasks is None:
             return JSONResponse([])
@@ -1361,6 +1465,9 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/tracks/{track_id}/play", player_page),
         Route("/tracks/{track_id}/media", track_media),
         Route("/tracks/{track_id}/subtitles", track_subtitles_both),
+        Route("/tracks/{track_id}/subtitles/edit", edit_track_subtitle, methods=["POST"]),
+        Route("/tracks/{track_id}/subtitles/structure", change_track_subtitle_structure, methods=["POST"]),
+        Route("/tracks/{track_id}/subtitles/restore/{snapshot}", restore_track_subtitles, methods=["POST"]),
         Route("/tracks/{track_id}/subtitles/{language}", track_subtitles),
         Route("/tracks/{track_id}/subtitles/{language}/download", download_track_subtitle),
         Route("/api/tasks/status", task_statuses),

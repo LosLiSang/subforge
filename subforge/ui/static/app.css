@@ -52,7 +52,7 @@ dialog.profile-dialog{background:#0f131a;color:#e6edf3;border:1px solid var(--li
 /* task / player (unchanged behavior) */
 .task-error{border-color:#f85149;background:#27161a}.task-error strong{color:#ff7b72}.task-error pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0b0e14;padding:12px;border-radius:7px;max-height:260px;overflow:auto}.player audio{width:100%;margin:20px 0}
 /* 播放页自绘控制条（统一音频源，不建自有 <audio>） */
-.player-controls{display:flex;align-items:center;gap:14px;margin:18px 0 0;padding:12px 14px;background:var(--panel);border:1px solid var(--line-strong);border-radius:10px}.player-controls input[type=range]{flex:1;accent-color:var(--accent);padding:0;border:none;background:transparent}.player-controls-time{color:var(--fg-dim);font-size:.82rem;font-variant-numeric:tabular-nums;white-space:nowrap}.subtitles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.subtitles>div{background:var(--panel);border:1px solid var(--line-strong);border-radius:var(--radius);padding:16px;min-height:110px;min-width:0;overflow-wrap:anywhere}.subtitles p{font-size:1.25rem}.transcript-row{display:grid;grid-template-columns:64px minmax(0,1fr) minmax(0,1fr);gap:12px;width:100%;text-align:left;background:var(--panel);border-color:var(--line-strong);margin:4px 0;overflow-wrap:anywhere}.transcript-row.active{border-color:#58a6ff;background:#1f2d3d}.transcript-time{color:var(--fg-faint);font-size:.78rem;font-variant-numeric:tabular-nums;line-height:1.5;white-space:nowrap}
+.player-controls{display:flex;align-items:center;gap:14px;margin:18px 0 0;padding:12px 14px;background:var(--panel);border:1px solid var(--line-strong);border-radius:10px}.player-controls input[type=range]{flex:1;accent-color:var(--accent);padding:0;border:none;background:transparent}.player-controls-time{color:var(--fg-dim);font-size:.82rem;font-variant-numeric:tabular-nums;white-space:nowrap}.subtitles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.subtitles>div{background:var(--panel);border:1px solid var(--line-strong);border-radius:var(--radius);padding:16px;min-height:110px;min-width:0;overflow-wrap:anywhere}.subtitles p{font-size:1.25rem}.transcript-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;width:100%;text-align:left;background:var(--panel);border:1px solid var(--line-strong);border-radius:7px;margin:4px 0;padding:4px;overflow-wrap:anywhere}.transcript-row.active{border-color:var(--accent);background:#1f2d3d}.transcript-seek{display:grid;grid-template-columns:64px minmax(0,1fr) minmax(0,1fr);gap:12px;width:100%;padding:6px 8px;text-align:left;background:transparent;border:0;color:inherit}.transcript-seek:hover{background:var(--glass-accent-soft,rgba(83,155,245,.1))}.transcript-edit{align-self:center}.transcript-time{color:var(--fg-faint);font-size:.78rem;font-variant-numeric:tabular-nums;line-height:1.5;white-space:pre-line}.subtitle-edit-dialog label{margin-top:12px}.subtitle-time-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}.subtitle-edit-actions{flex-wrap:wrap}.subtitle-edit-actions .primary{margin-left:auto}
 @media(max-width:700px){main{padding:20px 16px 48px}.works-head{align-items:stretch}.works-actions{width:100%;justify-content:flex-end;gap:8px}.subtitles,.transcript-row,.path-picker{grid-template-columns:1fr}.settings{grid-template-columns:1fr}.dash-actions{justify-content:stretch}.dash-actions button{width:100%}.field-inline{flex-direction:column;align-items:stretch}.field-check{justify-content:flex-end}.profile-row{grid-template-columns:1fr;align-items:stretch}.profile-row-actions{justify-items:stretch;margin-left:0}.profile-controls{width:100%}.profile-action,.profile-controls form{flex:1}.profile-controls form .profile-action{width:100%}.profile-row-actions .check-result{max-width:none;text-align:left}header{align-items:flex-start}}
 
 /* ─── 全局底部播放条 ─── */
@@ -203,3 +203,14 @@ dialog.import-dialog{background:#0f131a;color:#e6edf3;border:1px solid var(--lin
 .play-btn .ic-pause{display:none}
 .play-btn.playing .ic-play{display:none}
 .play-btn.playing .ic-pause{display:block}
+
+@media(max-width:700px){
+  .transcript-seek{grid-template-columns:1fr;gap:6px}
+  .transcript-edit{width:100%}
+  .subtitle-time-fields{grid-template-columns:1fr}
+  .subtitle-edit-actions{align-items:stretch}
+  .subtitle-edit-actions button{width:100%;margin-left:0}
+}
+.subtitle-structure-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.subtitle-split-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+@media(max-width:700px){.subtitle-structure-actions button{flex:1}.subtitle-split-grid{grid-template-columns:1fr}}

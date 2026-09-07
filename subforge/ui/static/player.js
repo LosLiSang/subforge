@@ -126,21 +126,113 @@ function renderTranscript(){
   const transcript=document.getElementById('transcript');
   if(!transcript)return;
   const markInteract=()=>{lastTranscriptInteract=Date.now()};
-  window.addEventListener('wheel',markInteract,{passive:true});
-  window.addEventListener('touchmove',markInteract,{passive:true});
-  transcript.addEventListener('pointerdown',markInteract,{passive:true});
+  if(!transcript.dataset.interactionBound){
+    window.addEventListener('wheel',markInteract,{passive:true});
+    window.addEventListener('touchmove',markInteract,{passive:true});
+    transcript.addEventListener('pointerdown',markInteract,{passive:true});
+    transcript.dataset.interactionBound='1';
+  }
   const fragment=document.createDocumentFragment();
   source.forEach((entry,i)=>{
-    const row=document.createElement('button');row.type='button';row.dataset.entry=i;row.className='transcript-row';
-    row.innerHTML=`<span class="transcript-time">${fmt(entry.start)}<br>${fmt(entry.end)}</span><span>${entry.text}</span><span>${target[i]?.text||'（未翻译）'}</span>`;
-    row.onclick=()=>{lastTranscriptInteract=Date.now();player.seek(entry.start);player.play()};
-    fragment.append(row);
+    const row=document.createElement('div');row.dataset.entry=i;row.className='transcript-row';
+    const seek=document.createElement('button');seek.type='button';seek.className='transcript-seek';
+    const time=document.createElement('span');time.className='transcript-time';time.textContent=`${fmt(entry.start)}\n${fmt(entry.end)}`;
+    const sourceText=document.createElement('span');sourceText.textContent=entry.text;
+    const targetText=document.createElement('span');targetText.textContent=target[i]?.text||'（未翻译）';
+    seek.append(time,sourceText,targetText);
+    seek.onclick=()=>{lastTranscriptInteract=Date.now();player.seek(entry.start);player.play()};
+    const edit=document.createElement('button');edit.type='button';edit.className='ghost small transcript-edit';edit.dataset.editSubtitle=String(i);edit.textContent='校正';
+    edit.onclick=()=>openSubtitleEditor(i);
+    row.append(seek,edit);fragment.append(row);
   });
-  transcript.append(fragment);
+  transcript.replaceChildren(fragment);
   transcriptRows=[...transcript.children];
   lastRenderedSourceIndex=-2;
   updateSubs();
 }
+
+const editDialog=document.getElementById('subtitle-edit-dialog');
+const editForm=editDialog?.querySelector('[data-subtitle-edit-form]');
+function applyRevisionPayload(data){
+  source=data.source||[];target=data.target||[];sourceIndex=targetIndex=0;
+  lastSourceText=lastTargetText='';
+  (window.top.SubForgeFloatLyrics||window.SubForgeFloatLyrics)?.invalidate?.(track);
+  if(transcriptsLoaded)renderTranscript();else updateSubs();
+}
+function openSubtitleEditor(index){
+  if(!editDialog||!editForm)return;
+  const src=source[index],tgt=target[index];
+  if(!src&&!tgt)return;
+  editForm.elements.index.value=String(index+1);
+  editForm.elements.start.value=String((src||tgt).start);
+  editForm.elements.end.value=String((src||tgt).end);
+  editForm.elements.source_text.value=src?.text||'';
+  editForm.elements.target_text.value=tgt?.text||'';
+  const error=editForm.querySelector('[data-subtitle-edit-error]');error.hidden=true;error.textContent='';
+  editDialog.showModal();
+}
+editDialog?.querySelector('[data-close-subtitle-edit]')?.addEventListener('click',()=>editDialog.close());
+editForm?.addEventListener('submit',async event=>{
+  event.preventDefault();
+  const error=editForm.querySelector('[data-subtitle-edit-error]');error.hidden=true;
+  const response=await fetch(`/tracks/${track}/subtitles/edit`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(editForm))});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok){error.textContent=data.error||`保存失败（HTTP ${response.status}）`;error.hidden=false;return;}
+  applyRevisionPayload(data);editDialog.close();
+});
+async function postStructure(values,error){
+  const response=await fetch(`/tracks/${track}/subtitles/structure`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(values)});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok){error.textContent=data.error||`操作失败（HTTP ${response.status}）`;error.hidden=false;return false;}
+  applyRevisionPayload(data);return true;
+}
+editDialog?.querySelector('[data-subtitle-merge-next]')?.addEventListener('click',async()=>{
+  const index=Number(editForm.elements.index.value),nextSource=source[index],nextTarget=target[index];
+  const error=editForm.querySelector('[data-subtitle-edit-error]');error.hidden=true;
+  if(!nextSource||!nextTarget){error.textContent='没有可合并的下一条字幕';error.hidden=false;return;}
+  if(!confirm('确认把当前字幕与下一条合并？'))return;
+  const ok=await postStructure({action:'merge',index:String(index),source_text:`${editForm.elements.source_text.value}\n${nextSource.text}`,target_text:`${editForm.elements.target_text.value}\n${nextTarget.text}`},error);
+  if(ok)editDialog.close();
+});
+editDialog?.querySelector('[data-subtitle-delete]')?.addEventListener('click',async()=>{
+  const error=editForm.querySelector('[data-subtitle-edit-error]');error.hidden=true;
+  if(!confirm('确认删除这条源字幕和翻译字幕？此操作可以撤销。'))return;
+  const ok=await postStructure({action:'delete',index:editForm.elements.index.value},error);
+  if(ok)editDialog.close();
+});
+const splitDialog=document.getElementById('subtitle-split-dialog');
+const splitForm=splitDialog?.querySelector('[data-subtitle-split-form]');
+function splitSuggestion(text){
+  const middle=Math.floor(text.length/2),marks=[...text.matchAll(/[。！？!?、，,]/g)];
+  const cut=marks.length?marks.reduce((best,m)=>Math.abs((m.index||0)-middle)<Math.abs(best-middle)?(m.index||0)+1:best,(marks[0].index||0)+1):middle;
+  return [text.slice(0,cut).trim(),text.slice(cut).trim()];
+}
+editDialog?.querySelector('[data-subtitle-split]')?.addEventListener('click',()=>{
+  const index=Number(editForm.elements.index.value),entry=source[index-1]||target[index-1];
+  const sourceParts=splitSuggestion(editForm.elements.source_text.value),targetParts=splitSuggestion(editForm.elements.target_text.value);
+  splitForm.elements.index.value=String(index);
+  splitForm.elements.split_time.value=String(Number(((entry.start+entry.end)/2).toFixed(3)));
+  splitForm.elements.source_first.value=sourceParts[0];splitForm.elements.source_second.value=sourceParts[1];
+  splitForm.elements.target_first.value=targetParts[0];splitForm.elements.target_second.value=targetParts[1];
+  splitForm.querySelector('[data-subtitle-split-error]').hidden=true;
+  editDialog.close();splitDialog.showModal();
+});
+for(const button of splitDialog?.querySelectorAll('[data-close-subtitle-split]')||[])button.addEventListener('click',()=>splitDialog.close());
+splitForm?.addEventListener('submit',async event=>{
+  event.preventDefault();const error=splitForm.querySelector('[data-subtitle-split-error]');error.hidden=true;
+  const values=Object.fromEntries(new FormData(splitForm));values.action='split';
+  if(await postStructure(values,error))splitDialog.close();
+});
+for(const button of editDialog?.querySelectorAll('[data-restore-subtitles]')||[])button.addEventListener('click',async()=>{
+  const kind=button.dataset.restoreSubtitles;
+  const label=kind==='baseline'?'自动生成版本':'上次修改前版本';
+  if(!confirm(`确认恢复${label}？当前字幕会先保存为可撤销快照。`))return;
+  const response=await fetch(`/tracks/${track}/subtitles/restore/${kind}`,{method:'POST'});
+  const data=await response.json().catch(()=>({}));
+  const error=editForm.querySelector('[data-subtitle-edit-error]');
+  if(!response.ok){error.textContent=data.error||`恢复失败（HTTP ${response.status}）`;error.hidden=false;return;}
+  applyRevisionPayload(data);editDialog.close();
+});
 function armTranscriptToggle(){
   const details=document.getElementById('player')?.querySelector('.track-actions');
   if(!details)return;

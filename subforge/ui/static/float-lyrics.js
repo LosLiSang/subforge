@@ -141,6 +141,12 @@ body.locked #float-close{display:none}
     },
     isActive: () => !!pipWin,
     onChange(fn, tag) { changeListeners.set(tag || fn, fn); },
+    invalidate(trackId) {
+      if (!trackId || loadedTrack === trackId) {
+        loadedTrack = null;
+        if (pipWin) loadSubtitles(trackId || currentTrackId());
+      }
+    },
   };
 
   /* 音轨切换 / 字幕模式切换（播放页 iframe 写 localStorage）→ 顶层收到 storage 事件 */

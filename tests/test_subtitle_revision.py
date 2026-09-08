@@ -128,6 +128,24 @@ def test_merge_split_and_delete_keep_source_target_aligned(tmp_path):
     library.close()
 
 
+def test_replace_range_preserves_entries_outside_candidate_window(tmp_path):
+    library, track_id, _source_path, _target_path = _library_with_subtitles(tmp_path)
+    store = SubtitleRevisionStore(library, duration_resolver=lambda _path: 10.0)
+
+    replaced = store.replace_range(
+        track_id,
+        target_start=0.0,
+        target_end=1.0,
+        source_entries=[SubtitleEntry(1, 0.1, 0.8, "候选原文")],
+        target_entries=[SubtitleEntry(1, 0.1, 0.8, "候选译文")],
+    )
+
+    assert [entry.text for entry in replaced.source_entries] == ["候选原文", "原文二"]
+    assert [entry.text for entry in replaced.target_entries] == ["候选译文", "译文二"]
+    assert replaced.source_entries[1].start == 1.2
+    library.close()
+
+
 def test_structure_operations_reject_unaligned_documents(tmp_path):
     library, track_id, _source_path, target_path = _library_with_subtitles(tmp_path)
     write_srt([SubtitleEntry(1, 0.0, 2.0, "只有一条译文")], target_path)

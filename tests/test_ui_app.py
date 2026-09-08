@@ -2014,3 +2014,12 @@ def test_segment_toolbar_time_chip_and_bilingual_mode_sync_assets():
     assert "editSegmentTime" in js
     assert "dialog-open-sync" in js
     assert "llmField.hidden=processor==='gemini'&&mode==='bilingual_once'" in js
+
+
+def test_subtitle_edit_dialog_has_reprocess_entry_and_larger_layout():
+    """校正弹窗内提供重处理入口；弹窗宽度加大由 CSS 变量控制。"""
+    js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "player.js").read_text(encoding="utf-8")
+    html = (Path(__file__).parent.parent / "subforge" / "ui" / "templates" / "player.html").read_text(encoding="utf-8")
+    css = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "app.css").read_text(encoding="utf-8")
+    assert "data-subtitle-reprocess" in html and "data-subtitle-reprocess" in js
+    assert ".subtitle-edit-dialog{width:min(680px,94vw)}" in css

@@ -189,16 +189,18 @@ segmentForm?.addEventListener('change',syncSegmentProcessorFields);
 segmentForm?.addEventListener('dialog-open-sync',syncSegmentProcessorFields);
 segmentForm?.elements.gemini_profile_id?.addEventListener('change',()=>{const option=segmentForm.elements.gemini_profile_id.selectedOptions[0];if(option?.dataset.defaultMode)segmentForm.elements.processing_mode.value=option.dataset.defaultMode;syncSegmentProcessorFields()});
 syncSegmentProcessorFields();
-segmentButton?.addEventListener('click',()=>{
-  const indices=selectedSegmentIndices();if(!indices.length)return;
+function openSegmentDialogForIndices(indices){
+  if(!segmentForm||!indices.length)return;
   segmentForm.elements.start_index.value=String(indices[0]+1);segmentForm.elements.end_index.value=String(indices.at(-1)+1);
-  segmentForm.elements.start_time.value=String(Number(source[indices[0]].start.toFixed(3)));
-  segmentForm.elements.end_time.value=String(Number(source[indices.at(-1)].end.toFixed(3)));
+  const first=source[indices[0]],last=source[indices.at(-1)];
+  if(first)segmentForm.elements.start_time.value=String(Number(Number(first.start).toFixed(3)));
+  if(last)segmentForm.elements.end_time.value=String(Number(Number(last.end).toFixed(3)));
   segmentForm.querySelector('[data-segment-range]').textContent=`第 ${indices[0]+1}–${indices.at(-1)+1} 条 · 可直接修改下方时间`;
   const error=segmentForm.querySelector('[data-segment-error]');error.hidden=true;error.textContent='';
   segmentForm.dispatchEvent(new Event('dialog-open-sync'));
   segmentDialog.showModal();
-});
+}
+segmentButton?.addEventListener('click',()=>openSegmentDialogForIndices(selectedSegmentIndices()));
 for(const button of segmentDialog?.querySelectorAll('[data-close-segment-reprocess]')||[])button.addEventListener('click',()=>segmentDialog.close());
 const candidateDialog=document.getElementById('segment-candidate-dialog');
 let activeCandidateId='';
@@ -299,6 +301,15 @@ splitForm?.addEventListener('submit',async event=>{
   event.preventDefault();const error=splitForm.querySelector('[data-subtitle-split-error]');error.hidden=true;
   const values=Object.fromEntries(new FormData(splitForm));values.action='split';
   if(await postStructure(values,error))splitDialog.close();
+});
+editDialog?.querySelector('[data-subtitle-reprocess]')?.addEventListener('click',()=>{
+  const index=Number(editForm.elements.index.value);
+  if(!index||!source[index-1]&&!target[index-1])return;
+  selectedSegmentRows.clear();selectedSegmentRows.add(index-1);
+  for(const input of document.querySelectorAll('[data-select-segment]'))input.checked=selectedSegmentRows.has(Number(input.dataset.selectSegment));
+  updateSegmentSelection();
+  editDialog.close();
+  openSegmentDialogForIndices([index-1]);
 });
 for(const button of editDialog?.querySelectorAll('[data-restore-subtitles]')||[])button.addEventListener('click',async()=>{
   const kind=button.dataset.restoreSubtitles;

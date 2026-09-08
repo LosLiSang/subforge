@@ -232,3 +232,6 @@ form.settings-dashboard:has(~ #settings-audio-models.active) > .dash-actions{dis
   position:relative;
   z-index:30;
 }
+/* 校正字幕弹窗：内容较多（原文/译文/结构操作/恢复），适当加大 */
+.subtitle-edit-dialog{width:min(680px,94vw)}
+.subtitle-edit-dialog textarea{min-height:120px;max-height:320px}

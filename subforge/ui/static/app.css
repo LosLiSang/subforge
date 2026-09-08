@@ -238,3 +238,17 @@ form.settings-dashboard:has(~ #settings-audio-models.active) > .dash-actions{dis
 /* 候选对比弹窗加大：分段后条目多，需要更多阅读空间 */
 .segment-candidate-dialog{width:min(1020px,96vw)}
 .segment-compare pre{max-height:320px}
+/* [hidden] 必须无条件生效：显式 display（如 label{display:grid}）会覆盖 UA 样式，
+ * 导致 hidden 属性失效（实例：片段弹窗翻译配置隐藏不掉） */
+[hidden]{display:none!important}
+
+/* 片段重处理 / 候选对比 / 校正弹窗：加宽并限制高度，操作按钮始终可达 */
+#segment-reprocess-dialog,#segment-candidate-dialog,#subtitle-edit-dialog{
+  width:min(880px,94vw);
+  max-height:92vh;
+  overflow:auto;
+}
+#segment-candidate-dialog{display:flex;flex-direction:column;overflow:hidden}
+#segment-candidate-dialog .segment-compare{flex:1;min-height:0;overflow:auto}
+#segment-candidate-dialog .segment-candidate-actions{flex:none;margin:0 18px 4px}
+#segment-candidate-dialog > .dialog-note{flex:none}

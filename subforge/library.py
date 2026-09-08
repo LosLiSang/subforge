@@ -272,10 +272,38 @@ class LibraryStore:
                 total INTEGER,
                 message TEXT,
                 config_snapshot TEXT,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'full_process',
+                payload_json TEXT,
+                result_json TEXT,
+                created_at TEXT,
+                finished_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS selection_history (
+                scope TEXT NOT NULL,
+                option_key TEXT NOT NULL,
+                selected_count INTEGER NOT NULL DEFAULT 0,
+                last_selected_at TEXT NOT NULL,
+                PRIMARY KEY(scope, option_key)
             );
         """)
+        self._migrate_task_columns()
         self._db.commit()
+
+    def _migrate_task_columns(self) -> None:
+        """幂等补齐 tasks 新增列（旧库升级）。"""
+        existing = {row[1] for row in self._db.execute("PRAGMA table_info(tasks)").fetchall()}
+        additions = {
+            "kind": "TEXT NOT NULL DEFAULT 'full_process'",
+            "payload_json": "TEXT",
+            "result_json": "TEXT",
+            "created_at": "TEXT",
+            "finished_at": "TEXT",
+        }
+        with self._db_lock:
+            for column, ddl in additions.items():
+                if column not in existing:
+                    self._db.execute(f"ALTER TABLE tasks ADD COLUMN {column} {ddl}")
 
     def _metadata_paths(self) -> list[Path]:
         paths = list((self.root / "works").glob("*/metadata.json"))

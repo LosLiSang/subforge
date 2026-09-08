@@ -54,6 +54,11 @@ class TaskRecord:
     total: int | None = None
     message: str | None = None
     config_snapshot: dict | None = None
+    kind: str = "full_process"
+    payload: dict | None = None
+    result: dict | None = None
+    created_at: str | None = None
+    finished_at: str | None = None
 
 
 class WorkerAdapter(Protocol):
@@ -208,11 +213,8 @@ class TaskManager:
         self._restore_unfinished_tasks()
 
     def _restore_unfinished_tasks(self) -> None:
-        """Resume unfinished tasks and discard terminal history from older sessions."""
+        """恢复未完成任务；终态任务（含 awaiting_review）永久留存，不再删除。"""
         with self.library._db_lock, self.library._db:
-            self.library._db.execute(
-                "DELETE FROM tasks WHERE status IN ('completed','no_speech','failed','cancelled')"
-            )
             rows = self.library._db.execute(
                 "SELECT task_id,track_id FROM tasks WHERE status IN ('queued','running','interrupted') ORDER BY updated_at"
             ).fetchall()
@@ -245,6 +247,8 @@ class TaskManager:
             status="queued",
             stage="queue",
             config_snapshot=asdict(snapshot),
+            kind="full_process",
+            created_at=_now(),
         )
         self._save(task)
         self.library.update_track_status(track_id, "queued")
@@ -443,18 +447,33 @@ class TaskManager:
             row = self.library._db.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         if row is None:
             raise KeyError(task_id)
+        return self._row_to_task(row)
+
+    @staticmethod
+    def _row_to_task(row) -> TaskRecord:
+        keys = row.keys()
         return TaskRecord(
             task_id=row["task_id"], track_id=row["track_id"], status=row["status"],
             stage=row["stage"], progress=row["progress"], completed=row["completed"],
             total=row["total"], message=row["message"],
             config_snapshot=json.loads(row["config_snapshot"]) if row["config_snapshot"] else None,
+            kind=(row["kind"] if "kind" in keys and row["kind"] else "full_process"),
+            payload=json.loads(row["payload_json"]) if "payload_json" in keys and row["payload_json"] else None,
+            result=json.loads(row["result_json"]) if "result_json" in keys and row["result_json"] else None,
+            created_at=(row["created_at"] if "created_at" in keys else None),
+            finished_at=(row["finished_at"] if "finished_at" in keys else None),
         )
 
-    def list_tasks(self) -> list[TaskRecord]:
+    def list_tasks(self, limit: int | None = None) -> list[TaskRecord]:
         with self.library._db_lock:
-            rows = self.library._db.execute(
-                "SELECT task_id FROM tasks ORDER BY updated_at DESC"
-            ).fetchall()
+            if limit is None:
+                rows = self.library._db.execute(
+                    "SELECT task_id FROM tasks ORDER BY updated_at DESC"
+                ).fetchall()
+            else:
+                rows = self.library._db.execute(
+                    "SELECT task_id FROM tasks ORDER BY updated_at DESC LIMIT ?", (int(limit),)
+                ).fetchall()
         return [self.get_task(row["task_id"]) for row in rows]
 
     def latest_for_track(self, track_id: str) -> TaskRecord | None:
@@ -465,15 +484,22 @@ class TaskManager:
         return self.get_task(row["task_id"]) if row else None
 
     def _save(self, task: TaskRecord) -> None:
+        if task.status in {"completed", "no_speech", "failed", "cancelled", "discarded", "awaiting_review"} and task.finished_at is None:
+            task.finished_at = _now()
         with self.library._db_lock, self.library._db:
             self.library._db.execute(
                 """INSERT OR REPLACE INTO tasks
-                   (task_id,track_id,status,stage,progress,completed,total,message,config_snapshot,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                   (task_id,track_id,status,stage,progress,completed,total,message,config_snapshot,updated_at,
+                    kind,payload_json,result_json,created_at,finished_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     task.task_id, task.track_id, task.status, task.stage, task.progress,
                     task.completed, task.total, task.message,
                     json.dumps(task.config_snapshot) if task.config_snapshot else None, _now(),
+                    task.kind,
+                    json.dumps(task.payload) if task.payload else None,
+                    json.dumps(task.result) if task.result else None,
+                    task.created_at, task.finished_at,
                 ),
             )
 

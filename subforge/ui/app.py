@@ -698,7 +698,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         processing_tasks = []
         if library is not None and runtime.tasks is not None:
             queued_position = 0
-            for task in reversed(runtime.tasks.list_tasks()):
+            for task in reversed(runtime.tasks.list_tasks(limit=200)):
                 if task.status == "queued":
                     queued_position += 1
                 try:

@@ -484,3 +484,46 @@ async def test_task_request_carries_asr_and_merge_profile_snapshots(tmp_path):
     assert captured["asr_api_key"] == "asr-secret"
     assert captured["merge_api_key"] == "merge-secret"
     await manager.close()
+
+
+async def test_terminal_tasks_survive_restart(tmp_path):
+    """终态任务（含 awaiting_review）在重启后留存，不再被删除。"""
+    store = LibraryStore.initialize(tmp_path / "Library")
+    audio = tmp_path / "audio.m4a"
+    audio.write_bytes(b"audio")
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Work", rj_code="RJ00000108"
+    ))
+    with store._db_lock, store._db:
+        store._db.execute(
+            """INSERT INTO tasks(task_id,track_id,status,stage,progress,config_snapshot,updated_at)
+               VALUES(?,?,?,?,?,?,?)""",
+            ("done-1", imported.track_id, "completed", "complete", 1.0, "{}", "2020-01-01T00:00:00Z"),
+        )
+        store._db.execute(
+            """INSERT INTO tasks(task_id,track_id,status,stage,progress,config_snapshot,updated_at)
+               VALUES(?,?,?,?,?,?,?)""",
+            ("review-1", imported.track_id, "awaiting_review", "review", 1.0, "{}", "2020-01-02T00:00:00Z"),
+        )
+    store.close()
+
+    reopened = LibraryStore.open(tmp_path / "Library")
+    manager = TaskManager(reopened, FakeWorkerAdapter([]))
+    statuses = {task.task_id: task.status for task in manager.list_tasks()}
+    assert statuses.get("done-1") == "completed"
+    assert statuses.get("review-1") == "awaiting_review"
+    # 未完成任务没有被错误地重新入队（本测试里没有 queued/running 项）
+    assert all(task_id not in manager._tasks for task_id in ("done-1", "review-1"))
+    await manager.close()
+
+
+def test_task_columns_migrate_idempotently(tmp_path):
+    """旧库升级时幂等补齐新增列，且不会重复报错。"""
+    store = LibraryStore.initialize(tmp_path / "Library")
+    columns = {row[1] for row in store._db.execute("PRAGMA table_info(tasks)").fetchall()}
+    assert {"kind", "payload_json", "result_json", "created_at", "finished_at"} <= columns
+    # 再次迁移应无副作用
+    store._migrate_task_columns()
+    columns2 = {row[1] for row in store._db.execute("PRAGMA table_info(tasks)").fetchall()}
+    assert columns2 == columns
+    store.close()

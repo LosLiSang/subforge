@@ -248,7 +248,7 @@ form.settings-dashboard:has(~ #settings-audio-models.active) > .dash-actions{dis
   max-height:92vh;
   overflow:auto;
 }
-#segment-candidate-dialog{display:flex;flex-direction:column;overflow:hidden}
+#segment-candidate-dialog[open]{display:flex;flex-direction:column;overflow:hidden}
 #segment-candidate-dialog .segment-compare{flex:1;min-height:0;overflow:auto}
 #segment-candidate-dialog .segment-candidate-actions{flex:none;margin:0 18px 4px}
 #segment-candidate-dialog > .dialog-note{flex:none}

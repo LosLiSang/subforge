@@ -138,6 +138,11 @@
         <label>API Key<input type="password" name="api_key" autocomplete="new-password" placeholder="留空不修改；也可使用 GEMINI_API_KEY"></label>
         <label>识别提示词<textarea name="recognition_prompt" rows="3" placeholder="人名、作品名、专业词或输出约束"></textarea></label>
         <div class="subtitle-time-fields">
+          <label>温度（0 = 稳定，越高越发散）<input type="number" name="temperature" min="0" max="2" step="0.1" value="0" required></label>
+        </div>
+        <label>双语提示词模板（留空用内置默认，支持 {source_language} / {target_language} 占位）<textarea name="bilingual_prompt" rows="4" placeholder="留空使用内置默认"></textarea></label>
+        <label>转写提示词模板（留空用内置默认）<textarea name="transcribe_prompt" rows="4" placeholder="留空使用内置默认"></textarea></label>
+        <div class="subtitle-time-fields">
           <label>独立代理<input name="proxy_url" placeholder="留空直连"></label>
           <label>CA Bundle<input name="ca_bundle" placeholder="自签名 CA 文件路径"></label>
         </div>

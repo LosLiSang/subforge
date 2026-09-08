@@ -287,3 +287,63 @@ async def test_gemini_segmented_output_splits_entries_and_validates_timestamps(t
     assert candidate.source_entries[0].start == 10.0
     assert candidate.source_entries[0].end == 25.0  # 等长 → 对半分
     assert candidate.source_entries[1].end == 40.0
+
+
+@pytest.mark.asyncio
+async def test_profile_temperature_and_custom_prompt_reach_transport(tmp_path):
+    """Profile 可配置温度与提示词模板；透传到请求体。"""
+    with _Upstream([(200, {"candidates": [{"content": {"parts": [{"text": '{"segments":[{"start":0,"end":1,"text":"晴"}]}'}]}}]})]) as upstream:
+        profile = GeminiAudioProfile(
+            "id", "Google", "google_native", upstream.base_url,
+            "gemini-3.8-flash-high", "key-value",
+            temperature=0.9,
+            transcribe_prompt="自定义转写指令 {source_language}",
+        )
+        transport = GoogleGeminiTransport(profile)
+        await transport.generate(b"wave", "audio/wav", "自定义转写指令 ja")
+
+        request = upstream.requests[0]
+        assert request["body"]["generationConfig"]["temperature"] == 0.9
+        # 自定义提示词由 Adapter 组装后经 transport 的 prompt 参数传入
+
+
+@pytest.mark.asyncio
+async def test_custom_transcribe_prompt_replaces_default(tmp_path):
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"audio")
+
+    def extractor(_request):
+        return ExtractedAudio(clip, 10.0, 12.0, temporary=False)
+
+    seen_prompts = []
+
+    class Transport(GeminiAudioTransport):
+        async def generate(self, audio, mime_type, prompt):
+            seen_prompts.append(prompt)
+            return '{"segments":[{"start":0,"end":2,"text":"内容"}]}'
+
+    profile = GeminiAudioProfile(
+        "id", "G", "google_native", "https://example.invalid",
+        "gemini-3.8-flash-high", "key",
+        transcribe_prompt="自定义模板：请听写{source_language}音频",
+    )
+    adapter = GeminiAudioAdapter(profile, Transport(), extractor=extractor, translate_fn=lambda e, s, t: e)
+    await adapter.process(SegmentRequest(
+        tmp_path / "audio.m4a", 10.0, 12.0, processing_mode="transcribe_then_translate"
+    ))
+    assert seen_prompts[0].startswith("自定义模板：请听写ja音频")
+
+
+def test_parse_extracts_json_from_prose_and_clock_times():
+    raw = (
+        "依据听觉转写音频，输出 JSON。\n"
+        '- 00:01 - 00:04: 「おい」\n'
+        '输出纯JSON格式。{"segments":[{"start":"00:01","end":"00:04","text":"おい"},'
+        '{"start":5,"end":6,"text":"聞こえる"}]}'
+    )
+    profile = GeminiAudioProfile("id", "G", "google_native", "https://x", "m", "k")
+    adapter = GeminiAudioAdapter(profile, _FakeTransport(raw))
+    segments, structured = adapter._parse_segments(raw, bilingual=False)
+    assert structured is True
+    assert segments[0]["start"] == 1.0  # "00:01" 文本时间被解析
+    assert segments[1]["start"] == 5.0

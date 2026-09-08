@@ -312,7 +312,7 @@ enhanceSelects();
 for(const button of document.querySelectorAll('[data-edit-gemini-profile]'))button.addEventListener('click',()=>{
   const form=document.getElementById('gemini-profile-form');if(!form)return;
   const profile=JSON.parse(button.dataset.editGeminiProfile);
-  for(const name of ['profile_id','name','protocol','base_url','model','default_processing_mode','max_segment_seconds','recognition_prompt','proxy_url','ca_bundle']){
+  for(const name of ['profile_id','name','protocol','base_url','model','default_processing_mode','max_segment_seconds','recognition_prompt','temperature','bilingual_prompt','transcribe_prompt','proxy_url','ca_bundle']){
     if(form.elements[name])form.elements[name].value=profile[name]??'';
   }
   form.elements.api_key.value='';form.elements.verify_tls.checked=!!profile.verify_tls;

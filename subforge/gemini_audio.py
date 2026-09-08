@@ -27,6 +27,39 @@ from subforge.segment_processing import (
 )
 
 _FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
+
+DEFAULT_BILINGUAL_PROMPT = (
+    "你是专业的字幕听写员。请逐字听写这段音频中的{source_language}语音，并翻译为{target_language}。\n"
+    "输出要求（必须全部遵守）：\n"
+    '1. 只输出一个 JSON 对象，以 { 开头、以 } 结尾；不要任何解释、前言、后缀或 Markdown 代码块；不要复述本提示。\n'
+    '2. JSON 格式：{"segments":[{"start":0.5,"end":2.1,"source_text":"原文","target_text":"译文"}, …]\n'
+    "3. start 与 end 是相对本段音频开头的秒数，必须是数字（如 1.5），不要使用 00:01 这类分秒文本。\n"
+    "4. 按自然语句切分：一条只放一句话，严禁把多句合并进同一条。\n"
+    "5. source_text 逐字听写（含语气词）；target_text 是口语自然的中文翻译。"
+)
+
+DEFAULT_TRANSCRIBE_PROMPT = (
+    "你是专业的字幕听写员。请逐字听写这段音频中的{source_language}语音。\n"
+    "输出要求（必须全部遵守）：\n"
+    '1. 只输出一个 JSON 对象，以 { 开头、以 } 结尾；不要任何解释、前言、后缀或 Markdown 代码块；不要复述本提示。\n'
+    '2. JSON 格式：{"segments":[{"start":0.5,"end":2.1,"text":"原文"}, …]\n'
+    "3. start 与 end 是相对本段音频开头的秒数，必须是数字（如 1.5），不要使用 00:01 这类分秒文本。\n"
+    "4. 按自然语句切分：一条只放一句话；text 逐字听写，含语气词。不要翻译。"
+)
+
+
+def _parse_clock_time(value) -> float | None:
+    """接受秒数（int/float）或 "SS"/"MM:SS"/"HH:MM:SS" 文本时间。"""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        parts = value.strip().split(":")
+        if all(part.replace(".", "", 1).isdigit() for part in parts) and 1 <= len(parts) <= 3:
+            seconds = 0.0
+            for part in parts:
+                seconds = seconds * 60 + float(part)
+            return seconds
+    return None
 from subforge.ui.profiles import mask_secret
 
 GeminiProtocol = Literal["google_native", "openai_compatible"]
@@ -48,6 +81,9 @@ class GeminiAudioProfile:
     default_processing_mode: GeminiProcessingMode = "transcribe_then_translate"
     max_segment_seconds: int = 60
     recognition_prompt: str = ""
+    temperature: float = 0.0
+    bilingual_prompt: str = ""
+    transcribe_prompt: str = ""
     proxy_url: str = ""
     verify_tls: bool = True
     ca_bundle: str = ""
@@ -87,6 +123,9 @@ class GeminiAudioProfileStore:
         default_processing_mode: str = "transcribe_then_translate",
         max_segment_seconds: int = 60,
         recognition_prompt: str = "",
+        temperature: float = 0.0,
+        bilingual_prompt: str = "",
+        transcribe_prompt: str = "",
         proxy_url: str = "",
         verify_tls: bool = True,
         ca_bundle: str = "",
@@ -115,6 +154,12 @@ class GeminiAudioProfileStore:
         existing.default_processing_mode = default_processing_mode  # type: ignore[assignment]
         existing.max_segment_seconds = int(max_segment_seconds)
         existing.recognition_prompt = recognition_prompt.strip()
+        try:
+            existing.temperature = max(0.0, min(2.0, float(temperature)))
+        except (TypeError, ValueError):
+            existing.temperature = 0.0
+        existing.bilingual_prompt = bilingual_prompt.strip()
+        existing.transcribe_prompt = transcribe_prompt.strip()
         existing.proxy_url = proxy_url.strip()
         existing.verify_tls = bool(verify_tls)
         existing.ca_bundle = ca_bundle.strip()
@@ -233,7 +278,7 @@ class GoogleGeminiTransport(_BaseGeminiTransport):
                 {"text": prompt},
                 {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(audio).decode("ascii")}},
             ]}],
-            "generationConfig": {"temperature": 0},
+            "generationConfig": {"temperature": self.profile.temperature},
         }
 
         def parse(data: dict) -> str:
@@ -260,7 +305,7 @@ class OpenAICompatibleAudioTransport(_BaseGeminiTransport):
                     "data": base64.b64encode(audio).decode("ascii"), "format": audio_format,
                 }},
             ]}],
-            "temperature": 0,
+            "temperature": self.profile.temperature,
         }
 
         def parse(data: dict) -> str:
@@ -385,24 +430,20 @@ class GeminiAudioAdapter:
                 else:
                     audio = await asyncio.to_thread(self._chunk_cutter, extracted.path, chunk_start, chunk_end)
                 chunk_span = chunk_end - chunk_start
-                if mode == "bilingual_once":
-                    prompt = (
-                        f"请逐字听写这段{request.source_language}音频并翻译为{request.target_language}。"
-                        '只输出一个 JSON 对象：{"segments":[{"start":开始秒,"end":结束秒,'
-                        '"source_text":"原文","target_text":"译文"}]}。'
-                        "start/end 是相对这段音频的秒数（数字）。必须按语句自然切分成多条，"
-                        "不要把长段内容挤成一条；不要输出 Markdown 或解释。" + context
-                    )
-                    raw = await self.transport.generate(audio, "audio/wav", prompt)
-                    segments, structured = self._parse_segments(raw, bilingual=True)
-                else:
-                    prompt = (
-                        f"请把这段音频逐字转写为{request.source_language}文本，按语句自然切分。"
-                        '只输出一个 JSON 对象：{"segments":[{"start":开始秒,"end":结束秒,"text":"原文"}]}。'
-                        "start/end 是相对这段音频的秒数（数字）。不要翻译，不要 Markdown 或解释。" + context
-                    )
-                    raw = await self.transport.generate(audio, "audio/wav", prompt)
-                    segments, structured = self._parse_segments(raw, bilingual=False)
+                template = (
+                    self.profile.bilingual_prompt.strip() if mode == "bilingual_once"
+                    else self.profile.transcribe_prompt.strip()
+                )
+                if not template:
+                    base = DEFAULT_BILINGUAL_PROMPT if mode == "bilingual_once" else DEFAULT_TRANSCRIBE_PROMPT
+                    template = base
+                # 不用 str.format：模板含字面 JSON 大括号，显式替换避免 KeyError
+                template = template.replace("{source_language}", request.source_language).replace("{target_language}", request.target_language)
+                if mode == "bilingual_once" and "{target_language}" not in template and "翻译" not in template:
+                    template += chr(10) + f"听写语言：{request.source_language}；翻译目标语言：{request.target_language}。"
+                prompt = template + context
+                raw = await self.transport.generate(audio, "audio/wav", prompt)
+                segments, structured = self._parse_segments(raw, bilingual=mode == "bilingual_once")
                 if not structured:
                     fallback_used = True
                 timed = self._assign_times(segments, chunk_span)
@@ -497,8 +538,14 @@ class GeminiAudioAdapter:
         兼容旧格式：{"source_text","target_text"} 或纯文本 → 单段，structured=False。
         """
         text = self._strip_code_fence(raw)
+        # 模型可能在 JSON 前后夹带说明文字：提取首个 { 到最后一个 } 的子串再解析
+        first, last = text.find("{"), text.rfind("}")
+        if first != -1 and last > first:
+            candidate_text = text[first:last + 1]
+        else:
+            candidate_text = text
         try:
-            data = json.loads(text)
+            data = json.loads(candidate_text)
         except (ValueError, TypeError):
             data = None
         segments: list[dict] = []
@@ -508,13 +555,11 @@ class GeminiAudioAdapter:
                     continue
                 source = str(item.get("source_text", "") if bilingual else item.get("text", "")).strip()
                 target = str(item.get("target_text", "")).strip() if bilingual else ""
-                start = item.get("start")
-                end = item.get("end")
                 segments.append({
                     "source": source,
                     "target": target,
-                    "start": float(start) if isinstance(start, (int, float)) else None,
-                    "end": float(end) if isinstance(end, (int, float)) else None,
+                    "start": _parse_clock_time(item.get("start")),
+                    "end": _parse_clock_time(item.get("end")),
                 })
             segments = [segment for segment in segments if segment["source"]]
             if segments:

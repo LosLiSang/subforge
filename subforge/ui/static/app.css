@@ -235,3 +235,6 @@ form.settings-dashboard:has(~ #settings-audio-models.active) > .dash-actions{dis
 /* 校正字幕弹窗：内容较多（原文/译文/结构操作/恢复），适当加大 */
 .subtitle-edit-dialog{width:min(680px,94vw)}
 .subtitle-edit-dialog textarea{min-height:120px;max-height:320px}
+/* 候选对比弹窗加大：分段后条目多，需要更多阅读空间 */
+.segment-candidate-dialog{width:min(1020px,96vw)}
+.segment-compare pre{max-height:320px}

@@ -378,55 +378,59 @@ class GeminiAudioAdapter:
             context = f"\n可能出现的专有词或上下文：{extra}" if extra else ""
             source_entries: list[SubtitleEntry] = []
             target_entries: list[SubtitleEntry] = []
-            skipped = 0
-            for chunk_index, (chunk_start, chunk_end) in enumerate(chunks):
+            fallback_used = False
+            for chunk_start, chunk_end in chunks:
                 if len(chunks) == 1:
                     audio = await asyncio.to_thread(extracted.path.read_bytes)
                 else:
                     audio = await asyncio.to_thread(self._chunk_cutter, extracted.path, chunk_start, chunk_end)
+                chunk_span = chunk_end - chunk_start
                 if mode == "bilingual_once":
                     prompt = (
-                        f"请逐字理解这段{request.source_language}音频，并翻译为{request.target_language}。"
-                        "只输出一个 JSON 对象，严格包含 source_text 和 target_text 两个非空字符串；"
-                        "不要输出时间戳、Markdown 或解释。" + context
+                        f"请逐字听写这段{request.source_language}音频并翻译为{request.target_language}。"
+                        '只输出一个 JSON 对象：{"segments":[{"start":开始秒,"end":结束秒,'
+                        '"source_text":"原文","target_text":"译文"}]}。'
+                        "start/end 是相对这段音频的秒数（数字）。必须按语句自然切分成多条，"
+                        "不要把长段内容挤成一条；不要输出 Markdown 或解释。" + context
                     )
                     raw = await self.transport.generate(audio, "audio/wav", prompt)
-                    source_text, target_text = self._parse_bilingual(raw)
+                    segments, structured = self._parse_segments(raw, bilingual=True)
                 else:
                     prompt = (
-                        f"请把这段音频逐字转写为{request.source_language}文本。"
-                        "只输出转写正文，不要翻译，不要时间戳，不要 Markdown 或解释。" + context
+                        f"请把这段音频逐字转写为{request.source_language}文本，按语句自然切分。"
+                        '只输出一个 JSON 对象：{"segments":[{"start":开始秒,"end":结束秒,"text":"原文"}]}。'
+                        "start/end 是相对这段音频的秒数（数字）。不要翻译，不要 Markdown 或解释。" + context
                     )
-                    source_text = (await self.transport.generate(audio, "audio/wav", prompt)).strip()
-                    target_text = ""
-                if not source_text:
-                    skipped += 1
-                    continue
-                index = len(source_entries) + 1
-                # 候选时间钳制到目标选区（块可能包含前后上下文）
-                abs_start = max(request.target_start, extracted.start + chunk_start)
-                abs_end = min(request.target_end, extracted.start + chunk_end)
-                if abs_start >= abs_end:
-                    skipped += 1
-                    continue
-                source_entries.append(SubtitleEntry(
-                    index,
-                    round(abs_start, 3),
-                    round(abs_end, 3),
-                    source_text,
-                ))
-                if target_text:
-                    target_entries.append(SubtitleEntry(
-                        index,
-                        round(abs_start, 3),
-                        round(abs_end, 3),
-                        target_text,
+                    raw = await self.transport.generate(audio, "audio/wav", prompt)
+                    segments, structured = self._parse_segments(raw, bilingual=False)
+                if not structured:
+                    fallback_used = True
+                timed = self._assign_times(segments, chunk_span)
+                for rel_start, rel_end, seg in timed:
+                    if not seg["source"]:
+                        continue
+                    # 绝对时间 = 截取起点 + 块内相对时间；候选钳制到目标选区
+                    abs_start = max(request.target_start, extracted.start + chunk_start + rel_start)
+                    abs_end = min(request.target_end, extracted.start + chunk_start + rel_end)
+                    if abs_start >= abs_end - 0.001:
+                        continue
+                    index = len(source_entries) + 1
+                    source_entries.append(SubtitleEntry(
+                        index, round(abs_start, 3), round(abs_end, 3), seg["source"],
                     ))
+                    if seg["target"]:
+                        target_entries.append(SubtitleEntry(
+                            index, round(abs_start, 3), round(abs_end, 3), seg["target"],
+                        ))
             if not source_entries:
                 raise GeminiAudioError("Gemini 未在片段中识别出任何文本")
             warnings: list[str] = []
+            if len(source_entries) > 1:
+                warnings.append(f"候选已按语句切分为 {len(source_entries)} 条")
+            if fallback_used:
+                warnings.append("模型未返回结构化切分，已回退为整段单条")
             if len(chunks) > 1:
-                warnings.append(f"长片段已按语音区间切分为 {len(chunks)} 块分别识别" + (f"，跳过 {skipped} 块空结果" if skipped else ""))
+                warnings.append(f"长片段已按语音区间切分为 {len(chunks)} 块分别识别")
             if detection_failed:
                 warnings.append("语音区间检测失败，已回退为整段一次识别")
             if mode == "transcribe_then_translate":
@@ -449,7 +453,7 @@ class GeminiAudioAdapter:
                 target_start=request.target_start,
                 target_end=request.target_end,
                 warnings=(
-                    "Gemini 只生成文本，候选沿用 SubForge 选区时间轴",
+                    "候选时间轴由 SubForge 校验（越界/乱序时按文本长度比例重新分配）",
                     *warnings,
                 ),
             )
@@ -475,21 +479,96 @@ class GeminiAudioAdapter:
         return chunks, False
 
     @staticmethod
-    def _parse_bilingual(raw: str) -> tuple[str, str]:
+    def _strip_code_fence(raw: str) -> str:
         text = raw.strip()
         if text.startswith("```"):
-            lines = text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
+            quote_lines = text.splitlines()
+            if quote_lines and quote_lines[0].startswith("```"):
+                quote_lines = quote_lines[1:]
+            if quote_lines and quote_lines[-1].strip() == "```":
+                quote_lines = quote_lines[:-1]
+            text = chr(10).join(quote_lines).strip()
+        return text
+
+    def _parse_segments(self, raw: str, *, bilingual: bool) -> tuple[list[dict], bool]:
+        """解析模型输出为语句级分段。返回 (segments, structured)。
+
+        结构化：{"segments":[{"start","end","text"/"source_text","target_text"}]}
+        兼容旧格式：{"source_text","target_text"} 或纯文本 → 单段，structured=False。
+        """
+        text = self._strip_code_fence(raw)
         try:
             data = json.loads(text)
+        except (ValueError, TypeError):
+            data = None
+        segments: list[dict] = []
+        if isinstance(data, dict) and isinstance(data.get("segments"), list) and data["segments"]:
+            for item in data["segments"]:
+                if not isinstance(item, dict):
+                    continue
+                source = str(item.get("source_text", "") if bilingual else item.get("text", "")).strip()
+                target = str(item.get("target_text", "")).strip() if bilingual else ""
+                start = item.get("start")
+                end = item.get("end")
+                segments.append({
+                    "source": source,
+                    "target": target,
+                    "start": float(start) if isinstance(start, (int, float)) else None,
+                    "end": float(end) if isinstance(end, (int, float)) else None,
+                })
+            segments = [segment for segment in segments if segment["source"]]
+            if segments:
+                return segments, True
+        if bilingual:
+            if not isinstance(data, dict):
+                raise GeminiAudioError("Gemini 双语结果不是有效 JSON")
             source = str(data.get("source_text", "")).strip()
             target = str(data.get("target_text", "")).strip()
-        except (ValueError, TypeError, AttributeError) as exc:
-            raise GeminiAudioError("Gemini 双语结果不是有效 JSON") from exc
-        if not source or not target:
-            raise GeminiAudioError("Gemini 双语结果缺少源文或译文")
-        return source, target
+            if not source or not target:
+                raise GeminiAudioError("Gemini 双语结果缺少源文或译文")
+            return [{"source": source, "target": target, "start": None, "end": None}], False
+        text = text.strip()
+        if not text:
+            raise GeminiAudioError("Gemini 转写结果为空")
+        return [{"source": text, "target": "", "start": None, "end": None}], False
+
+    @staticmethod
+    def _assign_times(
+        segments: list[dict],
+        clip_duration: float,
+    ) -> list[tuple[float, float, dict]]:
+        """给分段分配块内相对时间。
+
+        模型时间戳只作参考：全部有效（单调、在范围内）才采用；
+        否则按文本长度比例切分，保证时间轴始终由 SubForge 确定性生成。
+        """
+        if not segments:
+            return []
+        if clip_duration <= 0:
+            clip_duration = 0.001
+        result: list[tuple[float, float, dict]] = []
+        times_valid = all(
+            segment["start"] is not None and segment["end"] is not None
+            and 0 <= segment["start"] < segment["end"] <= clip_duration + 0.5
+            for segment in segments
+        )
+        if times_valid:
+            previous_end = 0.0
+            for segment in segments:
+                start = max(0.0, min(float(segment["start"]), clip_duration))
+                end = max(start, min(float(segment["end"]), clip_duration))
+                if start < previous_end - 0.001:
+                    times_valid = False
+                    break
+                previous_end = end
+                result.append((start, end, segment))
+        if times_valid and result:
+            return result
+        total = sum(max(len(segment["source"]), 1) for segment in segments)
+        result = []
+        cursor = 0.0
+        for segment in segments:
+            span = max(len(segment["source"]), 1) / total * clip_duration
+            result.append((cursor, min(clip_duration, cursor + span), segment))
+            cursor += span
+        return result

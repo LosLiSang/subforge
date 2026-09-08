@@ -238,3 +238,52 @@ async def test_gemini_adapter_falls_back_to_single_chunk_when_detection_fails(tm
     assert len(calls) == 1
     assert candidate.source_entries == [SubtitleEntry(1, 10.0, 70.0, "整段")]
     assert any("检测失败" in warning for warning in candidate.warnings)
+
+
+@pytest.mark.asyncio
+async def test_gemini_segmented_output_splits_entries_and_validates_timestamps(tmp_path):
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"audio")
+
+    def extractor(_request):
+        return ExtractedAudio(clip, 10.0, 40.0, temporary=False)
+
+    structured = (
+        '{"segments":['
+        '{"start":0,"end":10,"source_text":"第一句","target_text":"译文一"},'
+        '{"start":10,"end":20,"source_text":"第二句","target_text":"译文二"},'
+        '{"start":25,"end":30,"source_text":"第三句","target_text":"译文三"}]}'
+    )
+    profile = GeminiAudioProfile(
+        "id", "Gemini", "google_native", "https://example.invalid",
+        "gemini-3.8-flash-high", "key",
+        default_processing_mode="bilingual_once", max_segment_seconds=60,
+    )
+    adapter = GeminiAudioAdapter(profile, _FakeTransport(structured), extractor=extractor)
+    candidate = await adapter.process(SegmentRequest(
+        tmp_path / "audio.m4a", 12.0, 38.0, processing_mode="bilingual_once"
+    ))
+
+    # 绝对时间 = clip 起点 10 + 模型相对时间；钳制到目标选区 12–38
+    assert [(e.start, e.end, e.text) for e in candidate.source_entries] == [
+        (12.0, 20.0, "第一句"),
+        (20.0, 30.0, "第二句"),
+        (35.0, 38.0, "第三句"),  # 25+10=35 起
+    ]
+    assert candidate.target_entries[-1].text == "译文三"
+    assert any("切分为 3 条" in w for w in candidate.warnings)
+
+    # 乱序时间戳 → 回退为按文本长度比例分配
+    scrambled = (
+        '{"segments":['
+        '{"start":30,"end":5,"source_text":"甲甲甲甲甲","target_text":"译一"},'
+        '{"start":8,"end":3,"source_text":"乙乙乙乙乙","target_text":"译二"}]}'
+    )
+    adapter = GeminiAudioAdapter(profile, _FakeTransport(scrambled), extractor=extractor)
+    candidate = await adapter.process(SegmentRequest(
+        tmp_path / "audio.m4a", 10.0, 40.0, processing_mode="bilingual_once"
+    ))
+    assert [e.text for e in candidate.source_entries] == ["甲甲甲甲甲", "乙乙乙乙乙"]
+    assert candidate.source_entries[0].start == 10.0
+    assert candidate.source_entries[0].end == 25.0  # 等长 → 对半分
+    assert candidate.source_entries[1].end == 40.0

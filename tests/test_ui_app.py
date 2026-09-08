@@ -156,6 +156,69 @@ def test_gemini_audio_profiles_are_managed_separately_from_text_llm(tmp_path):
     assert "/audio-models\"" not in shell  # 独立侧栏入口已收回设置 Tab
 
 
+def test_segment_reprocess_accepts_explicit_time_range_beyond_entries(tmp_path):
+    from subforge.asr.engine import _audio_duration_seconds
+
+    library = tmp_path / "Library"
+    audio = tmp_path / "timesegment.m4a"
+    # 构造真实 wav：8 秒静音，媒体时长可被 ffprobe 读出
+    import wave
+    with wave.open(str(audio), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * 16000 * 8)
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="TimeSeg", author="Author"
+    ))
+    source_path = store.track_subtitle_path(imported.track_id, "ja")
+    target_path = store.track_subtitle_path(imported.track_id, "zh")
+    write_srt([SubtitleEntry(1, 4.0, 6.0, "旧原文")], source_path)
+    write_srt([SubtitleEntry(1, 4.0, 6.0, "旧译文")], target_path)
+    store.close()
+    assert _audio_duration_seconds(audio) == 8.0
+
+    seen = {}
+
+    class FakeSegmentProcessor:
+        async def process(self, request):
+            seen["range"] = (request.target_start, request.target_end)
+            return SegmentCandidate(
+                [SubtitleEntry(1, 1.0, 3.5, "补录原文")],
+                [SubtitleEntry(1, 1.0, 3.5, "补录译文")],
+                "whisper", request.target_start, request.target_end,
+            )
+
+    client, headers = _authenticated_client(
+        tmp_path, library=library,
+        segment_processor_factory=lambda _o: FakeSegmentProcessor(),
+    )
+    response = client.post(
+        f"/tracks/{imported.track_id}/segments/reprocess",
+        data={"start_index": "1", "end_index": "1", "start_time": "0.5", "end_time": "7.5", "processor": "whisper"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert seen["range"] == (0.5, 7.5)
+    # 当前字幕显示与显式范围相交的条目
+    assert response.json()["current"]["source"] == [{"start": 4.0, "end": 6.0, "text": "旧原文"}]
+
+    confirm = client.post(
+        f"/tracks/{imported.track_id}/segments/{response.json()['candidate_id']}/confirm",
+        headers=headers,
+    )
+    assert confirm.status_code == 200
+    # 替换后首条从 1.0s 开始 → 自动补 [0,1) 空段（保留补录结果）
+    assert [entry.text.strip() for entry in read_srt(source_path)] == ["", "补录原文"]
+
+    # 超出媒体时长被拒绝
+    bad = client.post(
+        f"/tracks/{imported.track_id}/segments/reprocess",
+        data={"start_index": "1", "end_index": "1", "start_time": "0", "end_time": "99", "processor": "whisper"},
+        headers=headers,
+    )
+    assert bad.status_code == 400
+
+
 def test_segment_candidate_does_not_replace_subtitles_until_confirmed(tmp_path):
     library = tmp_path / "Library"
     audio = tmp_path / "segment.m4a"

@@ -77,6 +77,11 @@
     <div class="dialog-head"><h2>片段重处理</h2><button type="button" class="ghost small" data-close-segment-reprocess>关闭</button></div>
     <input type="hidden" name="start_index"><input type="hidden" name="end_index">
     <p class="dialog-note" data-segment-range></p>
+    <div class="subtitle-time-fields">
+      <label>开始时间（秒，可编辑）<input type="number" name="start_time" min="0" step="0.001" required></label>
+      <label>结束时间（秒，可编辑）<input type="number" name="end_time" min="0" step="0.001" required></label>
+    </div>
+    <p class="dialog-note">时间可编辑：可超出字幕边界覆盖无字幕区间；替换范围以这里的时 间为准。</p>
     <label>处理器<select name="processor" data-segment-processor><option value="whisper">Whisper 短片段</option><option value="gemini" {{ 'disabled' if not gemini_profiles else '' }}>Gemini 原生音频{{ '（尚未配置）' if not gemini_profiles else '' }}</option></select></label>
     <div data-processor-fields="whisper">
       <div class="subtitle-time-fields">

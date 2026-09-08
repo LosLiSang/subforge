@@ -27,6 +27,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from subforge.asr.model_manager import cached_models
+from subforge.asr.engine import _audio_duration_seconds
 from subforge import __version__
 from subforge.config import Config, DEFAULT_MODELS_DIR
 from subforge.gemini_audio import (
@@ -1354,12 +1355,31 @@ def create_app(deps: UiDependencies) -> Starlette:
             start_index = int(value("start_index"))
             end_index = int(value("end_index"))
             document = SubtitleRevisionStore(library).load(track_id)
-            if start_index < 1 or end_index < start_index or end_index > len(document.source_entries):
+            if start_index < 1 or end_index < start_index or end_index > max(len(document.source_entries), len(document.target_entries)):
                 raise ValueError("请选择连续且有效的字幕范围")
-            selected_source = document.source_entries[start_index - 1:end_index]
-            selected_target = document.target_entries[start_index - 1:end_index]
-            target_start = selected_source[0].start
-            target_end = selected_source[-1].end
+            if value("start_time") and value("end_time"):
+                target_start = float(value("start_time"))
+                target_end = float(value("end_time"))
+                duration = _audio_duration_seconds(library.track_media_path(track_id))
+                if not 0 <= target_start < target_end:
+                    raise ValueError("片段时间范围无效")
+                if duration and target_end > duration + 0.001:
+                    raise ValueError("片段结束时间超过媒体时长")
+                selected_source = [
+                    entry for entry in document.source_entries
+                    if entry.start < target_end and entry.end > target_start
+                ]
+                selected_target = [
+                    entry for entry in document.target_entries
+                    if entry.start < target_end and entry.end > target_start
+                ]
+            else:
+                if start_index > len(document.source_entries):
+                    raise ValueError("请选择连续且有效的字幕范围")
+                selected_source = document.source_entries[start_index - 1:end_index]
+                selected_target = document.target_entries[start_index - 1:end_index]
+                target_start = selected_source[0].start
+                target_end = selected_source[-1].end
             processor_name = value("processor", "whisper")
             processing_mode = value("processing_mode", "transcribe_then_translate")
             options = {

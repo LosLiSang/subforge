@@ -183,7 +183,9 @@ syncSegmentProcessorFields();
 segmentButton?.addEventListener('click',()=>{
   const indices=selectedSegmentIndices();if(!indices.length)return;
   segmentForm.elements.start_index.value=String(indices[0]+1);segmentForm.elements.end_index.value=String(indices.at(-1)+1);
-  segmentForm.querySelector('[data-segment-range]').textContent=`第 ${indices[0]+1}–${indices.at(-1)+1} 条 · ${fmt(source[indices[0]].start)}–${fmt(source[indices.at(-1)].end)}`;
+  segmentForm.elements.start_time.value=String(Number(source[indices[0]].start.toFixed(3)));
+  segmentForm.elements.end_time.value=String(Number(source[indices.at(-1)].end.toFixed(3)));
+  segmentForm.querySelector('[data-segment-range]').textContent=`第 ${indices[0]+1}–${indices.at(-1)+1} 条 · 可直接修改下方时间`;
   const error=segmentForm.querySelector('[data-segment-error]');error.hidden=true;error.textContent='';segmentDialog.showModal();
 });
 for(const button of segmentDialog?.querySelectorAll('[data-close-segment-reprocess]')||[])button.addEventListener('click',()=>segmentDialog.close());

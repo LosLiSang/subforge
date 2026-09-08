@@ -1360,14 +1360,20 @@ def create_app(deps: UiDependencies) -> Starlette:
             document = SubtitleRevisionStore(library).load(track_id)
             if start_index < 1 or end_index < start_index or end_index > max(len(document.source_entries), len(document.target_entries)):
                 raise ValueError("请选择连续且有效的字幕范围")
-            if value("start_time") and value("end_time"):
-                target_start = float(value("start_time"))
-                target_end = float(value("end_time"))
-                duration = _audio_duration_seconds(library.track_media_path(track_id))
+            start_time_raw = value("start_time")
+            end_time_raw = value("end_time")
+            duration = _audio_duration_seconds(library.track_media_path(track_id))
+            if start_time_raw or end_time_raw:
+                # 允许只填一侧：空的一侧覆盖到音频开头/末尾；越界结束时间钳制到媒体时长
+                # （前端提交前已用确认框告知将覆盖到开头/末尾，这里再做确定性兜底）。
+                target_start = float(start_time_raw) if start_time_raw else 0.0
+                target_end = float(end_time_raw) if end_time_raw else (duration or 0.0)
+                if target_start < 0:
+                    target_start = 0.0
+                if duration and target_end > duration + 0.001:
+                    target_end = duration
                 if not 0 <= target_start < target_end:
                     raise ValueError("片段时间范围无效")
-                if duration and target_end > duration + 0.001:
-                    raise ValueError("片段结束时间超过媒体时长")
                 selected_source = [
                     entry for entry in document.source_entries
                     if entry.start < target_end and entry.end > target_start

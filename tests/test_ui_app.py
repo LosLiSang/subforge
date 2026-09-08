@@ -210,13 +210,87 @@ def test_segment_reprocess_accepts_explicit_time_range_beyond_entries(tmp_path):
     # 替换后首条从 1.0s 开始 → 自动补 [0,1) 空段（保留补录结果）
     assert [entry.text.strip() for entry in read_srt(source_path)] == ["", "补录原文"]
 
-    # 超出媒体时长被拒绝
+
+def test_segment_reprocess_covers_to_audio_edges(tmp_path):
+    from subforge.asr.engine import _audio_duration_seconds
+
+    library = tmp_path / "Library"
+    audio = tmp_path / "edge.m4a"
+    import wave
+    with wave.open(str(audio), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * 16000 * 8)
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="Edge", author="Author"
+    ))
+    source_path = store.track_subtitle_path(imported.track_id, "ja")
+    target_path = store.track_subtitle_path(imported.track_id, "zh")
+    write_srt([SubtitleEntry(1, 4.0, 6.0, "旧原文")], source_path)
+    write_srt([SubtitleEntry(1, 4.0, 6.0, "旧译文")], target_path)
+    store.close()
+    assert _audio_duration_seconds(audio) == 8.0
+
+    seen = {}
+
+    class FakeSegmentProcessor:
+        async def process(self, request):
+            seen["range"] = (request.target_start, request.target_end)
+            return SegmentCandidate(
+                [SubtitleEntry(1, 1.0, 3.5, "补录原文")],
+                [SubtitleEntry(1, 1.0, 3.5, "补录译文")],
+                "whisper", request.target_start, request.target_end,
+            )
+
+    client, headers = _authenticated_client(
+        tmp_path, library=library,
+        segment_processor_factory=lambda _o: FakeSegmentProcessor(),
+    )
+
+    # 超出媒体时长 → 钳制到媒体末尾（覆盖到音频末尾），而非直接拒绝
     bad = client.post(
         f"/tracks/{imported.track_id}/segments/reprocess",
         data={"start_index": "1", "end_index": "1", "start_time": "0", "end_time": "99", "processor": "whisper"},
         headers=headers,
     )
-    assert bad.status_code == 400
+    assert bad.status_code == 200, bad.text
+    assert seen["range"] == (0.0, 8.0)
+
+    # 结束时间留空 → 覆盖到媒体末尾
+    empty_end = client.post(
+        f"/tracks/{imported.track_id}/segments/reprocess",
+        data={"start_index": "1", "end_index": "1", "start_time": "0.5", "end_time": "", "processor": "whisper"},
+        headers=headers,
+    )
+    assert empty_end.status_code == 200, empty_end.text
+    assert seen["range"] == (0.5, 8.0)
+
+    # 开始时间留空 → 覆盖到音频开头
+    empty_start = client.post(
+        f"/tracks/{imported.track_id}/segments/reprocess",
+        data={"start_index": "1", "end_index": "1", "start_time": "", "end_time": "7.5", "processor": "whisper"},
+        headers=headers,
+    )
+    assert empty_start.status_code == 200, empty_start.text
+    assert seen["range"] == (0.0, 7.5)
+
+    # 两者皆空 → 回退到选中条目区间（兼容旧行为）
+    both_empty = client.post(
+        f"/tracks/{imported.track_id}/segments/reprocess",
+        data={"start_index": "1", "end_index": "1", "processor": "whisper"},
+        headers=headers,
+    )
+    assert both_empty.status_code == 200, both_empty.text
+    assert seen["range"] == (4.0, 6.0)
+
+    # 开始时间为负 → 钳制到音频开头
+    negative_start = client.post(
+        f"/tracks/{imported.track_id}/segments/reprocess",
+        data={"start_index": "1", "end_index": "1", "start_time": "-2", "end_time": "7.5", "processor": "whisper"},
+        headers=headers,
+    )
+    assert negative_start.status_code == 200, negative_start.text
+    assert seen["range"] == (0.0, 7.5)
 
 
 def test_segment_candidate_does_not_replace_subtitles_until_confirmed(tmp_path):

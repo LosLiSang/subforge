@@ -205,8 +205,27 @@ for(const button of segmentDialog?.querySelectorAll('[data-close-segment-reproce
 const candidateDialog=document.getElementById('segment-candidate-dialog');
 let activeCandidateId='';
 const lines=entries=>(entries||[]).map(entry=>`${fmt(entry.start)}–${fmt(entry.end)}  ${entry.text}`).join('\n\n');
+/* 覆盖确认：开始/结束时间留空或越界时，告知将覆盖到音频开头/末尾并征询确认 */
+function segmentCoverWarnings(){
+  if(!segmentForm)return [];
+  const startRaw=segmentForm.elements.start_time.value.trim();
+  const endRaw=segmentForm.elements.end_time.value.trim();
+  const startProvided=startRaw!=='',endProvided=endRaw!=='';
+  if(!startProvided&&!endProvided)return []; // 两者皆空：走后端选中条目区间，不覆盖到边界
+  const startVal=startProvided?parseFloat(startRaw):0;
+  const endVal=endProvided?parseFloat(endRaw):0;
+  const duration=audio&&Number.isFinite(audio.duration)&&audio.duration>0?audio.duration:0;
+  const notes=[];
+  if(!startProvided&&endProvided)notes.push('开始时间未指定，将覆盖到音频开头');
+  if(!endProvided&&startProvided)notes.push('结束时间未指定，将覆盖到音频末尾');
+  if(endProvided&&duration>0&&Number.isFinite(endVal)&&endVal>duration)notes.push('结束时间超过媒体时长，将覆盖到音频末尾');
+  if(startProvided&&Number.isFinite(startVal)&&startVal<0)notes.push('开始时间早于 0，将覆盖到音频开头');
+  return notes;
+}
 segmentForm?.addEventListener('submit',async event=>{
   event.preventDefault();const error=segmentForm.querySelector('[data-segment-error]');error.hidden=true;
+  const notes=segmentCoverWarnings();
+  if(notes.length&&!window.confirm(notes.join('；')+'。是否继续？'))return;
   const submit=segmentForm.querySelector('[type=submit]'),old=submit.textContent;submit.disabled=true;submit.textContent='处理中…';
   try{
     const response=await fetch(`/tracks/${track}/segments/reprocess`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(segmentForm))});

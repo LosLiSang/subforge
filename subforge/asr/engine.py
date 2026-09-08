@@ -61,6 +61,8 @@ def _preprocess_audio(input_path: Path) -> Path:
         out_path.unlink(missing_ok=True)
         return input_path
 
+    return out_path
+
 
 def _extract_channel(input_path: Path, channel: str, tmp_suffix: str = ".wav") -> Path:
     """Extract one channel (FL/FR) as a mono 16kHz wav with loudnorm, like _preprocess_audio."""

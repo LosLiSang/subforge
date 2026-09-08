@@ -37,8 +37,9 @@ from subforge.gemini_audio import (
     gemini_profile_from_mapping,
 )
 from subforge.library import CreatorKind, ImportRequest, ItemKind, LibraryStore
+from subforge.models import SubtitleEntry
 from subforge.presets import ASMR_PRESET
-from subforge.segment_processing import SegmentCandidate, SegmentProcessor, SegmentRequest, WhisperSegmentAdapter
+from subforge.segment_processing import SegmentProcessor, SegmentRequest, WhisperSegmentAdapter
 from subforge.subtitle_revision import SubtitleRevisionStore
 from subforge.translate.context import translate_all
 from subforge.translate.llm_client import translate_batch
@@ -71,7 +72,7 @@ class UiRuntime:
         self.selections: dict[str, Path] = {}
         self.imports: dict[str, dict] = {}  # 后台 URL 下载导入任务状态
         self.download_procs: dict[str, "subprocess.Popen"] = {}  # task_id -> yt-dlp 子进程（用于取消）
-        self.segment_candidates: dict[str, dict] = {}  # candidate_id -> track/candidate（未确认不落盘）
+        self.segment_candidates: dict[str, dict] = {}  # 已废弃：候选改为任务结果持久化
         self.pending_auto_processing: dict[str, tuple[list[str], ProcessingSnapshot]] = {}
         self.event_loop: asyncio.AbstractEventLoop | None = None
         self.library: LibraryStore | None = None
@@ -162,6 +163,7 @@ class UiRuntime:
                 translate_workers=self.deps.settings.get_translate_workers(),
                 translate_workers_resolver=self.deps.settings.get_translate_workers,
                 translation_prompt_resolver=self.deps.settings.get_translation_prompt,
+                segment_runner=_make_segment_runner(self.deps, self),
             )
         return self.library
 
@@ -185,6 +187,149 @@ class UiRuntime:
             **context,
         )
         return HTMLResponse(html)
+
+
+def _make_segment_runner(deps: UiDependencies, runtime: "UiRuntime"):
+    """构造片段重处理的后台运行器，交给 TaskManager 异步执行。"""
+
+    async def run(track_id: str, payload: dict, report) -> dict:
+        return await _execute_segment_job(deps, runtime, track_id, payload, report)
+
+    return run
+
+
+async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, payload: dict, report) -> dict:
+    """生成片段候选；返回可持久化的结果 dict，不改动正式字幕。"""
+    library = runtime.open_active_library()
+    if library is None:
+        raise RuntimeError("Library 未配置")
+
+    def value(name: str, default: str = "") -> str:
+        return str(payload.get(name, default))
+
+    start_index = int(value("start_index"))
+    end_index = int(value("end_index"))
+    document = SubtitleRevisionStore(library).load(track_id)
+    if start_index < 1 or end_index < start_index or end_index > max(len(document.source_entries), len(document.target_entries)):
+        raise ValueError("请选择连续且有效的字幕范围")
+
+    start_time_raw = value("start_time")
+    end_time_raw = value("end_time")
+    duration = _audio_duration_seconds(library.track_media_path(track_id))
+    if start_time_raw or end_time_raw:
+        target_start = float(start_time_raw) if start_time_raw else 0.0
+        target_end = float(end_time_raw) if end_time_raw else (duration or 0.0)
+        if target_start < 0:
+            target_start = 0.0
+        if duration and target_end > duration + 0.001:
+            target_end = duration
+        if not 0 <= target_start < target_end:
+            raise ValueError("片段时间范围无效")
+        selected_source = [e for e in document.source_entries if e.start < target_end and e.end > target_start]
+        selected_target = [e for e in document.target_entries if e.start < target_end and e.end > target_start]
+    else:
+        if start_index > len(document.source_entries):
+            raise ValueError("请选择连续且有效的字幕范围")
+        selected_source = document.source_entries[start_index - 1:end_index]
+        selected_target = document.target_entries[start_index - 1:end_index]
+        target_start = selected_source[0].start
+        target_end = selected_source[-1].end
+
+    processor_name = value("processor", "whisper")
+    processing_mode = value("processing_mode", "transcribe_then_translate")
+    options = {
+        "processor": processor_name,
+        "whisper_model": value("whisper_model", "large-v3"),
+        "scene": value("scene", "asmr"),
+        "llm_profile_id": value("llm_profile_id"),
+        "asr_profile_id": value("asr_profile_id"),
+        "processing_mode": processing_mode,
+    }
+    asr_options: dict = {}
+    if deps.segment_processor_factory is not None:
+        processor = deps.segment_processor_factory(options)
+    else:
+        translate_segment = None
+        if processor_name == "whisper" or processing_mode == "transcribe_then_translate":
+            profile_id = options["llm_profile_id"]
+            if not profile_id:
+                raise ValueError("请选择翻译配置")
+            profile = deps.profiles.resolve(profile_id)
+            translation_config = Config(
+                source_lang=document.source_language,
+                target_lang=document.target_language,
+                batch_size=20,
+                context_size=2,
+                translate_workers=1,
+                translation_global_workers=deps.settings.get_translate_workers(),
+                translation_limiter_dir=library.root / ".subforge" / "translation-slots",
+                translation_prompt=deps.settings.get_translation_prompt(),
+                llm_api_key=profile.api_key,
+                llm_base_url=profile.base_url,
+                llm_model=profile.model,
+                llm_proxy_url=profile.proxy_url,
+                llm_verify_tls=profile.verify_tls,
+                llm_ca_bundle=profile.ca_bundle,
+            )
+
+            async def translate_segment(entries, _source_language, _target_language):
+                return await translate_all(entries, translation_config, translate_batch)
+
+        if processor_name == "whisper":
+            model = options["whisper_model"]
+            direct_model = deps.settings.get_direct_model_path(model)
+            asr_options = {
+                "model_size": str(direct_model) if direct_model else model,
+                "models_dir": deps.settings.get_models_dir(),
+                "local_files_only": bool(direct_model),
+                "device": "auto",
+                "compute_type": "auto",
+            }
+            if options["scene"] == "asmr":
+                asr_options.update(ASMR_PRESET)
+            processor = WhisperSegmentAdapter(translate_fn=translate_segment)
+        elif processor_name == "gemini":
+            asr_profile_id = options["asr_profile_id"]
+            if not asr_profile_id:
+                raise ValueError("请选择音频转写模型配置")
+            asr_profile = deps.profiles.resolve(asr_profile_id)
+            gemini_profile = gemini_profile_from_mapping(asdict(asr_profile))
+            transport = (
+                GoogleGeminiTransport(gemini_profile)
+                if gemini_profile.protocol == "google_native"
+                else OpenAICompatibleAudioTransport(gemini_profile)
+            )
+            processor = GeminiAudioAdapter(
+                gemini_profile, transport, translate_fn=translate_segment,
+                progress_callback=lambda p: report("segment", 0.05 + 0.9 * p, None),
+            )
+        else:
+            raise ValueError("未知片段处理器")
+
+    report("segment", 0.05, "正在生成候选…")
+    request_model = SegmentRequest(
+        media_path=library.track_media_path(track_id),
+        target_start=target_start,
+        target_end=target_end,
+        source_language=document.source_language,
+        target_language=document.target_language,
+        processing_mode=processing_mode,
+        recognition_prompt=value("recognition_prompt"),
+        asr_options=asr_options,
+    )
+    candidate = await processor.process(request_model)
+    if not candidate.source_entries or not candidate.target_entries:
+        raise ValueError("片段处理没有返回完整双语候选")
+    return {
+        "processor": candidate.processor,
+        "target_start": candidate.target_start,
+        "target_end": candidate.target_end,
+        "warnings": list(candidate.warnings),
+        "source_entries": [{"index": e.index, "start": e.start, "end": e.end, "text": e.text} for e in candidate.source_entries],
+        "target_entries": [{"index": e.index, "start": e.start, "end": e.end, "text": e.text} for e in candidate.target_entries],
+        "current_source": [{"start": e.start, "end": e.end, "text": e.text} for e in selected_source],
+        "current_target": [{"start": e.start, "end": e.end, "text": e.text} for e in selected_target],
+    }
 
 
 def create_app(deps: UiDependencies) -> Starlette:
@@ -315,6 +460,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             translate_workers=deps.settings.get_translate_workers(),
             translate_workers_resolver=deps.settings.get_translate_workers,
             translation_prompt_resolver=deps.settings.get_translation_prompt,
+            segment_runner=_make_segment_runner(deps, runtime),
         )
         deps.settings.set_active_library(selected)
         return RedirectResponse("/", status_code=303)
@@ -1342,179 +1488,97 @@ def create_app(deps: UiDependencies) -> Starlette:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse(_revision_payload(document))
 
-    def _candidate_entries(entries) -> list[dict]:
-        return [{"start": entry.start, "end": entry.end, "text": entry.text} for entry in entries]
-
     async def reprocess_track_segment(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
         if error:
             return error
         library = runtime.open_active_library()
-        if library is None:
-            return Response("Not found", status_code=404)
+        if library is None or runtime.tasks is None:
+            return JSONResponse({"error": "Library is not configured"}, status_code=409)
         track_id = request.path_params["track_id"]
         try:
             form = await _read_form_values(request)
-            value = lambda name, default="": form.get(name, [default])[-1]
-            start_index = int(value("start_index"))
-            end_index = int(value("end_index"))
-            document = SubtitleRevisionStore(library).load(track_id)
-            if start_index < 1 or end_index < start_index or end_index > max(len(document.source_entries), len(document.target_entries)):
-                raise ValueError("请选择连续且有效的字幕范围")
-            start_time_raw = value("start_time")
-            end_time_raw = value("end_time")
-            duration = _audio_duration_seconds(library.track_media_path(track_id))
-            if start_time_raw or end_time_raw:
-                # 允许只填一侧：空的一侧覆盖到音频开头/末尾；越界结束时间钳制到媒体时长
-                # （前端提交前已用确认框告知将覆盖到开头/末尾，这里再做确定性兜底）。
-                target_start = float(start_time_raw) if start_time_raw else 0.0
-                target_end = float(end_time_raw) if end_time_raw else (duration or 0.0)
-                if target_start < 0:
-                    target_start = 0.0
-                if duration and target_end > duration + 0.001:
-                    target_end = duration
-                if not 0 <= target_start < target_end:
-                    raise ValueError("片段时间范围无效")
-                selected_source = [
-                    entry for entry in document.source_entries
-                    if entry.start < target_end and entry.end > target_start
-                ]
-                selected_target = [
-                    entry for entry in document.target_entries
-                    if entry.start < target_end and entry.end > target_start
-                ]
-            else:
-                if start_index > len(document.source_entries):
-                    raise ValueError("请选择连续且有效的字幕范围")
-                selected_source = document.source_entries[start_index - 1:end_index]
-                selected_target = document.target_entries[start_index - 1:end_index]
-                target_start = selected_source[0].start
-                target_end = selected_source[-1].end
-            processor_name = value("processor", "whisper")
-            processing_mode = value("processing_mode", "transcribe_then_translate")
-            options = {
-                "processor": processor_name,
-                "whisper_model": value("whisper_model", "large-v3"),
-                "scene": value("scene", "asmr"),
-                "llm_profile_id": value("llm_profile_id"),
-                "asr_profile_id": value("asr_profile_id"),
-                "processing_mode": processing_mode,
-            }
-            asr_options = {}
-            if deps.segment_processor_factory is not None:
-                processor = deps.segment_processor_factory(options)
-            else:
-                translate_segment = None
-                if processor_name == "whisper" or processing_mode == "transcribe_then_translate":
-                    profile_id = options["llm_profile_id"]
-                    if not profile_id:
-                        raise ValueError("请选择翻译配置")
-                    profile = deps.profiles.resolve(profile_id)
-                    translation_config = Config(
-                        source_lang=document.source_language,
-                        target_lang=document.target_language,
-                        batch_size=20,
-                        context_size=2,
-                        translate_workers=1,
-                        translation_global_workers=deps.settings.get_translate_workers(),
-                        translation_limiter_dir=library.root / ".subforge" / "translation-slots",
-                        translation_prompt=deps.settings.get_translation_prompt(),
-                        llm_api_key=profile.api_key,
-                        llm_base_url=profile.base_url,
-                        llm_model=profile.model,
-                        llm_proxy_url=profile.proxy_url,
-                        llm_verify_tls=profile.verify_tls,
-                        llm_ca_bundle=profile.ca_bundle,
-                    )
-
-                    async def translate_segment(entries, _source_language, _target_language):
-                        return await translate_all(entries, translation_config, translate_batch)
-
-                if processor_name == "whisper":
-                    model = options["whisper_model"]
-                    direct_model = deps.settings.get_direct_model_path(model)
-                    asr_options = {
-                        "model_size": str(direct_model) if direct_model else model,
-                        "models_dir": deps.settings.get_models_dir(),
-                        "local_files_only": bool(direct_model),
-                        "device": "auto",
-                        "compute_type": "auto",
-                    }
-                    if options["scene"] == "asmr":
-                        asr_options.update(ASMR_PRESET)
-                    processor = WhisperSegmentAdapter(translate_fn=translate_segment)
-                elif processor_name == "gemini":
-                    asr_profile_id = options["asr_profile_id"]
-                    if not asr_profile_id:
-                        raise ValueError("请选择音频转写模型配置")
-                    asr_profile = deps.profiles.resolve(asr_profile_id)
-                    gemini_profile = gemini_profile_from_mapping(asdict(asr_profile))
-                    transport = (
-                        GoogleGeminiTransport(gemini_profile)
-                        if gemini_profile.protocol == "google_native"
-                        else OpenAICompatibleAudioTransport(gemini_profile)
-                    )
-                    processor = GeminiAudioAdapter(
-                        gemini_profile, transport, translate_fn=translate_segment
-                    )
-                else:
-                    raise ValueError("未知片段处理器")
-            request_model = SegmentRequest(
-                media_path=library.track_media_path(track_id),
-                target_start=target_start,
-                target_end=target_end,
-                source_language=document.source_language,
-                target_language=document.target_language,
-                processing_mode=processing_mode,
-                recognition_prompt=value("recognition_prompt"),
-                asr_options=asr_options,
-            )
-            candidate = await processor.process(request_model)
-            if not candidate.source_entries or not candidate.target_entries:
-                raise ValueError("片段处理没有返回完整双语候选")
+            payload = {name: entries[-1] for name, entries in form.items()}
+            task = await runtime.tasks.enqueue_segment_reprocess(track_id, payload)
         except KeyError:
             return Response("Not found", status_code=404)
-        except (TypeError, ValueError, RuntimeError) as exc:
+        except (TypeError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"task_id": task.task_id}, status_code=202)
 
-        candidate_id = uuid4().hex
-        runtime.segment_candidates[candidate_id] = {"track_id": track_id, "candidate": candidate}
-        if len(runtime.segment_candidates) > 100:
-            runtime.segment_candidates.pop(next(iter(runtime.segment_candidates)))
-        return JSONResponse({
-            "candidate_id": candidate_id,
-            "processor": candidate.processor,
-            "target_start": candidate.target_start,
-            "target_end": candidate.target_end,
-            "warnings": list(candidate.warnings),
-            "current": {"source": _candidate_entries(selected_source), "target": _candidate_entries(selected_target)},
-            "candidate": {"source": _candidate_entries(candidate.source_entries), "target": _candidate_entries(candidate.target_entries)},
-        })
+    def _segment_result_entries(items) -> list[SubtitleEntry]:
+        return [
+            SubtitleEntry(int(item["index"]), float(item["start"]), float(item["end"]), str(item["text"]))
+            for item in (items or [])
+        ]
+
+    def _segment_candidate_payload(task) -> dict:
+        result = task.result or {}
+        return {
+            "task_id": task.task_id,
+            "status": task.status,
+            "processor": result.get("processor", ""),
+            "target_start": result.get("target_start"),
+            "target_end": result.get("target_end"),
+            "warnings": list(result.get("warnings", [])),
+            "current": {"source": result.get("current_source", []), "target": result.get("current_target", [])},
+            "candidate": {"source": result.get("source_entries", []), "target": result.get("target_entries", [])},
+        }
+
+    async def segment_candidate(request: Request) -> Response:
+        if runtime.tasks is None:
+            return Response("Not found", status_code=404)
+        try:
+            task = runtime.tasks.get_task(request.path_params["task_id"])
+        except KeyError:
+            return Response("Not found", status_code=404)
+        if task.kind != "segment_reprocess" or task.result is None:
+            return JSONResponse({"error": "候选尚未就绪"}, status_code=409)
+        return JSONResponse(_segment_candidate_payload(task))
 
     async def confirm_track_segment(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
         if error:
             return error
         library = runtime.open_active_library()
-        if library is None:
+        if library is None or runtime.tasks is None:
             return Response("Not found", status_code=404)
-        candidate_id = request.path_params["candidate_id"]
-        stored = runtime.segment_candidates.get(candidate_id)
-        if stored is None or stored["track_id"] != request.path_params["track_id"]:
+        try:
+            task = runtime.tasks.get_task(request.path_params["task_id"])
+        except KeyError:
             return Response("Not found", status_code=404)
-        candidate: SegmentCandidate = stored["candidate"]
+        if task.kind != "segment_reprocess" or not task.result:
+            return JSONResponse({"error": "候选尚未就绪"}, status_code=409)
+        if task.status not in {"awaiting_review", "failed"}:
+            return JSONResponse({"error": "任务状态不允许确认"}, status_code=409)
+        result = task.result
         try:
             document = SubtitleRevisionStore(library).replace_range(
-                stored["track_id"],
-                target_start=candidate.target_start,
-                target_end=candidate.target_end,
-                source_entries=candidate.source_entries,
-                target_entries=candidate.target_entries,
+                task.track_id,
+                target_start=float(result["target_start"]),
+                target_end=float(result["target_end"]),
+                source_entries=_segment_result_entries(result.get("source_entries")),
+                target_entries=_segment_result_entries(result.get("target_entries")),
             )
-        except (KeyError, ValueError) as exc:
+        except (KeyError, ValueError, TypeError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        runtime.segment_candidates.pop(candidate_id, None)
+        await runtime.tasks.mark_reviewed(task.task_id, status="completed", message="候选已接受并替换")
         return JSONResponse(_revision_payload(document))
+
+    async def discard_track_segment(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        if runtime.tasks is None:
+            return Response("Not found", status_code=404)
+        try:
+            task = runtime.tasks.get_task(request.path_params["task_id"])
+        except KeyError:
+            return Response("Not found", status_code=404)
+        if task.kind != "segment_reprocess":
+            return Response("Not found", status_code=404)
+        await runtime.tasks.mark_reviewed(task.task_id, status="discarded", message="候选已放弃")
+        return JSONResponse({"ok": True})
 
     async def restore_track_subtitles(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
@@ -1753,7 +1817,9 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/tracks/{track_id}/subtitles/structure", change_track_subtitle_structure, methods=["POST"]),
         Route("/tracks/{track_id}/subtitles/restore/{snapshot}", restore_track_subtitles, methods=["POST"]),
         Route("/tracks/{track_id}/segments/reprocess", reprocess_track_segment, methods=["POST"]),
-        Route("/tracks/{track_id}/segments/{candidate_id}/confirm", confirm_track_segment, methods=["POST"]),
+        Route("/tasks/{task_id}/candidate", segment_candidate),
+        Route("/tasks/{task_id}/candidate/confirm", confirm_track_segment, methods=["POST"]),
+        Route("/tasks/{task_id}/candidate/discard", discard_track_segment, methods=["POST"]),
         Route("/tracks/{track_id}/subtitles/{language}", track_subtitles),
         Route("/tracks/{track_id}/subtitles/{language}/download", download_track_subtitle),
         Route("/api/tasks/status", task_statuses),

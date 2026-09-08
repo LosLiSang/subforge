@@ -202,9 +202,6 @@ function openSegmentDialogForIndices(indices){
 }
 segmentButton?.addEventListener('click',()=>openSegmentDialogForIndices(selectedSegmentIndices()));
 for(const button of segmentDialog?.querySelectorAll('[data-close-segment-reprocess]')||[])button.addEventListener('click',()=>segmentDialog.close());
-const candidateDialog=document.getElementById('segment-candidate-dialog');
-let activeCandidateId='';
-const lines=entries=>(entries||[]).map(entry=>`${fmt(entry.start)}–${fmt(entry.end)}  ${entry.text}`).join('\n\n');
 /* 覆盖确认：开始/结束时间留空或越界时，告知将覆盖到音频开头/末尾并征询确认 */
 function segmentCoverWarnings(){
   if(!segmentForm)return [];
@@ -230,23 +227,13 @@ segmentForm?.addEventListener('submit',async event=>{
   try{
     const response=await fetch(`/tracks/${track}/segments/reprocess`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(segmentForm))});
     const data=await response.json().catch(()=>({}));
-    if(!response.ok){error.textContent=data.error||`片段处理失败（HTTP ${response.status}）`;error.hidden=false;return;}
-    activeCandidateId=data.candidate_id;
-    candidateDialog.querySelector('[data-current-source]').textContent=lines(data.current.source);
-    candidateDialog.querySelector('[data-current-target]').textContent=lines(data.current.target);
-    candidateDialog.querySelector('[data-candidate-source]').textContent=lines(data.candidate.source);
-    candidateDialog.querySelector('[data-candidate-target]').textContent=lines(data.candidate.target);
-    const warnings=candidateDialog.querySelector('[data-candidate-warnings]');warnings.textContent=(data.warnings||[]).join('；');warnings.hidden=!warnings.textContent;
-    candidateDialog.querySelector('[data-candidate-error]').hidden=true;
-    segmentDialog.close();candidateDialog.showModal();
+    if(response.status===202){
+      segmentDialog.close();
+      window.alert('已提交片段重处理任务，请在任务中心查看候选并接受替换。');
+      return;
+    }
+    error.textContent=data.error||`片段重处理失败（HTTP ${response.status}）`;error.hidden=false;
   }finally{submit.disabled=false;submit.textContent=old;}
-});
-for(const button of candidateDialog?.querySelectorAll('[data-close-segment-candidate]')||[])button.addEventListener('click',()=>{activeCandidateId='';candidateDialog.close()});
-candidateDialog?.querySelector('[data-confirm-segment-candidate]')?.addEventListener('click',async()=>{
-  if(!activeCandidateId)return;const error=candidateDialog.querySelector('[data-candidate-error]');error.hidden=true;
-  const response=await fetch(`/tracks/${track}/segments/${activeCandidateId}/confirm`,{method:'POST'});const data=await response.json().catch(()=>({}));
-  if(!response.ok){error.textContent=data.error||`替换失败（HTTP ${response.status}）`;error.hidden=false;return;}
-  activeCandidateId='';selectedSegmentRows.clear();applyRevisionPayload(data);candidateDialog.close();
 });
 
 const editDialog=document.getElementById('subtitle-edit-dialog');

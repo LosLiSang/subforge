@@ -190,6 +190,7 @@ class TaskManager:
         translate_workers_resolver=None,
         translation_prompt_resolver=None,
         media_concurrency: int | None = None,
+        segment_runner=None,
     ) -> None:
         if media_concurrency is not None:
             asr_concurrency = media_concurrency
@@ -208,6 +209,7 @@ class TaskManager:
         self._proxy_resolver = proxy_resolver
         self._models_dir_resolver = models_dir_resolver
         self._direct_model_resolver = direct_model_resolver
+        self._segment_runner = segment_runner
         self._tasks: dict[str, asyncio.Task] = {}
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
         self._restore_unfinished_tasks()
@@ -225,7 +227,8 @@ class TaskManager:
             task.stage = "queue"
             task.message = "应用重启后恢复任务"
             self._save(task)
-            self.library.update_track_status(task.track_id, "queued")
+            if task.kind == "full_process":
+                self.library.update_track_status(task.track_id, "queued")
             self._tasks[task.task_id] = asyncio.create_task(self._run(task))
             active_track_ids.add(task.track_id)
         for item in self.library.list_items():
@@ -271,7 +274,30 @@ class TaskManager:
         self._tasks[task.task_id] = asyncio.create_task(self._run(task))
         return task
 
+    async def enqueue_segment_reprocess(
+        self,
+        track_id: str,
+        payload: dict,
+    ) -> TaskRecord:
+        """入队一个片段重处理任务；立即返回，候选生成后进入 awaiting_review。"""
+        self.library.get_track(track_id)
+        task = TaskRecord(
+            task_id=uuid4().hex,
+            track_id=track_id,
+            status="queued",
+            stage="queue",
+            kind="segment_reprocess",
+            payload=payload,
+            created_at=_now(),
+        )
+        self._save(task)
+        self._tasks[task.task_id] = asyncio.create_task(self._run(task))
+        return task
+
     async def _run(self, task: TaskRecord) -> None:
+        if task.kind == "segment_reprocess":
+            await self._run_segment(task)
+            return
         try:
             async with self._semaphore:
                 consecutive_failures = 0
@@ -327,6 +353,55 @@ class TaskManager:
         finally:
             # 终态后从 _tasks 移除：asyncio.Task 协程帧、config_snapshot、
             # 失败异常及其 traceback 若滞留字典会随任务数无上界累积（内存泄露）。
+            self._tasks.pop(task.task_id, None)
+
+    async def _run_segment(self, task: TaskRecord) -> None:
+        """片段重处理：后台跑候选生成，完成转 awaiting_review。"""
+        if self._segment_runner is None:
+            task.status = "failed"
+            task.stage = "segment"
+            task.message = "片段重处理运行器未配置"
+            self._save(task)
+            return
+        try:
+            task.status = "running"
+            task.stage = "segment"
+            task.message = None
+            self._save(task)
+
+            def report(stage: str, progress: float | None, message: str | None = None) -> None:
+                task.stage = stage
+                if progress is not None:
+                    task.progress = max(0.0, min(1.0, progress))
+                if message is not None:
+                    task.message = message
+                self._save(task)
+                self._publish(task.task_id, {
+                    "type": "segment_progress",
+                    "stage": stage,
+                    "progress": task.progress,
+                    "message": message,
+                })
+
+            result = await self._segment_runner(task.track_id, task.payload or {}, report)
+            task.result = result
+            task.status = "awaiting_review"
+            task.stage = "review"
+            task.progress = 1.0
+            task.message = "候选已就绪，等待评审"
+            self._save(task)
+            self._publish(task.task_id, {"type": "segment_candidate_ready", "stage": "review"})
+        except asyncio.CancelledError:
+            if task.status != "cancelled":
+                task.status = "interrupted"
+                self._save(task)
+            raise
+        except Exception as exc:
+            task.status = "failed"
+            task.stage = "segment"
+            task.message = str(exc)
+            self._save(task)
+        finally:
             self._tasks.pop(task.task_id, None)
 
     def _build_request(self, task: TaskRecord) -> dict:
@@ -429,6 +504,16 @@ class TaskManager:
             task.status = "failed"
             self.library.update_track_status(task.track_id, "failed")
 
+    async def mark_reviewed(self, task_id: str, *, status: str, message: str | None = None) -> TaskRecord:
+        """候选评审结束后更新任务终态（completed / discarded）。"""
+        task = self.get_task(task_id)
+        task.status = status
+        task.stage = "review"
+        if message is not None:
+            task.message = message
+        self._save(task)
+        return task
+
     async def cancel(self, task_id: str) -> None:
         task = self.get_task(task_id)
         await self.worker.cancel(task_id)
@@ -439,7 +524,8 @@ class TaskManager:
         task.status = "cancelled"
         task.stage = "cancelled"
         self._save(task)
-        self.library.update_track_status(task.track_id, "waiting")
+        if task.kind == "full_process":
+            self.library.update_track_status(task.track_id, "waiting")
         self._publish(task_id, {"type": "task_cancelled", "stage": "cancelled"})
 
     def get_task(self, task_id: str) -> TaskRecord:

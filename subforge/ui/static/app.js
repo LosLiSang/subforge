@@ -93,6 +93,36 @@ async function pollTaskRows(){
 function taskPollDelay(){const fastStage=taskRows.some(row=>{const status=row.querySelector('.task-status')?.textContent.trim(),stage=row.querySelector('.task-stage')?.textContent.trim();return['queued','running'].includes(status)&&['model','asr'].includes(stage)});return fastStage?250:1000}
 async function scheduleTaskPoll(){await pollTaskRows();setTimeout(scheduleTaskPoll,taskPollDelay())}
 if(taskRows.length){scheduleTaskPoll();document.addEventListener('visibilitychange',pollTaskRows)}
+/* 片段重处理候选评审：从任务中心打开候选对比并接受/放弃 */
+const segmentCandidateDialog=document.getElementById('segment-candidate-dialog');
+let reviewTaskId='';
+function fmtCandidateTime(t){if(t==null||!isFinite(t))return'--:--';const s=Math.max(0,Math.floor(t)),m=Math.floor(s/60),sec=s%60,p=n=>String(n).padStart(2,'0');return`${m}:${p(sec)}`}
+function renderCandidateEntries(entries){return(entries||[]).map(e=>`${fmtCandidateTime(e.start)}–${fmtCandidateTime(e.end)}  ${e.text}`).join('\n\n')}
+for(const button of document.querySelectorAll('[data-review-task]'))button.addEventListener('click',async()=>{
+ if(!segmentCandidateDialog)return;
+ const taskId=button.dataset.reviewTask,error=segmentCandidateDialog.querySelector('[data-candidate-error]');
+ const response=await fetch(`/tasks/${taskId}/candidate`);const data=await response.json().catch(()=>({}));
+ if(!response.ok){error.textContent=data.error||`候选读取失败（HTTP ${response.status}）`;error.hidden=false;segmentCandidateDialog.showModal();return;}
+ reviewTaskId=taskId;
+ segmentCandidateDialog.querySelector('[data-current-source]').textContent=renderCandidateEntries(data.current.source);
+ segmentCandidateDialog.querySelector('[data-current-target]').textContent=renderCandidateEntries(data.current.target);
+ segmentCandidateDialog.querySelector('[data-candidate-source]').textContent=renderCandidateEntries(data.candidate.source);
+ segmentCandidateDialog.querySelector('[data-candidate-target]').textContent=renderCandidateEntries(data.candidate.target);
+ const warnings=segmentCandidateDialog.querySelector('[data-candidate-warnings]');warnings.textContent=(data.warnings||[]).join('；');warnings.hidden=!warnings.textContent;
+ error.hidden=true;segmentCandidateDialog.showModal();
+});
+for(const button of document.querySelectorAll('[data-close-segment-candidate]'))button.addEventListener('click',()=>{reviewTaskId='';segmentCandidateDialog?.close()});
+segmentCandidateDialog?.querySelector('[data-confirm-segment-candidate]')?.addEventListener('click',async()=>{
+ if(!reviewTaskId)return;const error=segmentCandidateDialog.querySelector('[data-candidate-error]');error.hidden=true;
+ const response=await fetch(`/tasks/${reviewTaskId}/candidate/confirm`,{method:'POST'});const data=await response.json().catch(()=>({}));
+ if(!response.ok){error.textContent=data.error||`替换失败（HTTP ${response.status}）`;error.hidden=false;return;}
+ reviewTaskId='';segmentCandidateDialog.close();location.reload();
+});
+for(const button of document.querySelectorAll('[data-discard-task]'))button.addEventListener('click',async()=>{
+ if(!window.confirm('放弃这个候选？正式字幕不会改变。'))return;
+ const response=await fetch(`/tasks/${button.dataset.discardTask}/candidate/discard`,{method:'POST'});
+ if(response.ok)location.reload();
+});
 /* 设置页 Tab 切换：同屏只显示一个分区，表单仍是一个整体（保存语义不变） */
 for(const tab of document.querySelectorAll('.tab-bar .tab')){tab.addEventListener('click',()=>{const name=tab.dataset.tab;for(const t of document.querySelectorAll('.tab-bar .tab')){t.classList.toggle('active',t===tab);t.setAttribute('aria-selected',t===tab?'true':'false')}for(const panel of document.querySelectorAll('[data-tab-panel]'))panel.classList.toggle('active',panel.dataset.tabPanel===name);});}
 /* 配置弹窗：新增/复制/编辑共用一个 dialog，浏览器端始终不接触已有 Key。 */

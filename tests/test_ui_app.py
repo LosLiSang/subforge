@@ -157,6 +157,24 @@ def test_audio_model_profiles_share_the_unified_store(tmp_path):
     assert "/audio-models\"" not in shell  # 独立侧栏入口已收回设置 Tab
 
 
+def _await_segment_candidate(client, headers, task_id, timeout=10.0):
+    """轮询到片段候选就绪（awaiting_review）并返回候选负载。"""
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        response = client.get(f"/tasks/{task_id}/candidate", headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        time.sleep(0.02)
+    raise AssertionError("segment candidate not ready in time")
+
+
+def _enqueue_segment_reprocess(client, headers, track_id, data):
+    response = client.post(f"/tracks/{track_id}/segments/reprocess", data=data, headers=headers)
+    assert response.status_code == 202, response.text
+    return response.json()["task_id"]
+
+
 def test_segment_reprocess_accepts_explicit_time_range_beyond_entries(tmp_path):
     from subforge.asr.engine import _audio_duration_seconds
 
@@ -198,13 +216,15 @@ def test_segment_reprocess_accepts_explicit_time_range_beyond_entries(tmp_path):
         data={"start_index": "1", "end_index": "1", "start_time": "0.5", "end_time": "7.5", "processor": "whisper"},
         headers=headers,
     )
-    assert response.status_code == 200, response.text
+    assert response.status_code == 202, response.text
+    task_id = response.json()["task_id"]
+    candidate = _await_segment_candidate(client, headers, task_id)
     assert seen["range"] == (0.5, 7.5)
     # 当前字幕显示与显式范围相交的条目
-    assert response.json()["current"]["source"] == [{"start": 4.0, "end": 6.0, "text": "旧原文"}]
+    assert candidate["current"]["source"] == [{"start": 4.0, "end": 6.0, "text": "旧原文"}]
 
     confirm = client.post(
-        f"/tracks/{imported.track_id}/segments/{response.json()['candidate_id']}/confirm",
+        f"/tasks/{task_id}/candidate/confirm",
         headers=headers,
     )
     assert confirm.status_code == 200
@@ -249,48 +269,38 @@ def test_segment_reprocess_covers_to_audio_edges(tmp_path):
     )
 
     # 超出媒体时长 → 钳制到媒体末尾（覆盖到音频末尾），而非直接拒绝
-    bad = client.post(
-        f"/tracks/{imported.track_id}/segments/reprocess",
-        data={"start_index": "1", "end_index": "1", "start_time": "0", "end_time": "99", "processor": "whisper"},
-        headers=headers,
-    )
-    assert bad.status_code == 200, bad.text
+    bad = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "1", "start_time": "0", "end_time": "99", "processor": "whisper",
+    })
+    _await_segment_candidate(client, headers, bad)
     assert seen["range"] == (0.0, 8.0)
 
     # 结束时间留空 → 覆盖到媒体末尾
-    empty_end = client.post(
-        f"/tracks/{imported.track_id}/segments/reprocess",
-        data={"start_index": "1", "end_index": "1", "start_time": "0.5", "end_time": "", "processor": "whisper"},
-        headers=headers,
-    )
-    assert empty_end.status_code == 200, empty_end.text
+    empty_end = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "1", "start_time": "0.5", "end_time": "", "processor": "whisper",
+    })
+    _await_segment_candidate(client, headers, empty_end)
     assert seen["range"] == (0.5, 8.0)
 
     # 开始时间留空 → 覆盖到音频开头
-    empty_start = client.post(
-        f"/tracks/{imported.track_id}/segments/reprocess",
-        data={"start_index": "1", "end_index": "1", "start_time": "", "end_time": "7.5", "processor": "whisper"},
-        headers=headers,
-    )
-    assert empty_start.status_code == 200, empty_start.text
+    empty_start = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "1", "start_time": "", "end_time": "7.5", "processor": "whisper",
+    })
+    _await_segment_candidate(client, headers, empty_start)
     assert seen["range"] == (0.0, 7.5)
 
     # 两者皆空 → 回退到选中条目区间（兼容旧行为）
-    both_empty = client.post(
-        f"/tracks/{imported.track_id}/segments/reprocess",
-        data={"start_index": "1", "end_index": "1", "processor": "whisper"},
-        headers=headers,
-    )
-    assert both_empty.status_code == 200, both_empty.text
+    both_empty = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "1", "processor": "whisper",
+    })
+    _await_segment_candidate(client, headers, both_empty)
     assert seen["range"] == (4.0, 6.0)
 
     # 开始时间为负 → 钳制到音频开头
-    negative_start = client.post(
-        f"/tracks/{imported.track_id}/segments/reprocess",
-        data={"start_index": "1", "end_index": "1", "start_time": "-2", "end_time": "7.5", "processor": "whisper"},
-        headers=headers,
-    )
-    assert negative_start.status_code == 200, negative_start.text
+    negative_start = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "1", "start_time": "-2", "end_time": "7.5", "processor": "whisper",
+    })
+    _await_segment_candidate(client, headers, negative_start)
     assert seen["range"] == (0.0, 7.5)
 
 
@@ -329,19 +339,21 @@ def test_segment_candidate_does_not_replace_subtitles_until_confirmed(tmp_path):
     )
     page = client.get(f"/tracks/{imported.track_id}/play").text
     assert 'data-open-segment-reprocess' in page
-    assert 'id="segment-candidate-dialog"' in page
+    # 候选评审已移到任务中心
+    assert 'id="segment-candidate-dialog"' in client.get("/downloads").text
 
-    response = client.post(
-        f"/tracks/{imported.track_id}/segments/reprocess",
-        data={"start_index": "1", "end_index": "2", "processor": "whisper"},
-        headers=headers,
-    )
-    assert response.status_code == 200
-    candidate_id = response.json()["candidate_id"]
+    task_id = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "2", "processor": "whisper",
+    })
+    candidate = _await_segment_candidate(client, headers, task_id)
+    assert candidate["status"] == "awaiting_review"
+    # 任务中心出现「查看候选」入口
+    assert f'data-review-task="{task_id}"' in client.get("/downloads").text
+    # 确认前正式字幕不变
     assert [entry.text for entry in read_srt(source_path)] == ["旧原文一", "旧原文二"]
 
     response = client.post(
-        f"/tracks/{imported.track_id}/segments/{candidate_id}/confirm",
+        f"/tasks/{task_id}/candidate/confirm",
         headers=headers,
     )
     assert response.status_code == 200
@@ -2142,15 +2154,11 @@ def test_segment_reprocess_gemini_uses_unified_asr_profile(tmp_path):
         tmp_path, library=library, model_profiles=profiles,
         segment_processor_factory=lambda options: seen.update(options) or FakeProcessor(),
     )
-    response = client.post(
-        f"/tracks/{imported.track_id}/segments/reprocess",
-        data={
-            "start_index": "1", "end_index": "1", "start_time": "1", "end_time": "2",
-            "processor": "gemini", "asr_profile_id": profile.profile_id,
-            "processing_mode": "transcribe_then_translate",
-        },
-        headers=headers,
-    )
-    assert response.status_code == 200, response.text
+    task_id = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "1", "start_time": "1", "end_time": "2",
+        "processor": "gemini", "asr_profile_id": profile.profile_id,
+        "processing_mode": "transcribe_then_translate",
+    })
+    candidate = _await_segment_candidate(client, headers, task_id)
     assert seen["asr_profile_id"] == profile.profile_id
-    assert response.json()["candidate"]["source"][0]["text"] == "候选原文"
+    assert candidate["candidate"]["source"][0]["text"] == "候选原文"

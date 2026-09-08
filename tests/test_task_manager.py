@@ -527,3 +527,63 @@ def test_task_columns_migrate_idempotently(tmp_path):
     columns2 = {row[1] for row in store._db.execute("PRAGMA table_info(tasks)").fetchall()}
     assert columns2 == columns
     store.close()
+
+
+async def test_segment_reprocess_task_persists_result_and_discard(tmp_path):
+    """片段候选结果写入 SQLite，重启后仍可读取；放弃只改任务状态，不动字幕。"""
+    store = LibraryStore.initialize(tmp_path / "Library")
+    audio = tmp_path / "audio.m4a"
+    audio.write_bytes(b"audio")
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Work", rj_code="RJ00000109"
+    ))
+    candidate = {
+        "processor": "whisper", "target_start": 0.0, "target_end": 2.0,
+        "warnings": [], "source_entries": [{"index": 1, "start": 0.0, "end": 2.0, "text": "候选"}],
+        "target_entries": [{"index": 1, "start": 0.0, "end": 2.0, "text": "译文"}],
+        "current_source": [], "current_target": [],
+    }
+
+    async def runner(track_id, payload, report):
+        report("segment", 0.5, "生成中")
+        return candidate
+
+    manager = TaskManager(store, FakeWorkerAdapter([]), segment_runner=runner)
+    task = await manager.enqueue_segment_reprocess(imported.track_id, {"start_index": "1", "end_index": "1"})
+    await _wait_until(lambda: manager.get_task(task.task_id).status == "awaiting_review")
+    assert manager.get_task(task.task_id).result == candidate
+    await manager.close()
+    store.close()
+
+    reopened = LibraryStore.open(tmp_path / "Library")
+    manager2 = TaskManager(reopened, FakeWorkerAdapter([]))
+    persisted = manager2.get_task(task.task_id)
+    assert persisted.status == "awaiting_review"
+    assert persisted.result == candidate
+    assert persisted.kind == "segment_reprocess"
+    assert persisted.payload == {"start_index": "1", "end_index": "1"}
+
+    await manager2.mark_reviewed(task.task_id, status="discarded", message="候选已放弃")
+    assert manager2.get_task(task.task_id).status == "discarded"
+    await manager2.close()
+
+
+async def test_segment_task_failure_keeps_history(tmp_path):
+    store = LibraryStore.initialize(tmp_path / "Library")
+    audio = tmp_path / "audio.m4a"
+    audio.write_bytes(b"audio")
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Work", rj_code="RJ00000110"
+    ))
+
+    async def runner(track_id, payload, report):
+        raise RuntimeError("provider down")
+
+    manager = TaskManager(store, FakeWorkerAdapter([]), segment_runner=runner)
+    task = await manager.enqueue_segment_reprocess(imported.track_id, {})
+    await _wait_until(lambda: manager.get_task(task.task_id).status == "failed")
+    failed = manager.get_task(task.task_id)
+    assert failed.message == "provider down"
+    assert failed.finished_at is not None
+    await manager.close()
+    store.close()

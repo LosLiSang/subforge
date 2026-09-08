@@ -21,3 +21,6 @@ package-lock.json
 
 # MkDocs build output
 site/
+
+# local QA screenshots & scratch
+artifacts/

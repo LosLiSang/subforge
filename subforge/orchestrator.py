@@ -16,7 +16,7 @@ from subforge.gemini_audio import (
     OpenAICompatibleAudioTransport,
     gemini_profile_from_mapping,
 )
-from subforge.models import Job, JobStatus
+from subforge.models import Job, JobStatus, SubtitleEntry
 from subforge.resume import ResumeStore, read_reusable_srt
 from subforge.segment_processing import SegmentRequest
 from subforge.timeline import adjust_gaps, merge_short_entries
@@ -40,6 +40,25 @@ class _SlotAllocator:
 
     async def release(self, slot: int) -> None:
         await self._available.put(slot)
+
+
+def _clamp_entries_to_duration(entries: list, duration: float) -> list:
+    """把 ASR 结果钳制到媒体时长内。
+
+    Whisper 对结尾静音会幻觉出「ご視聴ありがとうございました」这类尾句，
+    时间戳可能超出实际音频长度；写盘前钳制/丢弃，避免脏数据阻止后续编辑。
+    """
+    if duration <= 0:
+        return entries
+    clamped: list[SubtitleEntry] = []
+    for entry in entries:
+        if entry.start >= duration - 0.001:
+            continue  # 完全在音频之后，属幻觉
+        end = min(float(entry.end), duration)
+        if end - float(entry.start) < 0.001:
+            continue
+        clamped.append(SubtitleEntry(len(clamped) + 1, float(entry.start), round(end, 3), entry.text))
+    return clamped
 
 
 def _target_srt_is_complete(source_entries: list, target_entries: list) -> bool:
@@ -284,6 +303,7 @@ async def process_one(
         logger.debug("[%s] DBG: merge_short_entries done, %d entries", job.id, len(entries))
         entries = adjust_gaps(entries)
         logger.debug("[%s] DBG: adjust_gaps done", job.id)
+        entries = _clamp_entries_to_duration(entries, _audio_duration_seconds(job.file_path))
 
         # Write source language SRT
         logger.debug("[%s] DBG: about to write_srt to %s", job.id, source_srt_path)

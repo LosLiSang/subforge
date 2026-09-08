@@ -605,3 +605,20 @@ async def test_run_asr_model_without_profile_raises(tmp_path):
     job = Job(file_path=audio, id="j2")
     with pytest.raises(ValueError):
         await orchestrator._run_asr_model(job, Config(asr_provider="model"), None)
+
+
+def test_clamp_entries_to_duration_trims_and_drops_hallucinated_tail():
+    from subforge.orchestrator import _clamp_entries_to_duration
+
+    entries = [
+        SubtitleEntry(1, 0.0, 1.0, "正常"),
+        SubtitleEntry(2, 9.0, 12.5, "尾句越界"),
+        SubtitleEntry(3, 11.0, 13.0, "纯幻觉"),
+    ]
+    out = _clamp_entries_to_duration(entries, 10.0)
+    assert [(entry.index, entry.start, entry.end, entry.text) for entry in out] == [
+        (1, 0.0, 1.0, "正常"),
+        (2, 9.0, 10.0, "尾句越界"),
+    ]
+    # duration 未知时不改动
+    assert _clamp_entries_to_duration(entries, 0.0) == entries

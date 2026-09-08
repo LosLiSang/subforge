@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -90,6 +90,38 @@ class SubtitleRevisionStore:
         self._commit_files(pairs)
         return self.load(track_id)
 
+    def _clamp_overflow(
+        self,
+        track_id: str,
+        entries: list[SubtitleEntry],
+    ) -> list[SubtitleEntry]:
+        """把历史遗留的越界字幕结尾钳制到媒体时长。
+
+        Whisper 对结尾静音会产生幻觉（如「ご視聴ありがとうございました」），
+        其时间戳可能超出媒体时长。这类脏数据不应阻止后续任何编辑/片段替换，
+        因此在改动前就地修复，而不是整份拒绝。
+        """
+        duration = self._duration_resolver(self.library.track_media_path(track_id))
+        if duration <= 0:
+            return entries
+        healed: list[SubtitleEntry] = []
+        for entry in entries:
+            if entry.end <= duration + 0.001:
+                healed.append(entry)
+                continue
+            end = duration
+            start = entry.start
+            if start >= end:
+                start = max(0.0, round(end - 0.001, 3))
+            healed.append(replace(entry, start=round(start, 3), end=round(end, 3)))
+        return healed
+
+    def heal_overflow(self, track_id: str, document: SubtitleDocument) -> SubtitleDocument:
+        """就地修复历史越界字幕（供手动校正等整份提交路径复用）。"""
+        document.source_entries = self._clamp_overflow(track_id, document.source_entries)
+        document.target_entries = self._clamp_overflow(track_id, document.target_entries)
+        return document
+
     def replace_range(
         self,
         track_id: str,
@@ -110,14 +142,14 @@ class SubtitleRevisionStore:
             if abs(source.start - target.start) > 0.001 or abs(source.end - target.end) > 0.001:
                 raise ValueError("候选源字幕与翻译字幕时间轴不一致")
 
-        kept_source = [
+        kept_source = self._clamp_overflow(track_id, [
             entry for entry in document.source_entries
             if entry.end <= target_start or entry.start >= target_end
-        ]
-        kept_target = [
+        ])
+        kept_target = self._clamp_overflow(track_id, [
             entry for entry in document.target_entries
             if entry.end <= target_start or entry.start >= target_end
-        ]
+        ])
         source = sorted([*kept_source, *source_entries], key=lambda entry: (entry.start, entry.end))
         target = sorted([*kept_target, *target_entries], key=lambda entry: (entry.start, entry.end))
         return self.commit(track_id, source, target)
@@ -134,14 +166,16 @@ class SubtitleRevisionStore:
         document = self._aligned_document(track_id)
         if start_index < 1 or end_index < start_index or end_index > len(document.source_entries):
             raise ValueError("合并字幕范围无效")
-        first = document.source_entries[start_index - 1]
-        last = document.source_entries[end_index - 1]
-        source = document.source_entries[:start_index - 1] + [
+        source = self._clamp_overflow(track_id, document.source_entries)
+        target = self._clamp_overflow(track_id, document.target_entries)
+        first = source[start_index - 1]
+        last = source[end_index - 1]
+        source = source[:start_index - 1] + [
             SubtitleEntry(start_index, first.start, last.end, source_text)
-        ] + document.source_entries[end_index:]
-        target = document.target_entries[:start_index - 1] + [
+        ] + source[end_index:]
+        target = target[:start_index - 1] + [
             SubtitleEntry(start_index, first.start, last.end, target_text)
-        ] + document.target_entries[end_index:]
+        ] + target[end_index:]
         return self.commit(track_id, source, target)
 
     def split(
@@ -156,7 +190,9 @@ class SubtitleRevisionStore:
         document = self._aligned_document(track_id)
         if index < 1 or index > len(document.source_entries):
             raise ValueError("拆分字幕序号不存在")
-        current = document.source_entries[index - 1]
+        source_all = self._clamp_overflow(track_id, document.source_entries)
+        target_all = self._clamp_overflow(track_id, document.target_entries)
+        current = source_all[index - 1]
         if not current.start < split_time < current.end:
             raise ValueError("拆分时间必须位于原字幕范围内")
         source_parts = [
@@ -167,16 +203,16 @@ class SubtitleRevisionStore:
             SubtitleEntry(index, current.start, split_time, target_texts[0]),
             SubtitleEntry(index + 1, split_time, current.end, target_texts[1]),
         ]
-        source = document.source_entries[:index - 1] + source_parts + document.source_entries[index:]
-        target = document.target_entries[:index - 1] + target_parts + document.target_entries[index:]
+        source = source_all[:index - 1] + source_parts + source_all[index:]
+        target = target_all[:index - 1] + target_parts + target_all[index:]
         return self.commit(track_id, source, target)
 
     def delete(self, track_id: str, index: int) -> SubtitleDocument:
         document = self._aligned_document(track_id)
         if index < 1 or index > len(document.source_entries):
             raise ValueError("删除字幕序号不存在")
-        source = document.source_entries[:index - 1] + document.source_entries[index:]
-        target = document.target_entries[:index - 1] + document.target_entries[index:]
+        source = self._clamp_overflow(track_id, document.source_entries[:index - 1] + document.source_entries[index:])
+        target = self._clamp_overflow(track_id, document.target_entries[:index - 1] + document.target_entries[index:])
         return self.commit(track_id, source, target)
 
     def restore_previous(self, track_id: str) -> SubtitleDocument:

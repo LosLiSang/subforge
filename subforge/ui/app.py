@@ -1285,6 +1285,9 @@ def create_app(deps: UiDependencies) -> Starlette:
             document = store.load(track_id)
             if index < 1 or index > max(len(document.source_entries), len(document.target_entries)):
                 return JSONResponse({"error": "字幕序号不存在"}, status_code=404)
+            # 先修复历史越界字幕（Whisper 结尾幻觉），避免整份提交被脏数据卡死；
+            # 本次编辑的起止时间随后覆写，仍按 R1.2 严格校验。
+            document = store.heal_overflow(track_id, document)
             source_text = value("source_text").strip()
             target_text = value("target_text").strip()
             if index <= len(document.source_entries):

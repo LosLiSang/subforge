@@ -202,3 +202,48 @@ def test_commit_rejects_invalid_timeline(tmp_path, entries, message):
     with pytest.raises(ValueError, match=message):
         store.commit(track_id, entries, [SubtitleEntry(1, 0.0, 1.0, "译文")])
     library.close()
+
+
+def test_replace_range_heals_legacy_overflow_entry(tmp_path):
+    """历史越界字幕（Whisper 结尾幻觉）不应阻止片段替换；被钳制到媒体时长。"""
+    library, track_id, source_path, target_path = _library_with_subtitles(tmp_path)
+    # 模拟历史脏数据：最后一条结束时间超出媒体时长
+    write_srt([
+        SubtitleEntry(1, 0.0, 1.0, "原文一"),
+        SubtitleEntry(2, 1.2, 2.0, "原文二"),
+        SubtitleEntry(3, 9.0, 12.5, "ご視聴ありがとうございました"),
+    ], source_path)
+    write_srt([
+        SubtitleEntry(1, 0.0, 1.0, "译文一"),
+        SubtitleEntry(2, 1.2, 2.0, "译文二"),
+        SubtitleEntry(3, 9.0, 12.5, "感谢观看"),
+    ], target_path)
+    store = SubtitleRevisionStore(library, duration_resolver=lambda _path: 10.0)
+
+    document = store.replace_range(
+        track_id,
+        target_start=0.0,
+        target_end=1.0,
+        source_entries=[SubtitleEntry(1, 0.0, 1.0, "新原文")],
+        target_entries=[SubtitleEntry(1, 0.0, 1.0, "新译文")],
+    )
+    texts = [entry.text for entry in document.source_entries]
+    assert "新原文" in texts
+    assert "ご視聴ありがとうございました" in texts
+    # 越界结尾被钳制到 10.0，整份提交不再被拒绝
+    healed = next(entry for entry in document.source_entries if entry.text == "ご視聴ありがとうございました")
+    assert healed.end == 10.0
+    library.close()
+
+
+def test_commit_still_rejects_new_out_of_range_entry(tmp_path):
+    """治旧不等于放宽：显式提交的越界新字幕仍按 R1.2 拒绝。"""
+    library, track_id, _source_path, _target_path = _library_with_subtitles(tmp_path)
+    store = SubtitleRevisionStore(library, duration_resolver=lambda _path: 10.0)
+    with pytest.raises(ValueError, match="超过媒体时长"):
+        store.commit(
+            track_id,
+            [SubtitleEntry(1, 0.0, 11.0, "越界")],
+            [SubtitleEntry(1, 0.0, 11.0, "越界")],
+        )
+    library.close()

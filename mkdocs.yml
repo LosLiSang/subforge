@@ -1,0 +1,70 @@
+site_name: SubForge 手册
+site_description: 面向同人音声（RJ 作品）的本地字幕翻译工具——ASR 识别日语，LLM 翻译成中文，输出双语 SRT
+repo_name: LosLiSang/subforge
+repo_url: https://github.com/LosLiSang/subforge
+edit_uri: edit/main/docs/
+copyright: MIT License
+
+theme:
+  name: material
+  language: zh
+  icon:
+    logo: material/microphone-message
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: 切换到暗色
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: 切换到亮色
+  features:
+    - content.code.copy
+    - content.tabs.link
+    - navigation.expand
+    - navigation.indexes
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.suggest
+
+plugins:
+  - search:
+      separator: "[\\s\\-\\.]+"
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: "#"
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+nav:
+  - 首页: index.md
+  - 上手:
+      - 安装与配置: install.md
+      - CLI 批处理: cli.md
+      - Library 工作台: library-ui.md
+  - 使用指南:
+      - 处理管线与 ASMR 预设: pipeline.md
+      - 模型配置（ASR / 翻译 / 合并）: model-profiles.md
+      - 片段重处理与候选评审: segment-reprocess.md
+      - 任务中心与任务状态: tasks.md
+      - 字幕校正: subtitle-revision.md
+  - 参考:
+      - 常见问题与排障: faq.md
+      - 架构决策记录:
+          - adr/index.md
+          - adr/0001-product-positioning.md
+          - adr/0002-library-filesystem-authority.md
+  - 术语表: glossary.md

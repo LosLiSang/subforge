@@ -9,6 +9,8 @@ Audio / Video → ASR → Timeline Fix → LLM Translate → .srt
 SubForge 以 ASMR、低语和长音频的批量处理为核心场景。项目开源公开，但目前仍以个人使用为先。
 
 > 当前版本同时提供 CLI 批处理和 `subforge ui` 本地 Library 工作台；niconico 直播实时翻译仍在规划中，参见 [ROADMAP.md](ROADMAP.md)。
+>
+> 📖 **完整手册**：`docs/` 目录（Material for MkDocs）——`uv sync --group docs && uv run mkdocs serve` 本地预览，覆盖安装、CLI、Library 工作台、模型配置、片段重处理、任务中心与排障。
 
 ## 适用场景
 

@@ -1452,6 +1452,7 @@ def test_creator_management_can_create_rename_merge_and_delete(tmp_path):
     assert renamed.status_code == 303
     creator_page = client.get("/creators").text
     assert "Circle B" in creator_page
+    assert f'href="/?creator={creator.creator_id}"' in creator_page
     assert 'class="tab-bar creator-tabs"' in creator_page
     assert "data-creator-menu-button" in creator_page
     assert 'id="creator-edit-dialog"' in creator_page

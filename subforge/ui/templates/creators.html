@@ -10,7 +10,7 @@
   <div class="creator-list">
   {% for row in creator_rows if row.creator.kind.value == kind %}
     <article class="creator-row" data-creator-row data-creator-name="{{ row.creator.name }}">
-      <div class="creator-row-main"><span class="creator-tag creator-tag-{{ kind }}">{{ row.creator.name }}</span><span>{{ row.item_count }} 部作品</span><span>{{ row.track_count }} 音轨</span></div>
+      <div class="creator-row-main"><a class="creator-row-link" href="/?creator={{ row.creator.creator_id }}" target="content-frame" title="在作品库中筛选该创作者"><span class="creator-tag creator-tag-{{ kind }}">{{ row.creator.name }}</span></a><span>{{ row.item_count }} 部作品</span><span>{{ row.track_count }} 音轨</span></div>
       <div class="creator-row-menu-wrap"><button type="button" class="ghost small creator-menu-trigger" aria-label="{{ row.creator.name }} 操作" data-creator-menu-button>⋯</button><div class="creator-row-menu" data-creator-menu hidden>
         <button type="button" data-edit-creator data-id="{{ row.creator.creator_id }}" data-name="{{ row.creator.name }}" data-kind="{{ kind }}">修改</button>
         <button type="button" data-merge-creator data-id="{{ row.creator.creator_id }}" data-name="{{ row.creator.name }}" data-kind="{{ kind }}" data-count="{{ row.item_count }}">合并</button>

@@ -222,3 +222,6 @@ dialog.import-dialog{background:#0f131a;color:#e6edf3;border:1px solid var(--lin
 @media(max-width:700px){.btn-ic{width:14px;height:14px;margin-right:4px}}
 /* 音频模型 Tab 面板在主设置表单外：激活时隐藏主表单的保存按钮 */
 form.settings-dashboard:has(~ #settings-audio-models.active) > .dash-actions{display:none}
+/* 创作者页：名字链接跳转到作品库筛选视图 */
+.creator-row-link{text-decoration:none}
+.creator-row-link:hover .creator-tag{border-color:currentColor;filter:brightness(1.15)}

@@ -215,3 +215,10 @@ dialog.import-dialog{background:#0f131a;color:#e6edf3;border:1px solid var(--lin
 .segment-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}.segment-toolbar>span{flex:1;color:var(--fg-dim);font-size:.84rem}.segment-compare{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 18px}.segment-compare section{min-width:0;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}.segment-compare h3{margin:0 0 10px;font-size:.95rem}.segment-compare strong{display:block;margin-top:8px;color:var(--fg-dim);font-size:.78rem}.segment-compare pre{min-height:56px;max-height:220px;margin:5px 0 0;padding:8px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;border-radius:6px;background:var(--glass-panel-solid,#111827);font:inherit;font-size:.86rem}.segment-candidate-dialog{width:min(820px,94vw);padding-bottom:18px}.segment-candidate-dialog>.dialog-note{margin-left:18px;margin-right:18px}.segment-candidate-actions{margin-left:18px;margin-right:18px}
 .subtitle-split-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
 @media(max-width:700px){.subtitle-structure-actions button{flex:1}.subtitle-split-grid{grid-template-columns:1fr}.transcript-row{grid-template-columns:auto minmax(0,1fr)}.transcript-edit{grid-column:1/-1}.segment-compare{grid-template-columns:1fr}.segment-toolbar>span{flex-basis:100%}}
+
+/* ─── 按钮 SVG 加号图标：替代文本「＋」字形，与侧栏线性图标一致 ─── */
+.btn-ic{width:15px;height:15px;flex:none;vertical-align:-2px;margin-right:5px}
+#pick-audio,[data-open-creator-create],[data-open-dialog][data-dialog-mode],.creator-create-suggestion{display:inline-flex;align-items:center;justify-content:center}
+@media(max-width:700px){.btn-ic{width:14px;height:14px;margin-right:4px}}
+/* 音频模型 Tab 面板在主设置表单外：激活时隐藏主表单的保存按钮 */
+form.settings-dashboard:has(~ #settings-audio-models.active) > .dash-actions{display:none}

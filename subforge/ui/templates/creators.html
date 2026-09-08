@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% from "_creator_ui.html" import picker %}{% block title %}创作者 · SubForge{% endblock %}{% block content %}
-<div class="page-head"><div><h1>创作者</h1><p class="page-sub">管理作品关联的社团与声优</p></div><button data-open-creator-create>＋ 添加创作者</button></div>
+<div class="page-head"><div><h1>创作者</h1><p class="page-sub">管理作品关联的社团与声优</p></div><button data-open-creator-create><svg class="btn-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>添加创作者</button></div>
 <nav class="tab-bar creator-tabs" role="tablist" aria-label="创作者身份">
   <button type="button" class="tab active" data-tab="circle" role="tab" aria-selected="true">社团 {{ creator_rows|selectattr('creator.kind.value','equalto','circle')|list|length }}</button>
   <button type="button" class="tab" data-tab="voice_actor" role="tab" aria-selected="false">声优 {{ creator_rows|selectattr('creator.kind.value','equalto','voice_actor')|list|length }}</button>

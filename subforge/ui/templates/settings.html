@@ -11,6 +11,7 @@
   <button type="button" class="tab" data-tab="network" role="tab" aria-selected="false">网络与密钥</button>
   <button type="button" class="tab" data-tab="concurrency" role="tab" aria-selected="false">处理能力</button>
   <button type="button" class="tab" data-tab="translation" role="tab" aria-selected="false">翻译</button>
+  <button type="button" class="tab" data-tab="audio-models" role="tab" aria-selected="false">音频模型</button>
 </nav>
 
 <form method="post" action="/settings" data-secure class="settings-dashboard">
@@ -93,4 +94,57 @@
     <button class="primary">保存设置</button>
   </div>
 </form>
+  <section id="settings-audio-models" class="dash-section tab-panel" data-tab-panel="audio-models">
+    <div class="section-heading"><div><h2>Gemini 音频配置</h2><p>用于片段重处理，不替代长音频 Whisper 主链。AI Pro / Antigravity 订阅不等于 API 配额。</p></div></div>
+    {% if gemini_profiles %}<div class="profile-list">
+    {% for profile in gemini_profiles %}
+      <article class="profile-row">
+        <div class="profile-row-main">
+          <strong class="profile-row-name">{{ profile.name }}</strong>
+          <span class="chip">{{ 'Google 原生' if profile.protocol == 'google_native' else 'OpenAI 兼容' }}</span>
+          <span class="profile-row-model">{{ profile.model }}</span>
+          <span class="profile-row-url">{{ profile.base_url }}</span>
+          <span class="chip">{{ '转写后翻译' if profile.default_processing_mode == 'transcribe_then_translate' else '一次生成双语' }}</span>
+          <span class="chip">≤ {{ profile.max_segment_seconds }} 秒</span>
+          <span class="badge {{ 'ok' if profile.api_key_masked != '未配置' else '' }}">{{ profile.api_key_masked }}</span>
+        </div>
+        <div class="profile-row-actions">
+          <div class="profile-controls">
+            <button type="button" class="profile-action" data-edit-gemini-profile='{{ profile | tojson }}'>编辑</button>
+            <button type="button" class="profile-action profile-action-test" data-test-endpoint="/audio-models/{{ profile.profile_id }}/test"><span>测试音频</span></button>
+            <form method="post" action="/audio-models/{{ profile.profile_id }}/delete-key" data-secure data-confirm="确认删除此配置保存的 Key？"><button class="profile-action" type="submit">删除 Key</button></form>
+            <form method="post" action="/audio-models/{{ profile.profile_id }}/delete" data-secure data-confirm="确认删除此 Gemini 音频配置？"><button class="profile-action profile-action-delete" type="submit">删除</button></form>
+          </div>
+          <output class="check-result"></output>
+        </div>
+      </article>
+    {% endfor %}
+    </div>{% else %}<p class="empty">尚未配置 Gemini 原生音频模型。</p>{% endif %}
+
+    <div class="section-heading" style="margin-top:22px"><div><h2>新增或更新配置</h2><p>点击列表「编辑」回填；API Key 留空不会覆盖已保存值。</p></div></div>
+    <form method="post" action="/audio-models" data-secure class="settings-dashboard" id="gemini-profile-form">
+      <div class="field-list">
+        <input type="hidden" name="profile_id">
+        <div class="subtitle-time-fields">
+          <label>名称<input name="name" required placeholder="例如：内网 Gemini"></label>
+          <label>协议<select name="protocol"><option value="google_native">Google generateContent</option><option value="openai_compatible">OpenAI 兼容 input_audio</option></select></label>
+        </div>
+        <label>Base URL<input name="base_url" required placeholder="https://generativelanguage.googleapis.com 或兼容网关 /v1"></label>
+        <label>模型名<input name="model" required value="gemini-3.8-flash-high"></label>
+        <div class="subtitle-time-fields">
+          <label>默认处理模式<select name="default_processing_mode"><option value="transcribe_then_translate">转写后交给文本 LLM 翻译</option><option value="bilingual_once">一次生成源文与译文</option></select></label>
+          <label>最大片段秒数<input type="number" name="max_segment_seconds" min="1" max="180" value="60" required></label>
+        </div>
+        <label>API Key<input type="password" name="api_key" autocomplete="new-password" placeholder="留空不修改；也可使用 GEMINI_API_KEY"></label>
+        <label>识别提示词<textarea name="recognition_prompt" rows="3" placeholder="人名、作品名、专业词或输出约束"></textarea></label>
+        <div class="subtitle-time-fields">
+          <label>独立代理<input name="proxy_url" placeholder="留空直连"></label>
+          <label>CA Bundle<input name="ca_bundle" placeholder="自签名 CA 文件路径"></label>
+        </div>
+        <label class="check-field"><span><input type="checkbox" name="verify_tls" checked>校验 TLS 证书</span><small>内网自签名服务优先配置 CA Bundle；仅调试时关闭校验。</small></label>
+      </div>
+      <div class="dash-actions"><button type="submit" class="primary">保存音频模型配置</button></div>
+    </form>
+  </section>
+
 {% endblock %}

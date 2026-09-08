@@ -773,6 +773,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             models_dir=deps.settings.get_models_dir(),
             direct_medium=deps.settings.get_direct_model_path("medium"),
             direct_large_v3=deps.settings.get_direct_model_path("large-v3"),
+            gemini_profiles=runtime.gemini_profiles.list_public(),
         )
 
     async def delete_deepgram_key(request: Request) -> Response:
@@ -916,34 +917,29 @@ def create_app(deps: UiDependencies) -> Starlette:
             return RedirectResponse("/profiles", status_code=303)
         return runtime.render("profiles.html", request, profiles=deps.profiles.list_public())
 
-    async def audio_models_page(request: Request) -> Response:
-        if request.method == "POST":
-            error = await _authorize_write(request, runtime)
-            if error:
-                return error
-            form = await _read_form(request)
-            try:
-                runtime.gemini_profiles.save(
-                    profile_id=form.get("profile_id") or None,
-                    name=form.get("name", ""),
-                    protocol=form.get("protocol", "google_native"),
-                    base_url=form.get("base_url", ""),
-                    model=form.get("model", ""),
-                    api_key=form.get("api_key", ""),
-                    default_processing_mode=form.get("default_processing_mode", "transcribe_then_translate"),
-                    max_segment_seconds=int(form.get("max_segment_seconds", "60")),
-                    recognition_prompt=form.get("recognition_prompt", ""),
-                    proxy_url=form.get("proxy_url", ""),
-                    verify_tls=form.get("verify_tls") == "on",
-                    ca_bundle=form.get("ca_bundle", ""),
-                )
-            except (TypeError, ValueError) as exc:
-                return JSONResponse({"error": str(exc)}, status_code=400)
-            return RedirectResponse("/audio-models", status_code=303)
-        return runtime.render(
-            "audio_models.html", request,
-            profiles=runtime.gemini_profiles.list_public(),
-        )
+    async def save_audio_model(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        form = await _read_form(request)
+        try:
+            runtime.gemini_profiles.save(
+                profile_id=form.get("profile_id") or None,
+                name=form.get("name", ""),
+                protocol=form.get("protocol", "google_native"),
+                base_url=form.get("base_url", ""),
+                model=form.get("model", ""),
+                api_key=form.get("api_key", ""),
+                default_processing_mode=form.get("default_processing_mode", "transcribe_then_translate"),
+                max_segment_seconds=int(form.get("max_segment_seconds", "60")),
+                recognition_prompt=form.get("recognition_prompt", ""),
+                proxy_url=form.get("proxy_url", ""),
+                verify_tls=form.get("verify_tls") == "on",
+                ca_bundle=form.get("ca_bundle", ""),
+            )
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return RedirectResponse("/settings", status_code=303)
 
     async def delete_audio_model(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
@@ -1710,7 +1706,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/about", about_page),
         Route("/creators", creators_page, methods=["GET", "POST"]),
         Route("/profiles", profiles_page, methods=["GET", "POST"]),
-        Route("/audio-models", audio_models_page, methods=["GET", "POST"]),
+        Route("/audio-models", save_audio_model, methods=["POST"]),
         Route("/audio-models/{profile_id}/test", test_audio_model, methods=["POST"]),
         Route("/audio-models/{profile_id}/delete", delete_audio_model, methods=["POST"]),
         Route("/audio-models/{profile_id}/delete-key", delete_audio_model_key, methods=["POST"]),

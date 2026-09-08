@@ -147,11 +147,13 @@ def test_gemini_audio_profiles_are_managed_separately_from_text_llm(tmp_path):
         follow_redirects=False,
     )
     assert response.status_code == 303
-    page = client.get("/audio-models").text
+    page = client.get("/settings").text
     assert "内网 Gemini" in page
     assert "gemini-3.8-flash-high" in page
     assert "profile-secret-value" not in page
     assert "OpenAI 兼容" in page
+    shell = client.get("/", headers={"sec-fetch-dest": "document"}).text
+    assert "/audio-models\"" not in shell  # 独立侧栏入口已收回设置 Tab
 
 
 def test_segment_candidate_does_not_replace_subtitles_until_confirmed(tmp_path):

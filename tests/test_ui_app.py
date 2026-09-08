@@ -12,14 +12,13 @@ from unittest.mock import patch
 
 from starlette.testclient import TestClient
 
-from subforge.gemini_audio import GeminiAudioProfileStore
+from subforge.ui.model_profiles import ModelProfileStore
 from subforge.library import CreatorKind, ImportRequest, ItemKind, LibraryStore
 from subforge.models import SubtitleEntry
 from subforge.segment_processing import SegmentCandidate
 from subforge.translate.srt_io import read_srt, write_srt
 from subforge.ui.app import UiDependencies, create_app
 from subforge.ui.picker import FakeFilePicker
-from subforge.ui.profiles import LlmProfileStore
 from subforge.ui.settings import UiSettingsStore
 from subforge.ui.tasks import FakeWorkerAdapter, ProcessingSnapshot
 
@@ -51,7 +50,7 @@ def _fake_popen(cmd, **kwargs):
     return FakePopen(cmd, **kwargs)
 
 
-def _authenticated_client(tmp_path, *, audio=None, library=None, worker=None, segment_processor_factory=None, gemini_profiles=None):
+def _authenticated_client(tmp_path, *, audio=None, library=None, worker=None, segment_processor_factory=None, model_profiles=None):
     settings = UiSettingsStore(tmp_path / "ui.json")
     if library:
         LibraryStore.initialize(library).close()
@@ -59,13 +58,12 @@ def _authenticated_client(tmp_path, *, audio=None, library=None, worker=None, se
     deps = UiDependencies(
         settings=settings,
         picker=FakeFilePicker(audio=audio, directory=library),
-        profiles=LlmProfileStore(tmp_path / "profiles.json"),
+        profiles=model_profiles or ModelProfileStore(tmp_path / "profiles.json"),
         worker=worker or FakeWorkerAdapter([]),
         startup_token="startup-secret",
         open_browser=False,
         allowed_hosts={"testserver"},
         segment_processor_factory=segment_processor_factory,
-        gemini_profiles=gemini_profiles,
     )
     client = TestClient(create_app(deps))
     response = client.get("/?token=startup-secret", follow_redirects=False)
@@ -131,16 +129,16 @@ def test_player_can_atomically_edit_and_restore_subtitle_entry(tmp_path):
     assert response.json()["source"] == [{"start": 0.0, "end": 2.0, "text": "合并原文"}]
 
 
-def test_gemini_audio_profiles_are_managed_separately_from_text_llm(tmp_path):
-    gemini_profiles = GeminiAudioProfileStore(tmp_path / "gemini.json")
-    client, headers = _authenticated_client(tmp_path, gemini_profiles=gemini_profiles)
+def test_audio_model_profiles_share_the_unified_store(tmp_path):
+    model_profiles = ModelProfileStore(tmp_path / "model-profiles.json")
+    client, headers = _authenticated_client(tmp_path, model_profiles=model_profiles)
 
     response = client.post(
         "/audio-models",
         data={
             "name": "内网 Gemini", "protocol": "openai_compatible",
             "base_url": "https://gateway.example/v1", "model": "gemini-3.8-flash-high",
-            "api_key": "profile-secret-value", "default_processing_mode": "bilingual_once",
+            "api_key": "profile-secret-value",
             "max_segment_seconds": "90", "verify_tls": "false",
         },
         headers=headers,
@@ -152,6 +150,9 @@ def test_gemini_audio_profiles_are_managed_separately_from_text_llm(tmp_path):
     assert "gemini-3.8-flash-high" in page
     assert "profile-secret-value" not in page
     assert "OpenAI 兼容" in page
+    # 统一存储中带转写能力，可被 ASR 下拉选中
+    stored = model_profiles.list_for("transcribe")
+    assert [p["name"] for p in stored] == ["内网 Gemini"]
     shell = client.get("/", headers={"sec-fetch-dest": "document"}).text
     assert "/audio-models\"" not in shell  # 独立侧栏入口已收回设置 Tab
 
@@ -362,7 +363,7 @@ async def test_http_remains_responsive_while_background_worker_is_running(tmp_pa
     app = create_app(UiDependencies(
         settings=settings,
         picker=FakeFilePicker(),
-        profiles=LlmProfileStore(tmp_path / "profiles.json"),
+        profiles=ModelProfileStore(tmp_path / "profiles.json"),
         worker=FakeWorkerAdapter([], wait_forever=True),
         startup_token="",
         open_browser=False,
@@ -396,7 +397,7 @@ def test_write_request_requires_authenticated_session_csrf_and_origin(tmp_path):
     app = create_app(UiDependencies(
         settings=UiSettingsStore(tmp_path / "ui.json"),
         picker=FakeFilePicker(),
-        profiles=LlmProfileStore(tmp_path / "profiles.json"),
+        profiles=ModelProfileStore(tmp_path / "profiles.json"),
         worker=FakeWorkerAdapter([]),
         startup_token="token",
         open_browser=False,
@@ -459,7 +460,7 @@ def test_local_import_can_automatically_enqueue_subtitle_processing(tmp_path):
     audio = tmp_path / "auto.m4a"
     audio.write_bytes(b"audio")
     client, headers = _authenticated_client(tmp_path, audio=audio, library=library)
-    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+    profile = ModelProfileStore(tmp_path / "profiles.json").save(
         "Default", "https://api.example/v1", "chat", "sk-test",
     )
 
@@ -484,6 +485,8 @@ def test_local_import_can_automatically_enqueue_subtitle_processing(tmp_path):
         "scene": "asmr",
         "whisper_model": "large-v3",
         "llm_profile_id": profile.profile_id,
+        "asr_profile_id": "",
+        "merge_profile_id": "",
     }
     assert UiSettingsStore(tmp_path / "ui.json").get_last_processing_snapshot() == task.config_snapshot
 
@@ -493,7 +496,7 @@ def test_auto_processing_reuses_the_most_recent_processing_configuration(tmp_pat
     audio = tmp_path / "recent.m4a"
     audio.write_bytes(b"audio")
     client, headers = _authenticated_client(tmp_path, audio=audio, library=library)
-    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+    profile = ModelProfileStore(tmp_path / "profiles.json").save(
         "Recent", "https://api.example/v1", "chat", "sk-test",
     )
     recent = {
@@ -501,6 +504,8 @@ def test_auto_processing_reuses_the_most_recent_processing_configuration(tmp_pat
         "scene": "normal",
         "whisper_model": "medium",
         "llm_profile_id": profile.profile_id,
+        "asr_profile_id": "",
+        "merge_profile_id": "",
     }
     UiSettingsStore(tmp_path / "ui.json").set_last_processing_snapshot(recent)
 
@@ -525,7 +530,7 @@ def test_auto_processing_reuses_the_most_recent_processing_configuration(tmp_pat
 def test_profiles_page_renders_list_and_dialog_layout(tmp_path):
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
-    profiles = LlmProfileStore(tmp_path / "profiles.json")
+    profiles = ModelProfileStore(tmp_path / "profiles.json")
     profiles.save("DeepSeek", "https://api.example/v1", "chat", "sk-test")
 
     response = client.get("/profiles")
@@ -556,7 +561,7 @@ def test_profiles_page_renders_list_and_dialog_layout(tmp_path):
 def test_profiles_page_dialog_prefills_edit_values(tmp_path):
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
-    profiles = LlmProfileStore(tmp_path / "profiles.json")
+    profiles = ModelProfileStore(tmp_path / "profiles.json")
     profile = profiles.save("DeepSeek", "https://api.example/v1", "chat", "sk-test")
 
     response = client.get("/profiles")
@@ -577,7 +582,7 @@ def test_profiles_page_dialog_prefills_edit_values(tmp_path):
 def test_profiles_page_renders_one_row_per_profile(tmp_path):
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
-    profiles = LlmProfileStore(tmp_path / "profiles.json")
+    profiles = ModelProfileStore(tmp_path / "profiles.json")
     profiles.save("DeepSeek", "https://api.example/v1", "chat", "sk-test")
     profiles.save("OpenAI", "https://api.openai.com/v1", "gpt", "sk-2")
 
@@ -602,7 +607,7 @@ def test_profiles_page_renders_one_row_per_profile(tmp_path):
 def test_copy_profile_submission_preserves_stored_key_without_sending_it_to_browser(tmp_path):
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
-    profiles = LlmProfileStore(tmp_path / "profiles.json")
+    profiles = ModelProfileStore(tmp_path / "profiles.json")
     source = profiles.save("DeepSeek", "https://api.example/v1", "chat", "sk-secret-copy")
 
     response = client.post("/profiles", headers=headers, data={
@@ -626,7 +631,7 @@ def test_copy_profile_submission_preserves_stored_key_without_sending_it_to_brow
 def test_profile_connection_test_reports_success_without_exposing_key(tmp_path):
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
-    profiles = LlmProfileStore(tmp_path / "profiles.json")
+    profiles = ModelProfileStore(tmp_path / "profiles.json")
     profile = profiles.save("Local", "http://127.0.0.1:1234/v1", "model", "secret-key-value")
 
     with patch("subforge.ui.app.test_profile_connection", return_value=(True, "连接成功")):
@@ -673,7 +678,7 @@ def test_settings_model_check_reports_cached_and_uncached_models(tmp_path):
 def test_profile_key_can_only_be_deleted_by_explicit_action(tmp_path):
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
-    profiles = LlmProfileStore(tmp_path / "profiles.json")
+    profiles = ModelProfileStore(tmp_path / "profiles.json")
     profile = profiles.save("DeepSeek", "https://api.example/v1", "chat", "sk-secret-value-1234")
 
     response = client.post(f"/profiles/{profile.profile_id}/delete-key", headers=headers)
@@ -742,7 +747,7 @@ def test_profile_page_masks_secret(tmp_path):
 def test_delete_profile_endpoint_removes_profile(tmp_path):
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
-    profiles = LlmProfileStore(tmp_path / "profiles.json")
+    profiles = ModelProfileStore(tmp_path / "profiles.json")
     profile = profiles.save("DeepSeek", "https://api.example/v1", "chat", "sk-test")
 
     response = client.post(f"/profiles/{profile.profile_id}/delete", headers=headers)
@@ -975,7 +980,7 @@ def test_detail_renders_enriched_overview_summary(tmp_path):
 
 def test_detail_renders_last_config_and_dlsite_link(tmp_path):
     """detail 页：上次处理配置摘要 + RJ 号 DLsite 链接 + 作者。"""
-    LlmProfileStore(tmp_path / "profiles.json").save(
+    ModelProfileStore(tmp_path / "profiles.json").save(
         name="测试配置", base_url="https://api.deepseek.com/v1", model="deepseek-chat",
         profile_id="p1",
     )
@@ -1040,7 +1045,7 @@ def test_process_item_enqueues_every_incomplete_track(tmp_path):
     ))
     store.update_track_status(completed.track_id, "playable")
     store.close()
-    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+    profile = ModelProfileStore(tmp_path / "profiles.json").save(
         name="Test", base_url="https://example.com/v1", model="chat", api_key="key"
     )
 
@@ -1064,6 +1069,8 @@ def test_process_item_enqueues_every_incomplete_track(tmp_path):
         "scene": "asmr",
         "whisper_model": "medium",
         "llm_profile_id": profile.profile_id,
+        "asr_profile_id": "",
+        "merge_profile_id": "",
     }
 
 
@@ -1137,7 +1144,7 @@ def test_single_track_can_be_reprocessed_directly(tmp_path):
     ))
     store.update_track_status(imported.track_id, "failed")
     store.close()
-    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+    profile = ModelProfileStore(tmp_path / "profiles.json").save(
         name="Test", base_url="https://example.com/v1", model="chat", api_key="key"
     )
 
@@ -1670,7 +1677,7 @@ def test_import_dialog_has_media_tabs_without_the_old_selector(tmp_path):
     """导入 Dialog 使用无动画横向 Tab：本地、链接、RJ 文件夹。"""
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
-    LlmProfileStore(tmp_path / "profiles.json").save(
+    ModelProfileStore(tmp_path / "profiles.json").save(
         "Default", "https://api.example/v1", "chat", "sk-test",
     )
     page = client.get("/").text
@@ -1696,7 +1703,7 @@ def test_rj_folder_preview_and_background_import(tmp_path):
     (folder / "本篇" / "01.m4a").write_bytes(b"one")
     (folder / "readme.txt").write_text("skip", encoding="utf-8")
     client, headers = _authenticated_client(tmp_path, library=library)
-    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+    profile = ModelProfileStore(tmp_path / "profiles.json").save(
         "Default", "https://api.example/v1", "chat", "sk-test",
     )
     client.app.state.runtime.deps.picker.media_folder = folder
@@ -1742,7 +1749,7 @@ def test_import_url_rejects_missing_url(tmp_path):
     # 未授权
     client2 = TestClient(create_app(UiDependencies(
         settings=UiSettingsStore(tmp_path / "ui2.json"),
-        picker=FakeFilePicker(), profiles=LlmProfileStore(tmp_path / "p.json"),
+        picker=FakeFilePicker(), profiles=ModelProfileStore(tmp_path / "p.json"),
         worker=FakeWorkerAdapter([]), startup_token="t2", open_browser=False,
         allowed_hosts={"testserver"},
     )))
@@ -1791,7 +1798,7 @@ def test_import_url_returns_accepted_async(tmp_path):
     import tempfile as _tf
     library = tmp_path / "Library"
     client, headers = _authenticated_client(tmp_path, library=library)
-    profile = LlmProfileStore(tmp_path / "profiles.json").save(
+    profile = ModelProfileStore(tmp_path / "profiles.json").save(
         "Default", "https://api.example/v1", "chat", "sk-test",
     )
 
@@ -2097,3 +2104,53 @@ def test_subtitle_edit_dialog_has_reprocess_entry_and_larger_layout():
     css = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "app.css").read_text(encoding="utf-8")
     assert "data-subtitle-reprocess" in html and "data-subtitle-reprocess" in js
     assert ".subtitle-edit-dialog{width:min(680px,94vw)}" in css
+
+
+def test_segment_reprocess_gemini_uses_unified_asr_profile(tmp_path):
+    """片段重处理的 Gemini 处理器读取统一 ASR Profile 的能力，而非独立 Gemini 配置。"""
+    import wave
+
+    library = tmp_path / "Library"
+    audio = tmp_path / "gemini-seg.m4a"
+    with wave.open(str(audio), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * 16000 * 8)
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="GemSeg", author="Author"
+    ))
+    write_srt([SubtitleEntry(1, 1.0, 2.0, "旧原文")], store.track_subtitle_path(imported.track_id, "ja"))
+    write_srt([SubtitleEntry(1, 1.0, 2.0, "旧译文")], store.track_subtitle_path(imported.track_id, "zh"))
+    store.close()
+
+    profiles = ModelProfileStore(tmp_path / "profiles.json")
+    profile = profiles.save(
+        name="内网 Gemini", base_url="https://gateway.example/v1", model="gemini-flash",
+        api_key="k", protocol="openai_compatible", capabilities=["transcribe", "translate"],
+    )
+    seen: dict = {}
+
+    class FakeProcessor:
+        async def process(self, request):
+            return SegmentCandidate(
+                [SubtitleEntry(1, 1.0, 2.0, "候选原文")],
+                [SubtitleEntry(1, 1.0, 2.0, "候选译文")],
+                "gemini", request.target_start, request.target_end,
+            )
+
+    client, headers = _authenticated_client(
+        tmp_path, library=library, model_profiles=profiles,
+        segment_processor_factory=lambda options: seen.update(options) or FakeProcessor(),
+    )
+    response = client.post(
+        f"/tracks/{imported.track_id}/segments/reprocess",
+        data={
+            "start_index": "1", "end_index": "1", "start_time": "1", "end_time": "2",
+            "processor": "gemini", "asr_profile_id": profile.profile_id,
+            "processing_mode": "transcribe_then_translate",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert seen["asr_profile_id"] == profile.profile_id
+    assert response.json()["candidate"]["source"][0]["text"] == "候选原文"

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 import pytest
 
@@ -207,7 +206,7 @@ async def test_gemini_adapter_splits_long_segments_by_silence(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_gemini_adapter_falls_back_to_single_chunk_when_detection_fails(tmp_path):
+async def test_gemini_adapter_falls_back_to_fixed_chunks_when_detection_fails(tmp_path):
     clip = tmp_path / "clip.wav"
     clip.write_bytes(b"audio")
 
@@ -231,12 +230,17 @@ async def test_gemini_adapter_falls_back_to_single_chunk_when_detection_fails(tm
     adapter = GeminiAudioAdapter(
         profile, ChunkTransport(), extractor=extractor,
         speech_regions=broken_detector,
+        chunk_cutter=lambda _path, _start, _end: b"chunk",
     )
     candidate = await adapter.process(SegmentRequest(
         tmp_path / "audio.m4a", 10.0, 70.0, processing_mode="bilingual_once"
     ))
-    assert len(calls) == 1
-    assert candidate.source_entries == [SubtitleEntry(1, 10.0, 70.0, "整段")]
+    # 检测失败不再整段一次发送，而是退化为等长分片（仍遵守 25s 上限）
+    assert len(calls) == 3
+    assert [e.text for e in candidate.source_entries] == ["整段", "整段", "整段"]
+    assert candidate.source_entries[0].start == 10.0
+    assert candidate.source_entries[-1].end == 70.0
+    assert any("检测失败" in warning for warning in candidate.warnings)
     assert any("检测失败" in warning for warning in candidate.warnings)
 
 
@@ -347,3 +351,62 @@ def test_parse_extracts_json_from_prose_and_clock_times():
     assert structured is True
     assert segments[0]["start"] == 1.0  # "00:01" 文本时间被解析
     assert segments[1]["start"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_gemini_adapter_transcribe_mode_with_text_merge(tmp_path):
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"audio")
+
+    def extractor(_request):
+        return ExtractedAudio(clip, 0.0, 4.0, temporary=False)
+
+    structured = '{"segments":[{"start":0,"end":2,"text":"甲甲"},{"start":2,"end":4,"text":"甲甲"}]}'
+    prompts = []
+
+    async def merge_fn(messages):
+        prompts.append(messages)
+        return "[1] 甲甲。\n[2] "  # 第二条为分块重复 → 留空，保留原条目
+
+    profile = GeminiAudioProfile(
+        "id", "G", "google_native", "https://x", "m", "k",
+        default_processing_mode="transcribe", max_segment_seconds=60,
+    )
+    adapter = GeminiAudioAdapter(
+        profile, _FakeTransport(structured), extractor=extractor, merge_fn=merge_fn,
+    )
+    candidate = await adapter.process(SegmentRequest(
+        tmp_path / "audio.m4a", 0.0, 4.0, processing_mode="transcribe"
+    ))
+    assert candidate.target_entries == []  # 纯转写模式不产生译文
+    # 非空校对文本生效；空文本条目保留原文，绝不丢条目
+    assert [entry.text for entry in candidate.source_entries] == ["甲甲。", "甲甲"]
+    # 时间轴仍由 SubForge 生成，不被合并模型改动
+    assert [(entry.start, entry.end) for entry in candidate.source_entries] == [(0.0, 2.0), (2.0, 4.0)]
+    assert any("合并模型" in warning for warning in candidate.warnings)
+    assert prompts and "[1] 甲甲" in prompts[0][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_adapter_merge_failure_keeps_original_text(tmp_path):
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"audio")
+
+    def extractor(_request):
+        return ExtractedAudio(clip, 0.0, 2.0, temporary=False)
+
+    async def broken_merge(_messages):
+        raise RuntimeError("merge provider down")
+
+    profile = GeminiAudioProfile(
+        "id", "G", "google_native", "https://x", "m", "k",
+        default_processing_mode="transcribe", max_segment_seconds=60,
+    )
+    adapter = GeminiAudioAdapter(
+        profile, _FakeTransport('{"segments":[{"start":0,"end":2,"text":"原样"}]}'),
+        extractor=extractor, merge_fn=broken_merge,
+    )
+    candidate = await adapter.process(SegmentRequest(
+        tmp_path / "audio.m4a", 0.0, 2.0, processing_mode="transcribe"
+    ))
+    assert [entry.text for entry in candidate.source_entries] == ["原样"]

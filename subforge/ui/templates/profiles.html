@@ -1,8 +1,8 @@
 {% extends "base.html" %}{% block content %}
 <div class="page-head">
   <div>
-    <h1>翻译配置</h1>
-    <p class="page-sub">LLM 翻译端点与凭据</p>
+    <h1>模型配置</h1>
+    <p class="page-sub">统一的模型端点与凭据：同一份配置可承担音频转写 / 文本翻译 / 文本合并</p>
   </div>
   <button class="primary" data-open-dialog="profile-dialog" data-dialog-mode="create"><svg class="btn-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>新增配置</button>
 </div>
@@ -14,6 +14,7 @@
     <span class="profile-row-model">{{ p.model }}</span>
     <span class="profile-row-url">{{ p.base_url }}</span>
     <span class="profile-row-badges">
+      {% for cap in p.capabilities %}<span class="chip">{{ {'transcribe':'转写','translate':'翻译','merge':'合并'}.get(cap, cap) }}</span>{% endfor %}
       <span class="chip">{{ p.proxy_url or '直连' }}</span>
       <span class="chip {{ 'chip-ok' if p.verify_tls else 'chip-warn' }}">{{ 'TLS 校验' if p.verify_tls else '不校验 TLS' }}</span>
       <span class="chip">{{ p.api_key_masked }}</span>
@@ -50,7 +51,7 @@
   </div>
 </article>
 {% else %}
-<p class="empty">还没有翻译配置，点击右上角「新增配置」创建。</p>
+<p class="empty">还没有模型配置，点击右上角「新增配置」创建。</p>
 {% endfor %}
 
 <dialog id="profile-dialog" class="profile-dialog">
@@ -64,7 +65,19 @@
     <label>名称<input name="name" required></label>
     <label>Base URL<input name="base_url" required placeholder="https://api.example.com/v1"></label>
     <label>模型<input name="model" required></label>
+    <label>协议<select name="protocol"><option value="openai_compatible">OpenAI 兼容（文本翻译 / input_audio）</option><option value="google_native">Google generateContent（音频）</option></select></label>
+    <fieldset class="check-field"><legend>能力（可多选）</legend>
+      <label><span><input type="checkbox" name="cap_transcribe"> 音频转写（可作为 ASR 模型）</span></label>
+      <label><span><input type="checkbox" name="cap_translate" checked> 文本翻译（可作为翻译模型）</span></label>
+      <label><span><input type="checkbox" name="cap_merge"> 文本合并（分片结果校对）</span></label>
+    </fieldset>
+    <label>单次音频请求上限（秒，仅转写用）<input type="number" name="max_request_seconds" min="1" value="60"></label>
+    <label>温度<input type="number" name="temperature" min="0" max="2" step="0.1" value="0"></label>
     <label>API Key<input type="password" name="api_key" placeholder="留空保持不变"></label>
+    <label>转写提示词模板（留空用内置默认）<textarea name="transcribe_prompt" rows="3" placeholder="留空使用内置默认"></textarea></label>
+    <label>双语提示词模板（留空用内置默认）<textarea name="bilingual_prompt" rows="3" placeholder="留空使用内置默认"></textarea></label>
+    <label>翻译提示词（可选）<textarea name="translate_prompt" rows="2" placeholder="留空使用内置默认"></textarea></label>
+    <label>合并提示词模板（留空用内置默认）<textarea name="merge_prompt" rows="3" placeholder="留空使用内置默认"></textarea></label>
     <label>独立代理<input name="proxy_url" placeholder="留空直连；不会继承模型下载代理"></label>
     <label>自定义 CA 文件<input name="ca_bundle" placeholder="可选：C:\path\to\ca.pem"></label>
     <label class="check-field"><span><input type="checkbox" name="verify_tls" checked> 校验 TLS 证书</span><small>公网端点必须保持开启。仅在你完全信任的内网服务使用"不校验"。</small></label>

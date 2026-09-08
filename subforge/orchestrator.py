@@ -6,12 +6,19 @@ import time
 
 
 from subforge.asr.deepgram import transcribe as deepgram_transcribe
-from subforge.asr.engine import transcribe as asr_transcribe
+from subforge.asr.engine import _audio_duration_seconds, transcribe as asr_transcribe
 from subforge.asr.model_manager import ensure_model
 from subforge.config import Config
 from subforge.events import EventSink, EventType, emit_event, make_event
+from subforge.gemini_audio import (
+    GeminiAudioAdapter,
+    GoogleGeminiTransport,
+    OpenAICompatibleAudioTransport,
+    gemini_profile_from_mapping,
+)
 from subforge.models import Job, JobStatus
 from subforge.resume import ResumeStore, read_reusable_srt
+from subforge.segment_processing import SegmentRequest
 from subforge.timeline import adjust_gaps, merge_short_entries
 from subforge.translate.context import translate_all
 from subforge.translate.llm_client import LLMError, translate_batch
@@ -84,6 +91,65 @@ def _run_asr(job: Job, config: Config, progress_callback, model_ready_callback=N
             progress_callback=progress_callback,
         )
     raise ValueError(f"Unsupported ASR provider: {config.asr_provider}")
+
+
+def _merge_fn_from_profile(profile: dict | None):
+    """把合并 Profile 快照包装成文本层校对回调（保留 SubForge 时间轴）。"""
+    if not profile:
+        return None
+    merge_config = Config(
+        llm_api_key=str(profile.get("api_key", "")),
+        llm_base_url=str(profile.get("base_url", "")),
+        llm_model=str(profile.get("model", "")),
+        llm_proxy_url=str(profile.get("proxy_url", "")),
+        llm_verify_tls=bool(profile.get("verify_tls", True)),
+        llm_ca_bundle=str(profile.get("ca_bundle", "")),
+        translate_workers=1,
+        translation_global_workers=0,
+    )
+
+    async def merge_fn(messages):
+        return await translate_batch(messages, merge_config)
+
+    return merge_fn
+
+
+async def _run_asr_model(job: Job, config: Config, progress_callback, model_ready_callback=None) -> list:
+    """用统一模型 Profile 作为 ASR（Gemini 类音频模型）。
+
+    异步直接 await（transport 为异步），不在 worker 线程里再套 asyncio.run。
+    """
+    profile = config.asr_profile or {}
+    if not profile:
+        raise ValueError("ASR 模型 Profile 缺失")
+    gemini_profile = gemini_profile_from_mapping(profile)
+    transport = (
+        GoogleGeminiTransport(gemini_profile)
+        if gemini_profile.protocol == "google_native"
+        else OpenAICompatibleAudioTransport(gemini_profile)
+    )
+    if model_ready_callback:
+        model_ready_callback()
+    duration = _audio_duration_seconds(job.file_path)
+    if duration <= 0:
+        raise ValueError("无法读取媒体时长，无法进行分片转写")
+    merge_profile = config.merge_profile or None
+    adapter = GeminiAudioAdapter(
+        gemini_profile,
+        transport,
+        merge_fn=_merge_fn_from_profile(merge_profile),
+        merge_prompt=str((merge_profile or {}).get("merge_prompt", "")),
+        progress_callback=progress_callback,
+    )
+    candidate = await adapter.process(SegmentRequest(
+        media_path=job.file_path,
+        target_start=0.0,
+        target_end=duration,
+        source_language=job.source_lang,
+        target_language=job.target_lang,
+        processing_mode="transcribe",
+    ))
+    return candidate.source_entries
 
 
 async def process_one(
@@ -180,13 +246,16 @@ async def process_one(
                 current_stage = "asr"
                 emit_event(event_sink, make_event(EventType.ASR_STARTED, job.id, stage="asr"))
 
-            entries = await asyncio.to_thread(
-                _run_asr,
-                job,
-                config,
-                _asr_progress,
-                _model_ready,
-            )
+            if config.asr_provider == "model":
+                entries = await _run_asr_model(job, config, _asr_progress, _model_ready)
+            else:
+                entries = await asyncio.to_thread(
+                    _run_asr,
+                    job,
+                    config,
+                    _asr_progress,
+                    _model_ready,
+                )
             job.asr_progress = 1.0
             emit_event(event_sink, make_event(
                 EventType.ASR_COMPLETED,
@@ -194,7 +263,7 @@ async def process_one(
                 stage="asr",
                 progress=1.0,
             ))
-            logger.debug("[%s] DBG: asyncio.to_thread returned, entries=%d", job.id, len(entries))
+            logger.debug("[%s] DBG: ASR stage returned, entries=%d", job.id, len(entries))
 
         if not entries:
             job.status = JobStatus.NO_SPEECH

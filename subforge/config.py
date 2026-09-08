@@ -134,6 +134,9 @@ class Config:
     deepgram_api_key: str = ""
     deepgram_model: str = "nova-3"
     deepgram_keyterms: list[str] = field(default_factory=list)
+    # 统一模型 Profile 快照（不含密钥；密钥经环境变量传入）
+    asr_profile: dict | None = None
+    merge_profile: dict | None = None
     # Processing
     concurrency: int = 2
     output_dir: Path | None = None
@@ -232,6 +235,8 @@ def load_config(
     kwargs["deepgram_model"] = toml_data.get("deepgram", {}).get("model", "nova-3")
     keyterms = toml_data.get("deepgram", {}).get("keyterms", [])
     kwargs["deepgram_keyterms"] = [str(v) for v in keyterms] if isinstance(keyterms, list) else []
+    kwargs["asr_profile"] = None
+    kwargs["merge_profile"] = None
     kwargs["concurrency"] = int(toml_data.get("processing", {}).get("concurrency", 2))
     kwargs["log_level"] = toml_data.get("logging", {}).get("level", "INFO")
     kwargs["log_file"] = toml_data.get("logging", {}).get("file", "subforge.log")

@@ -83,7 +83,7 @@
       <label>结束时间（秒，可编辑）<input type="number" name="end_time" min="0" step="0.001"></label>
     </div>
     <p class="dialog-note">时间可编辑：可超出字幕边界覆盖无字幕区间；留空表示覆盖到音频开头/末尾；替换范围以这里的时 间为准。</p>
-    <label>处理器<select name="processor" data-segment-processor><option value="whisper">Whisper 短片段</option><option value="gemini" {{ 'disabled' if not gemini_profiles else '' }}>Gemini 原生音频{{ '（尚未配置）' if not gemini_profiles else '' }}</option></select></label>
+    <label>处理器<select name="processor" data-segment-processor><option value="whisper">Whisper 短片段</option><option value="gemini" {{ 'disabled' if not asr_profiles else '' }}>音频模型转写{{ '（尚未配置）' if not asr_profiles else '' }}</option></select></label>
     <div data-processor-fields="whisper">
       <div class="subtitle-time-fields">
         <label>Whisper 模型<select name="whisper_model"><option value="large-v3">large-v3</option><option value="medium">medium</option></select></label>
@@ -91,8 +91,8 @@
       </div>
     </div>
     <div data-processor-fields="gemini" hidden>
-      <label>Gemini 音频配置<select name="gemini_profile_id">{% for profile in gemini_profiles %}<option value="{{ profile.profile_id }}" data-default-mode="{{ profile.default_processing_mode }}">{{ profile.name }} · {{ profile.model }} · ≤{{ profile.max_segment_seconds }}秒</option>{% endfor %}</select></label>
-      <label>处理模式<select name="processing_mode"><option value="transcribe_then_translate">Gemini 转写 → 文本 LLM 翻译</option><option value="bilingual_once">Gemini 一次生成源文与译文</option></select></label>
+      <label>音频模型配置<select name="asr_profile_id">{% for profile in asr_profiles %}<option value="{{ profile.profile_id }}">{{ profile.name }} · {{ profile.model }} · ≤{{ profile.max_request_seconds }}秒</option>{% endfor %}</select></label>
+      <label>处理模式<select name="processing_mode"><option value="transcribe_then_translate">模型转写 → 文本 LLM 翻译</option><option value="bilingual_once">模型一次生成源文与译文</option></select></label>
     </div>
     <label data-text-llm-field>翻译配置<select name="llm_profile_id">{% for profile in llm_profiles %}<option value="{{ profile.profile_id }}">{{ profile.name }} · {{ profile.model }}</option>{% endfor %}</select></label>
     <label>识别提示词（可选）<textarea name="recognition_prompt" rows="2" placeholder="人名、作品名或可能出现的专有词"></textarea></label>

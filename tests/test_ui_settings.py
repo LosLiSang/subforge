@@ -99,6 +99,8 @@ def test_ui_settings_persists_last_processing_snapshot(tmp_path):
         "scene": "normal",
         "whisper_model": "medium",
         "llm_profile_id": "profile-1",
+        "asr_profile_id": "",
+        "merge_profile_id": "",
     }
 
     store.set_last_processing_snapshot(snapshot)

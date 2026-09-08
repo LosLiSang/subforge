@@ -187,7 +187,7 @@ segmentForm?.elements.processing_mode?.addEventListener('change',syncSegmentProc
 /* 表单级委泑：无论哪个控件以何种方式触发 change，都重新同步字段可见性 */
 segmentForm?.addEventListener('change',syncSegmentProcessorFields);
 segmentForm?.addEventListener('dialog-open-sync',syncSegmentProcessorFields);
-segmentForm?.elements.gemini_profile_id?.addEventListener('change',()=>{const option=segmentForm.elements.gemini_profile_id.selectedOptions[0];if(option?.dataset.defaultMode)segmentForm.elements.processing_mode.value=option.dataset.defaultMode;syncSegmentProcessorFields()});
+segmentForm?.elements.asr_profile_id?.addEventListener('change',()=>{syncSegmentProcessorFields()});
 syncSegmentProcessorFields();
 function openSegmentDialogForIndices(indices){
   if(!segmentForm||!indices.length)return;

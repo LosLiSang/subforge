@@ -43,6 +43,10 @@ async def run_request(request_path: Path) -> int:
         config.llm_api_key = os.environ["SUBFORGE_WORKER_LLM_API_KEY"]
     if os.environ.get("SUBFORGE_WORKER_DEEPGRAM_API_KEY"):
         config.deepgram_api_key = os.environ["SUBFORGE_WORKER_DEEPGRAM_API_KEY"]
+    if config.asr_profile is not None:
+        config.asr_profile = {**config.asr_profile, "api_key": os.environ.get("SUBFORGE_WORKER_ASR_API_KEY", "")}
+    if config.merge_profile is not None:
+        config.merge_profile = {**config.merge_profile, "api_key": os.environ.get("SUBFORGE_WORKER_MERGE_API_KEY", "")}
     setup_logging(config)
     job = Job(
         file_path=Path(request["media_path"]),

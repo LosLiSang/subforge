@@ -32,9 +32,9 @@ from subforge import __version__
 from subforge.config import Config, DEFAULT_MODELS_DIR
 from subforge.gemini_audio import (
     GeminiAudioAdapter,
-    GeminiAudioProfileStore,
     GoogleGeminiTransport,
     OpenAICompatibleAudioTransport,
+    gemini_profile_from_mapping,
 )
 from subforge.library import CreatorKind, ImportRequest, ItemKind, LibraryStore
 from subforge.presets import ASMR_PRESET
@@ -45,8 +45,8 @@ from subforge.translate.llm_client import translate_batch
 from subforge.translate.srt_io import read_srt
 from subforge.ui.checks import check_model_configuration, test_profile_connection
 from subforge.ui.covers import cover_for_item, covers_dir, replace_cover
+from subforge.ui.model_profiles import ModelProfileStore
 from subforge.ui.picker import FilePicker
-from subforge.ui.profiles import LlmProfileStore, mask_secret
 from subforge.ui.settings import UiSettingsStore
 from subforge.ui.tasks import ProcessingSnapshot, TaskManager, WorkerAdapter
 
@@ -55,14 +55,13 @@ from subforge.ui.tasks import ProcessingSnapshot, TaskManager, WorkerAdapter
 class UiDependencies:
     settings: UiSettingsStore
     picker: FilePicker
-    profiles: LlmProfileStore
+    profiles: ModelProfileStore
     worker: WorkerAdapter
     startup_token: str
     open_browser: bool = True
     allowed_hosts: set[str] = field(default_factory=lambda: {"127.0.0.1", "localhost"})
     media_concurrency: int = 1
     segment_processor_factory: Callable[[dict], SegmentProcessor] | None = None
-    gemini_profiles: GeminiAudioProfileStore | None = None
 
 
 class UiRuntime:
@@ -73,9 +72,6 @@ class UiRuntime:
         self.imports: dict[str, dict] = {}  # 后台 URL 下载导入任务状态
         self.download_procs: dict[str, "subprocess.Popen"] = {}  # task_id -> yt-dlp 子进程（用于取消）
         self.segment_candidates: dict[str, dict] = {}  # candidate_id -> track/candidate（未确认不落盘）
-        self.gemini_profiles = deps.gemini_profiles or GeminiAudioProfileStore(
-            deps.settings.path.parent / "gemini-audio-profiles.json"
-        )
         self.pending_auto_processing: dict[str, tuple[list[str], ProcessingSnapshot]] = {}
         self.event_loop: asyncio.AbstractEventLoop | None = None
         self.library: LibraryStore | None = None
@@ -602,6 +598,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         return runtime.render(
             "detail.html", request, item=item, task_by_track=task_by_track,
             profiles=public_profiles, models=model_names,
+            audio_profiles=deps.profiles.list_for("transcribe"),
+            merge_profiles=deps.profiles.list_for("merge"),
             cached_models=cached, direct_models=direct_models, default_model=default_model,
             latest_snapshot=latest_snapshot, creators=creators,
             creator_by_id={creator.creator_id: creator for creator in creators},
@@ -774,7 +772,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             models_dir=deps.settings.get_models_dir(),
             direct_medium=deps.settings.get_direct_model_path("medium"),
             direct_large_v3=deps.settings.get_direct_model_path("large-v3"),
-            gemini_profiles=runtime.gemini_profiles.list_public(),
+            audio_profiles=deps.profiles.list_for("transcribe"),
         )
 
     async def delete_deepgram_key(request: Request) -> Response:
@@ -894,11 +892,24 @@ def create_app(deps: UiDependencies) -> Starlette:
                 return error
             form = await _read_form(request)
             try:
+                cap_values = {cap: form.get(f"cap_{cap}") for cap in ("transcribe", "translate", "merge")}
+                if any(value is not None for value in cap_values.values()):
+                    capabilities = [cap for cap, value in cap_values.items() if value == "on"]
+                else:
+                    capabilities = ["translate"]  # 旧表单/API 兼容：默认仅翻译
                 values = {
                     "name": form.get("name", ""),
                     "base_url": form.get("base_url", ""),
                     "model": form.get("model", ""),
                     "api_key": form.get("api_key", ""),
+                    "protocol": form.get("protocol", "openai_compatible"),
+                    "capabilities": capabilities,
+                    "max_request_seconds": int(form.get("max_request_seconds", "60") or 60),
+                    "temperature": float(form.get("temperature", "0") or 0),
+                    "transcribe_prompt": form.get("transcribe_prompt", ""),
+                    "bilingual_prompt": form.get("bilingual_prompt", ""),
+                    "translate_prompt": form.get("translate_prompt", ""),
+                    "merge_prompt": form.get("merge_prompt", ""),
                     "proxy_url": form.get("proxy_url", ""),
                     "verify_tls": form.get("verify_tls") == "on",
                     "ca_bundle": form.get("ca_bundle", ""),
@@ -924,16 +935,15 @@ def create_app(deps: UiDependencies) -> Starlette:
             return error
         form = await _read_form(request)
         try:
-            runtime.gemini_profiles.save(
+            deps.profiles.save(
                 profile_id=form.get("profile_id") or None,
                 name=form.get("name", ""),
                 protocol=form.get("protocol", "google_native"),
                 base_url=form.get("base_url", ""),
                 model=form.get("model", ""),
                 api_key=form.get("api_key", ""),
-                default_processing_mode=form.get("default_processing_mode", "transcribe_then_translate"),
-                max_segment_seconds=int(form.get("max_segment_seconds", "60")),
-                recognition_prompt=form.get("recognition_prompt", ""),
+                capabilities=["transcribe", "translate"],
+                max_request_seconds=int(form.get("max_segment_seconds", "60")),
                 temperature=float(form.get("temperature", "0") or 0),
                 bilingual_prompt=form.get("bilingual_prompt", ""),
                 transcribe_prompt=form.get("transcribe_prompt", ""),
@@ -950,7 +960,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         if error:
             return error
         try:
-            runtime.gemini_profiles.delete(request.path_params["profile_id"])
+            deps.profiles.delete(request.path_params["profile_id"])
         except KeyError:
             return Response("Not found", status_code=404)
         return RedirectResponse("/audio-models", status_code=303)
@@ -960,7 +970,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         if error:
             return error
         try:
-            runtime.gemini_profiles.delete_key(request.path_params["profile_id"])
+            deps.profiles.delete_key(request.path_params["profile_id"])
         except KeyError:
             return Response("Not found", status_code=404)
         return RedirectResponse("/audio-models", status_code=303)
@@ -970,11 +980,12 @@ def create_app(deps: UiDependencies) -> Starlette:
         if error:
             return error
         try:
-            profile = runtime.gemini_profiles.resolve(request.path_params["profile_id"])
+            profile = deps.profiles.resolve(request.path_params["profile_id"])
+            gemini_profile = gemini_profile_from_mapping(asdict(profile))
             transport = (
-                GoogleGeminiTransport(profile)
-                if profile.protocol == "google_native"
-                else OpenAICompatibleAudioTransport(profile)
+                GoogleGeminiTransport(gemini_profile)
+                if gemini_profile.protocol == "google_native"
+                else OpenAICompatibleAudioTransport(gemini_profile)
             )
             buffer = io.BytesIO()
             with wave.open(buffer, "wb") as audio:
@@ -1011,13 +1022,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             return Response("Not found", status_code=404)
         form = await _read_form(request)
         try:
-            profile = deps.profiles.resolve(form.get("llm_profile_id", ""))
-            selected_snapshot = ProcessingSnapshot(
-                asr_provider=form.get("asr_provider", "local"),
-                scene=form.get("scene", "normal"),
-                whisper_model=form.get("whisper_model", "medium"),
-                llm_profile_id=profile.profile_id,
-            )
+            selected_snapshot = _snapshot_from_form(deps, form)
             mode = form.get("mode", "from_scratch")
             for track in item.tracks:
                 latest = runtime.tasks.latest_for_track(track.track_id)
@@ -1090,14 +1095,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             if mode == "continue" and previous and previous.config_snapshot:
                 snapshot = ProcessingSnapshot(**previous.config_snapshot)
             else:
-                profile_id = form.get("llm_profile_id", "")
-                profile = deps.profiles.resolve(profile_id)
-                snapshot = ProcessingSnapshot(
-                    asr_provider=form.get("asr_provider", "local"),
-                    scene=form.get("scene", "normal"),
-                    whisper_model=form.get("whisper_model", "medium"),
-                    llm_profile_id=profile.profile_id,
-                )
+                snapshot = _snapshot_from_form(deps, form)
             deps.profiles.resolve(snapshot.llm_profile_id)
             task = await runtime.tasks.enqueue(
                 request.path_params["track_id"], snapshot, mode=mode,
@@ -1126,8 +1124,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             pass
         return runtime.render("player.html", request, item=item, track=track,
                               next_track_id=next_track_id,
-                              llm_profiles=deps.profiles.list_public(),
-                              gemini_profiles=runtime.gemini_profiles.list_public(),
+                              llm_profiles=deps.profiles.list_for("translate"),
+                              asr_profiles=deps.profiles.list_for("transcribe"),
                               embed=request.query_params.get("embed") == "1")
 
     async def track_media(request: Request) -> Response:
@@ -1396,7 +1394,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                 "whisper_model": value("whisper_model", "large-v3"),
                 "scene": value("scene", "asmr"),
                 "llm_profile_id": value("llm_profile_id"),
-                "gemini_profile_id": value("gemini_profile_id"),
+                "asr_profile_id": value("asr_profile_id"),
                 "processing_mode": processing_mode,
             }
             asr_options = {}
@@ -1443,10 +1441,11 @@ def create_app(deps: UiDependencies) -> Starlette:
                         asr_options.update(ASMR_PRESET)
                     processor = WhisperSegmentAdapter(translate_fn=translate_segment)
                 elif processor_name == "gemini":
-                    gemini_profile_id = options["gemini_profile_id"]
-                    if not gemini_profile_id:
-                        raise ValueError("请选择 Gemini 音频配置")
-                    gemini_profile = runtime.gemini_profiles.resolve(gemini_profile_id)
+                    asr_profile_id = options["asr_profile_id"]
+                    if not asr_profile_id:
+                        raise ValueError("请选择音频转写模型配置")
+                    asr_profile = deps.profiles.resolve(asr_profile_id)
+                    gemini_profile = gemini_profile_from_mapping(asdict(asr_profile))
                     transport = (
                         GoogleGeminiTransport(gemini_profile)
                         if gemini_profile.protocol == "google_native"
@@ -1782,23 +1781,66 @@ def create_app(deps: UiDependencies) -> Starlette:
     return app
 
 
+def _snapshot_from_form(deps: UiDependencies, form: dict) -> ProcessingSnapshot:
+    """从处理表单构建快照，并校验所选模型能力。"""
+    profile = deps.profiles.resolve(form.get("llm_profile_id", ""))
+    if not profile.supports("translate"):
+        raise ValueError("所选翻译配置不支持文本翻译")
+    asr_provider = form.get("asr_provider", "local")
+    asr_profile_id = ""
+    if asr_provider == "model":
+        asr_profile_id = form.get("asr_profile_id", "")
+        if not asr_profile_id:
+            raise ValueError("请选择音频转写模型配置")
+        asr_profile = deps.profiles.resolve(asr_profile_id)
+        if not asr_profile.supports("transcribe"):
+            raise ValueError("所选 ASR 模型不支持音频转写")
+    merge_profile_id = form.get("merge_profile_id", "")
+    if merge_profile_id:
+        merge_profile = deps.profiles.resolve(merge_profile_id)
+        if not merge_profile.supports("merge"):
+            raise ValueError("所选合并模型不支持文本合并")
+    return ProcessingSnapshot(
+        asr_provider=asr_provider,
+        scene=form.get("scene", "normal"),
+        whisper_model=form.get("whisper_model", "medium"),
+        llm_profile_id=profile.profile_id,
+        asr_profile_id=asr_profile_id,
+        merge_profile_id=merge_profile_id,
+    )
+
+
 def _automatic_processing_snapshot(deps: UiDependencies) -> ProcessingSnapshot | None:
     profiles = deps.profiles.list_public()
-    if not profiles:
+    translation_profiles = [p for p in profiles if "translate" in p.get("capabilities", [])]
+    if not translation_profiles:
         return None
-    profile_ids = {profile["profile_id"] for profile in profiles}
+    profile_ids = {profile["profile_id"] for profile in translation_profiles}
     saved = deps.settings.get_last_processing_snapshot() or {}
     profile_id = str(saved.get("llm_profile_id", ""))
     if profile_id not in profile_ids:
-        profile_id = profiles[0]["profile_id"]
+        profile_id = translation_profiles[0]["profile_id"]
     asr_provider = str(saved.get("asr_provider", "local"))
+    asr_profile_id = str(saved.get("asr_profile_id", ""))
+    if asr_provider == "model":
+        transcribe_ids = {p["profile_id"] for p in profiles if "transcribe" in p.get("capabilities", [])}
+        if asr_profile_id not in transcribe_ids:
+            asr_provider, asr_profile_id = "local", ""
+    else:
+        asr_profile_id = ""
+    merge_profile_id = str(saved.get("merge_profile_id", ""))
+    merge_ids = {p["profile_id"] for p in profiles if "merge" in p.get("capabilities", [])}
+    if merge_profile_id not in merge_ids:
+        merge_profile_id = ""
     scene = str(saved.get("scene", "asmr"))
     whisper_model = str(saved.get("whisper_model", "large-v3"))
     return ProcessingSnapshot(
-        asr_provider=asr_provider if asr_provider in {"local", "deepgram"} else "local",
+        asr_provider=asr_provider if asr_provider in {"local", "deepgram", "model"} else "local",
         scene=scene if scene in {"asmr", "normal"} else "asmr",
         whisper_model=whisper_model or "large-v3",
         llm_profile_id=profile_id,
+        asr_profile_id=asr_profile_id,
+        merge_profile_id=merge_profile_id,
     )
 
 

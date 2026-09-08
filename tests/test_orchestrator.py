@@ -1,5 +1,4 @@
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -546,3 +545,63 @@ class TestProcessAll:
         # but since ASR uses to_thread (which bypasses the semaphore's async
         # scope), we verify the semaphore limits the translation phase.
         assert max_active <= config.concurrency
+
+@pytest.mark.asyncio
+async def test_run_asr_model_uses_unified_profile_and_wires_merge(tmp_path):
+    """统一模型 Profile 作为 ASR：分片上限与合并回调都被正确接线。"""
+    from subforge import orchestrator
+    from subforge.models import SubtitleEntry
+    from subforge.segment_processing import SegmentCandidate
+
+    audio = tmp_path / "a.m4a"
+    audio.write_bytes(b"x")
+    captured: dict = {}
+
+    class FakeAdapter:
+        def __init__(self, profile, transport, *, merge_fn=None, merge_prompt="", progress_callback=None):
+            captured["profile"] = profile
+            captured["merge_fn"] = merge_fn
+            captured["merge_prompt"] = merge_prompt
+            captured["progress"] = progress_callback
+
+        async def process(self, request):
+            captured["request"] = request
+            return SegmentCandidate(
+                [SubtitleEntry(1, 0.0, 1.0, "hi")], [], "gemini", 0.0, request.target_end,
+            )
+
+    config = Config(
+        asr_provider="model",
+        asr_profile={
+            "profile_id": "p", "name": "G", "protocol": "openai_compatible",
+            "base_url": "http://x", "model": "m", "api_key": "k", "max_request_seconds": 30,
+        },
+        merge_profile={
+            "base_url": "http://y", "model": "mm", "api_key": "mk", "merge_prompt": "自定义",
+        },
+    )
+    job = Job(file_path=audio, source_lang="ja", target_lang="zh", model_size="medium", id="j1")
+    with (
+        patch.object(orchestrator, "GeminiAudioAdapter", FakeAdapter),
+        patch.object(orchestrator, "_audio_duration_seconds", return_value=12.5),
+    ):
+        entries = await orchestrator._run_asr_model(job, config, None)
+
+    assert [entry.text for entry in entries] == ["hi"]
+    assert captured["profile"].max_segment_seconds == 30
+    assert captured["merge_fn"] is not None
+    assert captured["merge_prompt"] == "自定义"
+    assert captured["request"].target_start == 0.0
+    assert captured["request"].target_end == 12.5
+    assert captured["request"].processing_mode == "transcribe"
+
+
+@pytest.mark.asyncio
+async def test_run_asr_model_without_profile_raises(tmp_path):
+    from subforge import orchestrator
+
+    audio = tmp_path / "a.m4a"
+    audio.write_bytes(b"x")
+    job = Job(file_path=audio, id="j2")
+    with pytest.raises(ValueError):
+        await orchestrator._run_asr_model(job, Config(asr_provider="model"), None)

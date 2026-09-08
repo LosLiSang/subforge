@@ -7,7 +7,7 @@ from subforge.models import SubtitleEntry
 from subforge.translate.srt_io import write_srt
 from subforge.ui.app import UiDependencies, create_app
 from subforge.ui.picker import FakeFilePicker
-from subforge.ui.profiles import LlmProfileStore
+from subforge.ui.model_profiles import ModelProfileStore
 from subforge.ui.settings import UiSettingsStore
 from subforge.ui.tasks import FakeWorkerAdapter
 
@@ -35,7 +35,7 @@ def _player_client(tmp_path):
     app = create_app(UiDependencies(
         settings=settings,
         picker=FakeFilePicker(),
-        profiles=LlmProfileStore(tmp_path / "profiles.json"),
+        profiles=ModelProfileStore(tmp_path / "profiles.json"),
         worker=FakeWorkerAdapter([]),
         startup_token="token",
         open_browser=False,

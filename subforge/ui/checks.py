@@ -5,10 +5,10 @@ from pathlib import Path
 import httpx
 
 from subforge.asr.model_manager import cached_models
-from subforge.ui.profiles import LlmProfile
+from subforge.ui.model_profiles import ModelProfile
 
 
-async def test_profile_connection(profile: LlmProfile) -> tuple[bool, str]:
+async def test_profile_connection(profile: ModelProfile) -> tuple[bool, str]:
     verify: bool | str = profile.verify_tls
     if profile.ca_bundle:
         verify = profile.ca_bundle

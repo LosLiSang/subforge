@@ -25,12 +25,22 @@ def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _profile_snapshot(profile) -> dict:
+    """把 ModelProfile 转成不含密钥的快照（密钥经环境变量传给 worker）。"""
+    data = asdict(profile)
+    data.pop("api_key", None)
+    return data
+
+
 @dataclass(frozen=True)
 class ProcessingSnapshot:
     asr_provider: str
     scene: str
     whisper_model: str
     llm_profile_id: str
+    # 统一模型 Profile：ASR / 合并（翻译继续用 llm_profile_id，保留旧字段兼容）
+    asr_profile_id: str = ""
+    merge_profile_id: str = ""
 
 
 @dataclass
@@ -83,6 +93,8 @@ class SubprocessWorkerAdapter:
     async def events(self, task: TaskRecord, request: dict) -> AsyncIterator[dict]:
         request = dict(request)
         llm_api_key = str(request.pop("llm_api_key", ""))
+        asr_api_key = str(request.pop("asr_api_key", ""))
+        merge_api_key = str(request.pop("merge_api_key", ""))
         deepgram_api_key = str(request.pop("deepgram_api_key", ""))
         proxy_url = str(request.pop("proxy_url", ""))
         request_root = Path(tempfile.gettempdir()) / "subforge-worker"
@@ -92,6 +104,10 @@ class SubprocessWorkerAdapter:
         env = os.environ.copy()
         if llm_api_key:
             env["SUBFORGE_WORKER_LLM_API_KEY"] = llm_api_key
+        if asr_api_key:
+            env["SUBFORGE_WORKER_ASR_API_KEY"] = asr_api_key
+        if merge_api_key:
+            env["SUBFORGE_WORKER_MERGE_API_KEY"] = merge_api_key
         if deepgram_api_key:
             env["SUBFORGE_WORKER_DEEPGRAM_API_KEY"] = deepgram_api_key
         if proxy_url:
@@ -357,6 +373,18 @@ class TaskManager:
             overrides.update(ASMR_PRESET)
         deepgram_api_key = self._deepgram_key_resolver() if self._deepgram_key_resolver else ""
         proxy_url = self._proxy_resolver() if self._proxy_resolver else ""
+        asr_profile = (
+            self._profile_resolver(snapshot.get("asr_profile_id"))
+            if self._profile_resolver and snapshot.get("asr_profile_id") else None
+        )
+        merge_profile = (
+            self._profile_resolver(snapshot.get("merge_profile_id"))
+            if self._profile_resolver and snapshot.get("merge_profile_id") else None
+        )
+        if asr_profile is not None:
+            overrides["asr_profile"] = _profile_snapshot(asr_profile)
+        if merge_profile is not None:
+            overrides["merge_profile"] = _profile_snapshot(merge_profile)
         return {
             "job_id": task.task_id,
             "track_id": task.track_id,
@@ -368,6 +396,8 @@ class TaskManager:
             "resume_dir": str(resume_dir),
             "config_overrides": overrides,
             "llm_api_key": profile.api_key if profile else "",
+            "asr_api_key": asr_profile.api_key if asr_profile else "",
+            "merge_api_key": merge_profile.api_key if merge_profile else "",
             "deepgram_api_key": deepgram_api_key,
             "proxy_url": proxy_url,
             "model_path": str(Path(model_path).resolve()) if model_path else "",

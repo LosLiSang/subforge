@@ -434,3 +434,53 @@ async def test_cancel_keeps_track_and_marks_task_cancelled(tmp_path):
     assert manager.get_task(task.task_id).status == "cancelled"
     assert store.track_media_path(imported.track_id).exists()
     await manager.close()
+
+
+async def test_task_request_carries_asr_and_merge_profile_snapshots(tmp_path):
+    """统一模型 Profile：ASR / 合并快照进入 config_overrides，密钥经环境变量通道。"""
+    from subforge.ui.model_profiles import ModelProfile
+
+    store = LibraryStore.initialize(tmp_path / "Library")
+    audio = tmp_path / "audio.m4a"
+    audio.write_bytes(b"audio")
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.RJ_WORK, title="Work", rj_code="RJ00000106"
+    ))
+    captured = {}
+
+    class CaptureWorker(FakeWorkerAdapter):
+        async def events(self, task, request):
+            captured.update(request)
+            async for event in super().events(task, request):
+                yield event
+
+    asr = ModelProfile(
+        profile_id="asr1", name="Gemini", base_url="https://g/v1", model="gemini-flash",
+        api_key="asr-secret", protocol="openai_compatible",
+        capabilities=["transcribe", "translate"], max_request_seconds=45,
+    )
+    merge = ModelProfile(
+        profile_id="merge1", name="Big", base_url="https://big/v1", model="big-model",
+        api_key="merge-secret", capabilities=["merge"], merge_prompt="校对",
+    )
+    by_id = {"asr1": asr, "merge1": merge}
+    manager = TaskManager(
+        store, CaptureWorker([{"type": "task_completed", "stage": "complete"}]),
+        profile_resolver=lambda pid: by_id.get(pid),
+    )
+    task = await manager.enqueue(imported.track_id, ProcessingSnapshot(
+        asr_provider="model", scene="normal", whisper_model="medium", llm_profile_id="asr1",
+        asr_profile_id="asr1", merge_profile_id="merge1",
+    ))
+    await _wait_until(lambda: manager.get_task(task.task_id).status == "completed")
+
+    overrides = captured["config_overrides"]
+    assert overrides["asr_provider"] == "model"
+    assert overrides["asr_profile"]["model"] == "gemini-flash"
+    assert overrides["asr_profile"]["max_request_seconds"] == 45
+    assert "api_key" not in overrides["asr_profile"]  # 密钥不入请求文件
+    assert overrides["merge_profile"]["model"] == "big-model"
+    assert overrides["merge_profile"]["merge_prompt"] == "校对"
+    assert captured["asr_api_key"] == "asr-secret"
+    assert captured["merge_api_key"] == "merge-secret"
+    await manager.close()

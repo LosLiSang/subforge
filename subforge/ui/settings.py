@@ -120,14 +120,16 @@ class UiSettingsStore:
         value = self._load().get("last_processing_snapshot")
         if not isinstance(value, dict):
             return None
-        keys = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
+        core = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
+        keys = (*core, "asr_profile_id", "merge_profile_id")
         snapshot = {key: str(value.get(key, "")) for key in keys}
-        return snapshot if all(snapshot.values()) else None
+        return snapshot if all(snapshot[key] for key in core) else None
 
     def set_last_processing_snapshot(self, snapshot: dict[str, str]) -> None:
-        keys = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
+        core = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
+        keys = (*core, "asr_profile_id", "merge_profile_id")
         normalized = {key: str(snapshot.get(key, "")).strip() for key in keys}
-        if not all(normalized.values()):
+        if not all(normalized[key] for key in core):
             raise ValueError("processing snapshot is incomplete")
         data = self._load()
         data["last_processing_snapshot"] = normalized

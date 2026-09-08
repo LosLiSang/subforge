@@ -81,6 +81,38 @@ class SubtitleRevisionStore:
         self._commit_files(pairs)
         return self.load(track_id)
 
+    def replace_range(
+        self,
+        track_id: str,
+        *,
+        target_start: float,
+        target_end: float,
+        source_entries: list[SubtitleEntry],
+        target_entries: list[SubtitleEntry],
+    ) -> SubtitleDocument:
+        document = self._aligned_document(track_id)
+        if target_start < 0 or target_start >= target_end:
+            raise ValueError("候选替换范围无效")
+        if not source_entries or len(source_entries) != len(target_entries):
+            raise ValueError("候选源字幕与翻译字幕对应关系不明确")
+        for source, target in zip(source_entries, target_entries, strict=True):
+            if source.start < target_start or source.end > target_end:
+                raise ValueError("候选字幕超出目标替换范围")
+            if abs(source.start - target.start) > 0.001 or abs(source.end - target.end) > 0.001:
+                raise ValueError("候选源字幕与翻译字幕时间轴不一致")
+
+        kept_source = [
+            entry for entry in document.source_entries
+            if entry.end <= target_start or entry.start >= target_end
+        ]
+        kept_target = [
+            entry for entry in document.target_entries
+            if entry.end <= target_start or entry.start >= target_end
+        ]
+        source = sorted([*kept_source, *source_entries], key=lambda entry: (entry.start, entry.end))
+        target = sorted([*kept_target, *target_entries], key=lambda entry: (entry.start, entry.end))
+        return self.commit(track_id, source, target)
+
     def merge(
         self,
         track_id: str,

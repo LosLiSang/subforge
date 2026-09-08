@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import io
 import json
 import logging
+import math
 import mimetypes
+import struct
+import wave
 import secrets
 import shutil
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -23,9 +28,19 @@ from starlette.staticfiles import StaticFiles
 
 from subforge.asr.model_manager import cached_models
 from subforge import __version__
-from subforge.config import DEFAULT_MODELS_DIR
+from subforge.config import Config, DEFAULT_MODELS_DIR
+from subforge.gemini_audio import (
+    GeminiAudioAdapter,
+    GeminiAudioProfileStore,
+    GoogleGeminiTransport,
+    OpenAICompatibleAudioTransport,
+)
 from subforge.library import CreatorKind, ImportRequest, ItemKind, LibraryStore
+from subforge.presets import ASMR_PRESET
+from subforge.segment_processing import SegmentCandidate, SegmentProcessor, SegmentRequest, WhisperSegmentAdapter
 from subforge.subtitle_revision import SubtitleRevisionStore
+from subforge.translate.context import translate_all
+from subforge.translate.llm_client import translate_batch
 from subforge.translate.srt_io import read_srt
 from subforge.ui.checks import check_model_configuration, test_profile_connection
 from subforge.ui.covers import cover_for_item, covers_dir, replace_cover
@@ -45,6 +60,8 @@ class UiDependencies:
     open_browser: bool = True
     allowed_hosts: set[str] = field(default_factory=lambda: {"127.0.0.1", "localhost"})
     media_concurrency: int = 1
+    segment_processor_factory: Callable[[dict], SegmentProcessor] | None = None
+    gemini_profiles: GeminiAudioProfileStore | None = None
 
 
 class UiRuntime:
@@ -54,6 +71,10 @@ class UiRuntime:
         self.selections: dict[str, Path] = {}
         self.imports: dict[str, dict] = {}  # 后台 URL 下载导入任务状态
         self.download_procs: dict[str, "subprocess.Popen"] = {}  # task_id -> yt-dlp 子进程（用于取消）
+        self.segment_candidates: dict[str, dict] = {}  # candidate_id -> track/candidate（未确认不落盘）
+        self.gemini_profiles = deps.gemini_profiles or GeminiAudioProfileStore(
+            deps.settings.path.parent / "gemini-audio-profiles.json"
+        )
         self.pending_auto_processing: dict[str, tuple[list[str], ProcessingSnapshot]] = {}
         self.event_loop: asyncio.AbstractEventLoop | None = None
         self.library: LibraryStore | None = None
@@ -895,6 +916,88 @@ def create_app(deps: UiDependencies) -> Starlette:
             return RedirectResponse("/profiles", status_code=303)
         return runtime.render("profiles.html", request, profiles=deps.profiles.list_public())
 
+    async def audio_models_page(request: Request) -> Response:
+        if request.method == "POST":
+            error = await _authorize_write(request, runtime)
+            if error:
+                return error
+            form = await _read_form(request)
+            try:
+                runtime.gemini_profiles.save(
+                    profile_id=form.get("profile_id") or None,
+                    name=form.get("name", ""),
+                    protocol=form.get("protocol", "google_native"),
+                    base_url=form.get("base_url", ""),
+                    model=form.get("model", ""),
+                    api_key=form.get("api_key", ""),
+                    default_processing_mode=form.get("default_processing_mode", "transcribe_then_translate"),
+                    max_segment_seconds=int(form.get("max_segment_seconds", "60")),
+                    recognition_prompt=form.get("recognition_prompt", ""),
+                    proxy_url=form.get("proxy_url", ""),
+                    verify_tls=form.get("verify_tls") == "on",
+                    ca_bundle=form.get("ca_bundle", ""),
+                )
+            except (TypeError, ValueError) as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            return RedirectResponse("/audio-models", status_code=303)
+        return runtime.render(
+            "audio_models.html", request,
+            profiles=runtime.gemini_profiles.list_public(),
+        )
+
+    async def delete_audio_model(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        try:
+            runtime.gemini_profiles.delete(request.path_params["profile_id"])
+        except KeyError:
+            return Response("Not found", status_code=404)
+        return RedirectResponse("/audio-models", status_code=303)
+
+    async def delete_audio_model_key(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        try:
+            runtime.gemini_profiles.delete_key(request.path_params["profile_id"])
+        except KeyError:
+            return Response("Not found", status_code=404)
+        return RedirectResponse("/audio-models", status_code=303)
+
+    async def test_audio_model(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        try:
+            profile = runtime.gemini_profiles.resolve(request.path_params["profile_id"])
+            transport = (
+                GoogleGeminiTransport(profile)
+                if profile.protocol == "google_native"
+                else OpenAICompatibleAudioTransport(profile)
+            )
+            buffer = io.BytesIO()
+            with wave.open(buffer, "wb") as audio:
+                audio.setnchannels(1)
+                audio.setsampwidth(2)
+                audio.setframerate(16000)
+                frames = b"".join(
+                    struct.pack("<h", int(3000 * math.sin(2 * math.pi * 440 * sample / 16000)))
+                    for sample in range(4000)
+                )
+                audio.writeframes(frames)
+            result = await transport.generate(
+                buffer.getvalue(), "audio/wav",
+                "确认你已收到音频输入。只回复 AUDIO_OK，不要解释。",
+            )
+            if not result.strip():
+                raise ValueError("模型返回空内容")
+        except KeyError:
+            return Response("Not found", status_code=404)
+        except (ValueError, RuntimeError) as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "message": f"音频输入成功 · {profile.model}"})
+
     async def process_item(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
         if error:
@@ -1023,6 +1126,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             pass
         return runtime.render("player.html", request, item=item, track=track,
                               next_track_id=next_track_id,
+                              llm_profiles=deps.profiles.list_public(),
+                              gemini_profiles=runtime.gemini_profiles.list_public(),
                               embed=request.query_params.get("embed") == "1")
 
     async def track_media(request: Request) -> Response:
@@ -1234,6 +1339,156 @@ def create_app(deps: UiDependencies) -> Starlette:
             return Response("Not found", status_code=404)
         except (TypeError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(_revision_payload(document))
+
+    def _candidate_entries(entries) -> list[dict]:
+        return [{"start": entry.start, "end": entry.end, "text": entry.text} for entry in entries]
+
+    async def reprocess_track_segment(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        library = runtime.open_active_library()
+        if library is None:
+            return Response("Not found", status_code=404)
+        track_id = request.path_params["track_id"]
+        try:
+            form = await _read_form_values(request)
+            value = lambda name, default="": form.get(name, [default])[-1]
+            start_index = int(value("start_index"))
+            end_index = int(value("end_index"))
+            document = SubtitleRevisionStore(library).load(track_id)
+            if start_index < 1 or end_index < start_index or end_index > len(document.source_entries):
+                raise ValueError("请选择连续且有效的字幕范围")
+            selected_source = document.source_entries[start_index - 1:end_index]
+            selected_target = document.target_entries[start_index - 1:end_index]
+            target_start = selected_source[0].start
+            target_end = selected_source[-1].end
+            if target_end - target_start > 180:
+                raise ValueError("片段重处理最长支持 180 秒")
+            processor_name = value("processor", "whisper")
+            processing_mode = value("processing_mode", "transcribe_then_translate")
+            options = {
+                "processor": processor_name,
+                "whisper_model": value("whisper_model", "large-v3"),
+                "scene": value("scene", "asmr"),
+                "llm_profile_id": value("llm_profile_id"),
+                "gemini_profile_id": value("gemini_profile_id"),
+                "processing_mode": processing_mode,
+            }
+            asr_options = {}
+            if deps.segment_processor_factory is not None:
+                processor = deps.segment_processor_factory(options)
+            else:
+                translate_segment = None
+                if processor_name == "whisper" or processing_mode == "transcribe_then_translate":
+                    profile_id = options["llm_profile_id"]
+                    if not profile_id:
+                        raise ValueError("请选择翻译配置")
+                    profile = deps.profiles.resolve(profile_id)
+                    translation_config = Config(
+                        source_lang=document.source_language,
+                        target_lang=document.target_language,
+                        batch_size=20,
+                        context_size=2,
+                        translate_workers=1,
+                        translation_global_workers=deps.settings.get_translate_workers(),
+                        translation_limiter_dir=library.root / ".subforge" / "translation-slots",
+                        translation_prompt=deps.settings.get_translation_prompt(),
+                        llm_api_key=profile.api_key,
+                        llm_base_url=profile.base_url,
+                        llm_model=profile.model,
+                        llm_proxy_url=profile.proxy_url,
+                        llm_verify_tls=profile.verify_tls,
+                        llm_ca_bundle=profile.ca_bundle,
+                    )
+
+                    async def translate_segment(entries, _source_language, _target_language):
+                        return await translate_all(entries, translation_config, translate_batch)
+
+                if processor_name == "whisper":
+                    model = options["whisper_model"]
+                    direct_model = deps.settings.get_direct_model_path(model)
+                    asr_options = {
+                        "model_size": str(direct_model) if direct_model else model,
+                        "models_dir": deps.settings.get_models_dir(),
+                        "local_files_only": bool(direct_model),
+                        "device": "auto",
+                        "compute_type": "auto",
+                    }
+                    if options["scene"] == "asmr":
+                        asr_options.update(ASMR_PRESET)
+                    processor = WhisperSegmentAdapter(translate_fn=translate_segment)
+                elif processor_name == "gemini":
+                    gemini_profile_id = options["gemini_profile_id"]
+                    if not gemini_profile_id:
+                        raise ValueError("请选择 Gemini 音频配置")
+                    gemini_profile = runtime.gemini_profiles.resolve(gemini_profile_id)
+                    transport = (
+                        GoogleGeminiTransport(gemini_profile)
+                        if gemini_profile.protocol == "google_native"
+                        else OpenAICompatibleAudioTransport(gemini_profile)
+                    )
+                    processor = GeminiAudioAdapter(
+                        gemini_profile, transport, translate_fn=translate_segment
+                    )
+                else:
+                    raise ValueError("未知片段处理器")
+            request_model = SegmentRequest(
+                media_path=library.track_media_path(track_id),
+                target_start=target_start,
+                target_end=target_end,
+                source_language=document.source_language,
+                target_language=document.target_language,
+                processing_mode=processing_mode,
+                recognition_prompt=value("recognition_prompt"),
+                asr_options=asr_options,
+            )
+            candidate = await processor.process(request_model)
+            if not candidate.source_entries or not candidate.target_entries:
+                raise ValueError("片段处理没有返回完整双语候选")
+        except KeyError:
+            return Response("Not found", status_code=404)
+        except (TypeError, ValueError, RuntimeError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+        candidate_id = uuid4().hex
+        runtime.segment_candidates[candidate_id] = {"track_id": track_id, "candidate": candidate}
+        if len(runtime.segment_candidates) > 100:
+            runtime.segment_candidates.pop(next(iter(runtime.segment_candidates)))
+        return JSONResponse({
+            "candidate_id": candidate_id,
+            "processor": candidate.processor,
+            "target_start": candidate.target_start,
+            "target_end": candidate.target_end,
+            "warnings": list(candidate.warnings),
+            "current": {"source": _candidate_entries(selected_source), "target": _candidate_entries(selected_target)},
+            "candidate": {"source": _candidate_entries(candidate.source_entries), "target": _candidate_entries(candidate.target_entries)},
+        })
+
+    async def confirm_track_segment(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        library = runtime.open_active_library()
+        if library is None:
+            return Response("Not found", status_code=404)
+        candidate_id = request.path_params["candidate_id"]
+        stored = runtime.segment_candidates.get(candidate_id)
+        if stored is None or stored["track_id"] != request.path_params["track_id"]:
+            return Response("Not found", status_code=404)
+        candidate: SegmentCandidate = stored["candidate"]
+        try:
+            document = SubtitleRevisionStore(library).replace_range(
+                stored["track_id"],
+                target_start=candidate.target_start,
+                target_end=candidate.target_end,
+                source_entries=candidate.source_entries,
+                target_entries=candidate.target_entries,
+            )
+        except (KeyError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        runtime.segment_candidates.pop(candidate_id, None)
         return JSONResponse(_revision_payload(document))
 
     async def restore_track_subtitles(request: Request) -> Response:
@@ -1455,6 +1710,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/about", about_page),
         Route("/creators", creators_page, methods=["GET", "POST"]),
         Route("/profiles", profiles_page, methods=["GET", "POST"]),
+        Route("/audio-models", audio_models_page, methods=["GET", "POST"]),
+        Route("/audio-models/{profile_id}/test", test_audio_model, methods=["POST"]),
+        Route("/audio-models/{profile_id}/delete", delete_audio_model, methods=["POST"]),
+        Route("/audio-models/{profile_id}/delete-key", delete_audio_model_key, methods=["POST"]),
         Route("/profiles/{profile_id}/test", test_profile, methods=["POST"]),
         Route("/profiles/{profile_id}/delete", delete_profile, methods=["POST"]),
         Route("/profiles/{profile_id}/delete-key", delete_profile_key, methods=["POST"]),
@@ -1468,6 +1727,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/tracks/{track_id}/subtitles/edit", edit_track_subtitle, methods=["POST"]),
         Route("/tracks/{track_id}/subtitles/structure", change_track_subtitle_structure, methods=["POST"]),
         Route("/tracks/{track_id}/subtitles/restore/{snapshot}", restore_track_subtitles, methods=["POST"]),
+        Route("/tracks/{track_id}/segments/reprocess", reprocess_track_segment, methods=["POST"]),
+        Route("/tracks/{track_id}/segments/{candidate_id}/confirm", confirm_track_segment, methods=["POST"]),
         Route("/tracks/{track_id}/subtitles/{language}", track_subtitles),
         Route("/tracks/{track_id}/subtitles/{language}/download", download_track_subtitle),
         Route("/api/tasks/status", task_statuses),

@@ -41,7 +41,14 @@
   <div data-subtitle-panel="source"><small>{{ track.source_language }}</small><p id="source-subtitle">正在加载源字幕…</p></div>
   <div data-subtitle-panel="target"><small>{{ track.target_language }}</small><p id="target-subtitle">正在加载翻译字幕…</p></div>
 </div>
-<details class="track-actions"><summary>全部字幕</summary><div id="transcript"></div></details></section>
+<details class="track-actions"><summary>全部字幕</summary>
+  <div class="segment-toolbar" data-segment-toolbar hidden>
+    <span data-segment-summary>请选择连续字幕</span>
+    <button type="button" class="ghost small" data-clear-segment-selection>清除选择</button>
+    <button type="button" class="primary small" data-open-segment-reprocess disabled>重新处理所选片段</button>
+  </div>
+  <div id="transcript"></div>
+</details></section>
 <dialog class="profile-dialog subtitle-edit-dialog" id="subtitle-edit-dialog">
   <form data-subtitle-edit-form>
     <div class="dialog-head"><h2>校正字幕</h2><button type="button" class="ghost small" data-close-subtitle-edit>关闭</button></div>
@@ -64,6 +71,39 @@
       <button type="submit" class="primary">保存校正</button>
     </div>
   </form>
+</dialog>
+<dialog class="profile-dialog subtitle-edit-dialog" id="segment-reprocess-dialog">
+  <form data-segment-reprocess-form>
+    <div class="dialog-head"><h2>片段重处理</h2><button type="button" class="ghost small" data-close-segment-reprocess>关闭</button></div>
+    <input type="hidden" name="start_index"><input type="hidden" name="end_index">
+    <p class="dialog-note" data-segment-range></p>
+    <label>处理器<select name="processor" data-segment-processor><option value="whisper">Whisper 短片段</option><option value="gemini" {{ 'disabled' if not gemini_profiles else '' }}>Gemini 原生音频{{ '（尚未配置）' if not gemini_profiles else '' }}</option></select></label>
+    <div data-processor-fields="whisper">
+      <div class="subtitle-time-fields">
+        <label>Whisper 模型<select name="whisper_model"><option value="large-v3">large-v3</option><option value="medium">medium</option></select></label>
+        <label>场景<select name="scene"><option value="asmr">ASMR / 低语</option><option value="speech">普通语音</option></select></label>
+      </div>
+    </div>
+    <div data-processor-fields="gemini" hidden>
+      <label>Gemini 音频配置<select name="gemini_profile_id">{% for profile in gemini_profiles %}<option value="{{ profile.profile_id }}" data-default-mode="{{ profile.default_processing_mode }}">{{ profile.name }} · {{ profile.model }} · ≤{{ profile.max_segment_seconds }}秒</option>{% endfor %}</select></label>
+      <label>处理模式<select name="processing_mode"><option value="transcribe_then_translate">Gemini 转写 → 文本 LLM 翻译</option><option value="bilingual_once">Gemini 一次生成源文与译文</option></select></label>
+    </div>
+    <label data-text-llm-field>翻译配置<select name="llm_profile_id">{% for profile in llm_profiles %}<option value="{{ profile.profile_id }}">{{ profile.name }} · {{ profile.model }}</option>{% endfor %}</select></label>
+    <label>识别提示词（可选）<textarea name="recognition_prompt" rows="2" placeholder="人名、作品名或可能出现的专有词"></textarea></label>
+    <p class="dialog-note">相同模型和参数可能得到相同结果。片段会带前后上下文识别，但候选只替换选中范围。</p>
+    <p class="dialog-note" data-segment-error hidden></p>
+    <div class="dialog-actions"><button type="button" class="ghost" data-close-segment-reprocess>取消</button><button type="submit" class="primary">生成候选</button></div>
+  </form>
+</dialog>
+<dialog class="profile-dialog segment-candidate-dialog" id="segment-candidate-dialog">
+  <div class="dialog-head"><h2>片段候选对比</h2><button type="button" class="ghost small" data-close-segment-candidate>关闭</button></div>
+  <div class="segment-compare">
+    <section><h3>当前字幕</h3><strong>原文</strong><pre data-current-source></pre><strong>译文</strong><pre data-current-target></pre></section>
+    <section><h3>候选字幕</h3><strong>原文</strong><pre data-candidate-source></pre><strong>译文</strong><pre data-candidate-target></pre></section>
+  </div>
+  <p class="dialog-note" data-candidate-warnings hidden></p>
+  <p class="dialog-note" data-candidate-error hidden></p>
+  <div class="dialog-actions segment-candidate-actions"><button type="button" class="ghost" data-close-segment-candidate>放弃候选</button><button type="button" class="primary" data-confirm-segment-candidate>接受并替换</button></div>
 </dialog>
 <dialog class="profile-dialog subtitle-edit-dialog" id="subtitle-split-dialog">
   <form data-subtitle-split-form>

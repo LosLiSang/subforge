@@ -12,9 +12,11 @@ from unittest.mock import patch
 
 from starlette.testclient import TestClient
 
+from subforge.gemini_audio import GeminiAudioProfileStore
 from subforge.library import CreatorKind, ImportRequest, ItemKind, LibraryStore
 from subforge.models import SubtitleEntry
-from subforge.translate.srt_io import write_srt
+from subforge.segment_processing import SegmentCandidate
+from subforge.translate.srt_io import read_srt, write_srt
 from subforge.ui.app import UiDependencies, create_app
 from subforge.ui.picker import FakeFilePicker
 from subforge.ui.profiles import LlmProfileStore
@@ -49,7 +51,7 @@ def _fake_popen(cmd, **kwargs):
     return FakePopen(cmd, **kwargs)
 
 
-def _authenticated_client(tmp_path, *, audio=None, library=None, worker=None):
+def _authenticated_client(tmp_path, *, audio=None, library=None, worker=None, segment_processor_factory=None, gemini_profiles=None):
     settings = UiSettingsStore(tmp_path / "ui.json")
     if library:
         LibraryStore.initialize(library).close()
@@ -62,6 +64,8 @@ def _authenticated_client(tmp_path, *, audio=None, library=None, worker=None):
         startup_token="startup-secret",
         open_browser=False,
         allowed_hosts={"testserver"},
+        segment_processor_factory=segment_processor_factory,
+        gemini_profiles=gemini_profiles,
     )
     client = TestClient(create_app(deps))
     response = client.get("/?token=startup-secret", follow_redirects=False)
@@ -125,6 +129,84 @@ def test_player_can_atomically_edit_and_restore_subtitle_entry(tmp_path):
     )
     assert response.status_code == 200
     assert response.json()["source"] == [{"start": 0.0, "end": 2.0, "text": "合并原文"}]
+
+
+def test_gemini_audio_profiles_are_managed_separately_from_text_llm(tmp_path):
+    gemini_profiles = GeminiAudioProfileStore(tmp_path / "gemini.json")
+    client, headers = _authenticated_client(tmp_path, gemini_profiles=gemini_profiles)
+
+    response = client.post(
+        "/audio-models",
+        data={
+            "name": "内网 Gemini", "protocol": "openai_compatible",
+            "base_url": "https://gateway.example/v1", "model": "gemini-3.8-flash-high",
+            "api_key": "profile-secret-value", "default_processing_mode": "bilingual_once",
+            "max_segment_seconds": "90", "verify_tls": "false",
+        },
+        headers=headers,
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    page = client.get("/audio-models").text
+    assert "内网 Gemini" in page
+    assert "gemini-3.8-flash-high" in page
+    assert "profile-secret-value" not in page
+    assert "OpenAI 兼容" in page
+
+
+def test_segment_candidate_does_not_replace_subtitles_until_confirmed(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "segment.m4a"
+    audio.write_bytes(b"audio")
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="Segment", author="Author"
+    ))
+    source_path = store.track_subtitle_path(imported.track_id, "ja")
+    target_path = store.track_subtitle_path(imported.track_id, "zh")
+    write_srt([
+        SubtitleEntry(1, 0.0, 1.0, "旧原文一"), SubtitleEntry(2, 1.1, 2.0, "旧原文二")
+    ], source_path)
+    write_srt([
+        SubtitleEntry(1, 0.0, 1.0, "旧译文一"), SubtitleEntry(2, 1.1, 2.0, "旧译文二")
+    ], target_path)
+    store.close()
+
+    class FakeSegmentProcessor:
+        async def process(self, request):
+            assert request.target_start == 0.0
+            assert request.target_end == 2.0
+            return SegmentCandidate(
+                [SubtitleEntry(1, 0.0, 2.0, "候选原文")],
+                [SubtitleEntry(1, 0.0, 2.0, "候选译文")],
+                "whisper", 0.0, 2.0,
+            )
+
+    client, headers = _authenticated_client(
+        tmp_path,
+        library=library,
+        segment_processor_factory=lambda _options: FakeSegmentProcessor(),
+    )
+    page = client.get(f"/tracks/{imported.track_id}/play").text
+    assert 'data-open-segment-reprocess' in page
+    assert 'id="segment-candidate-dialog"' in page
+
+    response = client.post(
+        f"/tracks/{imported.track_id}/segments/reprocess",
+        data={"start_index": "1", "end_index": "2", "processor": "whisper"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    candidate_id = response.json()["candidate_id"]
+    assert [entry.text for entry in read_srt(source_path)] == ["旧原文一", "旧原文二"]
+
+    response = client.post(
+        f"/tracks/{imported.track_id}/segments/{candidate_id}/confirm",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["source"] == [{"start": 0.0, "end": 2.0, "text": "候选原文"}]
+    assert read_srt(source_path)[0].text == "候选原文"
 
 
 async def test_http_remains_responsive_while_background_worker_is_running(tmp_path):

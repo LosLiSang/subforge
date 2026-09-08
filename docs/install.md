@@ -84,3 +84,9 @@ uv sync --group docs          # 安装文档依赖
 uv run mkdocs serve           # 本地预览 http://127.0.0.1:8000
 uv run mkdocs build --strict  # 构建到 site/（已 gitignore）
 ```
+
+### 在线站点（GitHub Pages）
+
+推送到 `main` 且改动涉及 `docs/**`、`mkdocs.yml` 等时会自动构建部署
+（`.github/workflows/docs.yml`，GitHub Pages 部署源需选 **GitHub Actions**）。
+站点地址：<https://loslisang.github.io/subforge/>

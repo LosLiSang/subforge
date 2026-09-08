@@ -2,6 +2,7 @@ site_name: SubForge 手册
 site_description: 面向同人音声（RJ 作品）的本地字幕翻译工具——ASR 识别日语，LLM 翻译成中文，输出双语 SRT
 repo_name: LosLiSang/subforge
 repo_url: https://github.com/LosLiSang/subforge
+site_url: https://loslisang.github.io/subforge/
 edit_uri: edit/main/docs/
 copyright: MIT License
 

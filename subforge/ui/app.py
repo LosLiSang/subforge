@@ -743,9 +743,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         }
         return runtime.render(
             "detail.html", request, item=item, task_by_track=task_by_track,
-            profiles=public_profiles, models=model_names,
-            audio_profiles=deps.profiles.list_for("transcribe"),
-            merge_profiles=deps.profiles.list_for("merge"),
+            profiles=_sort_by_history(public_profiles, library.selection_order("full.translation_profile")),
+            models=_sort_names_by_history(model_names, library.selection_order("full.whisper_model")),
+            audio_profiles=_sort_by_history(deps.profiles.list_for("transcribe"), library.selection_order("full.asr_profile")),
+            merge_profiles=_sort_by_history(deps.profiles.list_for("merge"), library.selection_order("full.merge_profile")),
             cached_models=cached, direct_models=direct_models, default_model=default_model,
             latest_snapshot=latest_snapshot, creators=creators,
             creator_by_id={creator.creator_id: creator for creator in creators},
@@ -1180,6 +1181,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                     deps.profiles.resolve(snapshot.llm_profile_id)
                 await runtime.tasks.enqueue(track.track_id, snapshot, mode=mode)
                 deps.settings.set_last_processing_snapshot(asdict(snapshot))
+                _record_full_process_selection(library, snapshot)
         except KeyError:
             return JSONResponse({"error": "LLM profile not found"}, status_code=404)
         except ValueError as exc:
@@ -1247,6 +1249,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                 request.path_params["track_id"], snapshot, mode=mode,
             )
             deps.settings.set_last_processing_snapshot(asdict(snapshot))
+            _record_full_process_selection(library, snapshot)
         except KeyError:
             return JSONResponse({"error": "Track or LLM profile not found"}, status_code=404)
         return RedirectResponse(f"/items/{library.get_track(task.track_id)[0].item_id}", status_code=303)
@@ -1270,8 +1273,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             pass
         return runtime.render("player.html", request, item=item, track=track,
                               next_track_id=next_track_id,
-                              llm_profiles=deps.profiles.list_for("translate"),
-                              asr_profiles=deps.profiles.list_for("transcribe"),
+                              llm_profiles=_sort_by_history(deps.profiles.list_for("translate"), library.selection_order("segment.translation_profile")),
+                              asr_profiles=_sort_by_history(deps.profiles.list_for("transcribe"), library.selection_order("segment.asr_profile")),
                               embed=request.query_params.get("embed") == "1")
 
     async def track_media(request: Request) -> Response:
@@ -1500,6 +1503,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             form = await _read_form_values(request)
             payload = {name: entries[-1] for name, entries in form.items()}
             task = await runtime.tasks.enqueue_segment_reprocess(track_id, payload)
+            _record_segment_selection(library, payload)
         except KeyError:
             return Response("Not found", status_code=404)
         except (TypeError, ValueError) as exc:
@@ -1848,6 +1852,40 @@ def create_app(deps: UiDependencies) -> Starlette:
     app.add_middleware(BaseHTTPMiddleware, dispatch=require_read_session)
     app.state.runtime = runtime
     return app
+
+
+def _sort_by_history(options: list[dict], order: list[str], key: str = "profile_id") -> list[dict]:
+    """按选择历史排序下拉项；未出现的项保持原有确定性顺序（稳定排序）。"""
+    rank = {option_key: index for index, option_key in enumerate(order)}
+    return sorted(options, key=lambda option: rank.get(str(option.get(key, "")), len(rank)))
+
+
+def _sort_names_by_history(names: list[str], order: list[str]) -> list[str]:
+    rank = {option_key: index for index, option_key in enumerate(order)}
+    return sorted(names, key=lambda name: rank.get(str(name), len(rank)))
+
+
+def _record_full_process_selection(library, snapshot: ProcessingSnapshot) -> None:
+    """整轨任务入队成功后记录选择历史。"""
+    library.record_selection("full.asr_provider", snapshot.asr_provider)
+    library.record_selection("full.scene", snapshot.scene)
+    library.record_selection("full.whisper_model", snapshot.whisper_model)
+    library.record_selection("full.translation_profile", snapshot.llm_profile_id)
+    library.record_selection("full.asr_profile", snapshot.asr_profile_id)
+    library.record_selection("full.merge_profile", snapshot.merge_profile_id)
+
+
+def _record_segment_selection(library, payload: dict) -> None:
+    """片段重处理任务入队成功后记录选择历史。"""
+    for scope, field in (
+        ("segment.processor", "processor"),
+        ("segment.processing_mode", "processing_mode"),
+        ("segment.whisper_model", "whisper_model"),
+        ("segment.scene", "scene"),
+        ("segment.asr_profile", "asr_profile_id"),
+        ("segment.translation_profile", "llm_profile_id"),
+    ):
+        library.record_selection(scope, str(payload.get(field, "")))
 
 
 def _snapshot_from_form(deps: UiDependencies, form: dict) -> ProcessingSnapshot:

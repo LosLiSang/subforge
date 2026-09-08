@@ -2162,3 +2162,37 @@ def test_segment_reprocess_gemini_uses_unified_asr_profile(tmp_path):
     candidate = _await_segment_candidate(client, headers, task_id)
     assert seen["asr_profile_id"] == profile.profile_id
     assert candidate["candidate"]["source"][0]["text"] == "候选原文"
+
+
+def test_full_process_records_selection_history(tmp_path):
+    """整轨任务成功入队后，翻译/ASR/合并等选择写入历史。"""
+    library = tmp_path / "Library"
+    audio = tmp_path / "hist.m4a"
+    audio.write_bytes(b"audio")
+    profiles = ModelProfileStore(tmp_path / "profiles.json")
+    p1 = profiles.save(name="P1", base_url="http://x", model="m1", capabilities=["translate"])
+    p2 = profiles.save(name="P2", base_url="http://y", model="m2", capabilities=["translate"])
+    asr = profiles.save(name="ASR", base_url="http://z", model="m3", protocol="openai_compatible",
+                        capabilities=["transcribe"])
+    client, headers = _authenticated_client(tmp_path, audio=audio, library=library, model_profiles=profiles)
+
+    selected = client.post("/picker/audio", headers=headers).json()
+    client.post("/items/import", headers=headers, data={
+        "selection_id": selected["selection_id"], "kind": "stream_archive",
+        "title": "历史", "author": "作者",
+    }, follow_redirects=False)
+    runtime = client.app.state.runtime
+    item_id = runtime.library.list_items()[0].item_id
+
+    response = client.post(f"/items/{item_id}/process", headers=headers, data={
+        "asr_provider": "model", "asr_profile_id": asr.profile_id,
+        "scene": "asmr", "whisper_model": "large-v3",
+        "llm_profile_id": p2.profile_id, "mode": "from_scratch",
+    }, follow_redirects=False)
+    assert response.status_code == 303, response.text
+
+    store = runtime.library
+    assert store.selection_order("full.translation_profile") == [p2.profile_id]
+    assert store.selection_order("full.asr_profile") == [asr.profile_id]
+    assert store.selection_order("full.asr_provider") == ["model"]
+    assert store.selection_order("full.whisper_model") == ["large-v3"]

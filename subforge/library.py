@@ -931,6 +931,31 @@ class LibraryStore:
         self._write_item(item_dir, item)
         self._index_item(item, item_dir / "metadata.json")
 
+    def record_selection(self, scope: str, option_key: str) -> None:
+        """记录一次下拉选择（仅在任务成功入队后调用）。"""
+        key = str(option_key or "").strip()
+        if not scope or not key:
+            return
+        with self._db_lock, self._db:
+            self._db.execute(
+                """INSERT INTO selection_history(scope, option_key, selected_count, last_selected_at)
+                   VALUES(?,?,1,?)
+                   ON CONFLICT(scope, option_key) DO UPDATE SET
+                     selected_count = selected_count + 1,
+                     last_selected_at = excluded.last_selected_at""",
+                (scope, key, _now()),
+            )
+
+    def selection_order(self, scope: str) -> list[str]:
+        """返回某 scope 下按最近/最多使用排序的 option_key。"""
+        with self._db_lock:
+            rows = self._db.execute(
+                """SELECT option_key FROM selection_history WHERE scope=?
+                   ORDER BY last_selected_at DESC, selected_count DESC, option_key""",
+                (scope,),
+            ).fetchall()
+        return [row["option_key"] for row in rows]
+
     def set_cover_source(self, item_id: str, source: str) -> None:
         item = self.get_item(item_id)
         item.cover_source = source

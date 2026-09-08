@@ -386,3 +386,27 @@ def test_track_delete_moves_assets_to_trash_and_removes_metadata(tmp_path):
     assert len(trash_entries) == 1
     assert (trash_entries[0] / "delete.mp3").exists()
     assert (trash_entries[0] / "delete.ja.srt").exists()
+
+
+def test_selection_history_orders_by_recent_then_count(tmp_path):
+    store = LibraryStore.initialize(tmp_path / "Library")
+    store.record_selection("scope", "a")
+    store.record_selection("scope", "b")
+    # b 最近 → 排前
+    assert store.selection_order("scope") == ["b", "a"]
+    # a 再次被选 → a 最近，排前
+    store.record_selection("scope", "a")
+    assert store.selection_order("scope")[0] == "a"
+    # 空 key 被忽略
+    store.record_selection("scope", "")
+    assert "" not in store.selection_order("scope")
+    store.close()
+
+
+def test_selection_history_survives_reopen(tmp_path):
+    store = LibraryStore.initialize(tmp_path / "Library")
+    store.record_selection("scope", "keep")
+    store.close()
+    reopened = LibraryStore.open(tmp_path / "Library")
+    assert reopened.selection_order("scope") == ["keep"]
+    reopened.close()

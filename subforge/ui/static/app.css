@@ -225,3 +225,10 @@ form.settings-dashboard:has(~ #settings-audio-models.active) > .dash-actions{dis
 /* 创作者页：名字链接跳转到作品库筛选视图 */
 .creator-row-link{text-decoration:none}
 .creator-row-link:hover .creator-tag{border-color:currentColor;filter:brightness(1.15)}
+/* ⋯ 弹出菜单打开时抬升所在行：contain:layout 使每行成为堆叠上下文，
+ * 行内 z-index 无法跨行生效，需提升整行才能盖住后续行。 */
+.track-row:has(.track-menu[open]),
+.creator-row:has([data-creator-menu]:not([hidden])){
+  position:relative;
+  z-index:30;
+}

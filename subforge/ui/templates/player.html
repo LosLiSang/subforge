@@ -57,8 +57,8 @@
       <label>开始时间（秒）<input type="number" name="start" min="0" step="0.001" required></label>
       <label>结束时间（秒）<input type="number" name="end" min="0" step="0.001" required></label>
     </div>
-    <label>{{ track.source_language }} 原文<textarea name="source_text" rows="3" required></textarea></label>
-    <label>{{ track.target_language }} 译文<textarea name="target_text" rows="3" required></textarea></label>
+    <label>{{ track.source_language }} 原文<textarea name="source_text" rows="3" placeholder="无语音区间可留空"></textarea></label>
+    <label>{{ track.target_language }} 译文<textarea name="target_text" rows="3" placeholder="无语音区间可留空"></textarea></label>
     <p class="dialog-note" data-subtitle-edit-error hidden></p>
     <div class="subtitle-structure-actions">
       <button type="button" class="ghost small" data-subtitle-merge-next>合并下一条</button>

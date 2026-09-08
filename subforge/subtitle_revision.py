@@ -48,15 +48,22 @@ class SubtitleRevisionStore:
 
     def load(self, track_id: str) -> SubtitleDocument:
         _item, track = self.library.get_track(track_id)
+
+        def clean(entries: list[SubtitleEntry]) -> list[SubtitleEntry]:
+            return [
+                SubtitleEntry(entry.index, entry.start, entry.end, entry.text.strip())
+                for entry in entries
+            ]
+
         return SubtitleDocument(
             source_language=track.source_language,
             target_language=track.target_language,
-            source_entries=self._read_if_present(
+            source_entries=clean(self._read_if_present(
                 self.library.track_subtitle_path(track_id, track.source_language)
-            ),
-            target_entries=self._read_if_present(
+            )),
+            target_entries=clean(self._read_if_present(
                 self.library.track_subtitle_path(track_id, track.target_language)
-            ),
+            )),
         )
 
     def commit(
@@ -70,6 +77,8 @@ class SubtitleRevisionStore:
         duration = self._duration_resolver(media_path)
         source = self._normalize_and_validate(source_entries, duration, "源语言字幕")
         target = self._normalize_and_validate(target_entries, duration, "翻译字幕")
+        source = self._with_leading_gap_entry(source)
+        target = self._with_leading_gap_entry(target)
 
         source_path = self.library.track_subtitle_path(track_id, track.source_language)
         target_path = self.library.track_subtitle_path(track_id, track.target_language)
@@ -279,11 +288,10 @@ class SubtitleRevisionStore:
         normalized: list[SubtitleEntry] = []
         previous_end = -1.0
         for position, original in enumerate(copy.deepcopy(entries), start=1):
+            # 允许空文本条目：用于开头无语音区间或手动标记为空的段落
             text = original.text.strip()
             start = float(original.start)
             end = float(original.end)
-            if not text:
-                raise ValueError(f"{label}第 {position} 条文本不能为空")
             if start < 0 or end < 0:
                 raise ValueError(f"{label}时间不得为负数")
             if start >= end:
@@ -295,3 +303,11 @@ class SubtitleRevisionStore:
             normalized.append(SubtitleEntry(position, round(start, 3), round(end, 3), text))
             previous_end = end
         return normalized
+
+    @staticmethod
+    def _with_leading_gap_entry(entries: list[SubtitleEntry]) -> list[SubtitleEntry]:
+        """开头存在 ≥0.5s 无字幕区间时自动补一条空文本条目，覆盖 [0, 首条开始]。"""
+        if not entries or entries[0].start < 0.5:
+            return entries
+        leading = SubtitleEntry(0, 0.0, round(entries[0].start, 3), "")
+        return [leading, *entries]

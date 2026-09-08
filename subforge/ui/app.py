@@ -1360,8 +1360,6 @@ def create_app(deps: UiDependencies) -> Starlette:
             selected_target = document.target_entries[start_index - 1:end_index]
             target_start = selected_source[0].start
             target_end = selected_source[-1].end
-            if target_end - target_start > 180:
-                raise ValueError("片段重处理最长支持 180 秒")
             processor_name = value("processor", "whisper")
             processing_mode = value("processing_mode", "transcribe_then_translate")
             options = {

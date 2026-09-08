@@ -122,9 +122,11 @@ def test_merge_split_and_delete_keep_source_target_aligned(tmp_path):
     ]
 
     deleted = store.delete(track_id, 1)
-    assert len(deleted.source_entries) == len(deleted.target_entries) == 1
-    assert deleted.source_entries[0].index == 1
-    assert deleted.source_entries[0].text == "后半原文"
+    # 删除后开头留下 [0,1) 无字幕区间 → 自动补一条空文本条目
+    assert len(deleted.source_entries) == len(deleted.target_entries) == 2
+    assert deleted.source_entries[0].text == ""
+    assert deleted.source_entries[0].start == 0.0
+    assert deleted.source_entries[1].text == "后半原文"
     library.close()
 
 
@@ -146,6 +148,34 @@ def test_replace_range_preserves_entries_outside_candidate_window(tmp_path):
     library.close()
 
 
+def test_leading_gap_is_filled_with_empty_entry_and_empty_text_allowed(tmp_path):
+    library, track_id, _source_path, _target_path = _library_with_subtitles(tmp_path)
+    # 重写为开头有 2 秒无字幕区间的字幕
+    store = SubtitleRevisionStore(library, duration_resolver=lambda _path: 10.0)
+    source_path = library.track_subtitle_path(track_id, "ja")
+    target_path = library.track_subtitle_path(track_id, "zh")
+    write_srt([
+        SubtitleEntry(1, 2.0, 3.0, "原文"),
+    ], source_path)
+    write_srt([
+        SubtitleEntry(1, 2.0, 3.0, "译文"),
+    ], target_path)
+
+    document = store.load(track_id)
+    document.source_entries[0].text = ""  # 手动改成空
+    committed = store.commit(track_id, document.source_entries, document.target_entries)
+
+    # 首条前 2 秒空段被自动补上空条目；手动改空也保留
+    assert committed.source_entries[0].start == 0.0
+    assert committed.source_entries[0].end == 2.0
+    assert committed.source_entries[0].text == ""
+    assert committed.source_entries[1].text == ""
+    assert committed.target_entries[0].text == ""
+    from subforge.translate.srt_io import read_srt as _read
+    assert _read(source_path)[0].text.strip() == ""
+    library.close()
+
+
 def test_structure_operations_reject_unaligned_documents(tmp_path):
     library, track_id, _source_path, target_path = _library_with_subtitles(tmp_path)
     write_srt([SubtitleEntry(1, 0.0, 2.0, "只有一条译文")], target_path)
@@ -163,7 +193,6 @@ def test_structure_operations_reject_unaligned_documents(tmp_path):
         ([SubtitleEntry(1, 1.0, 1.0, "文本")], "必须早于"),
         ([SubtitleEntry(1, 0.0, 11.0, "文本")], "超过媒体时长"),
         ([SubtitleEntry(1, 0.0, 2.0, "文本"), SubtitleEntry(2, 1.5, 3.0, "文本")], "重叠"),
-        ([SubtitleEntry(1, 0.0, 1.0, "  ")], "不能为空"),
     ],
 )
 def test_commit_rejects_invalid_timeline(tmp_path, entries, message):

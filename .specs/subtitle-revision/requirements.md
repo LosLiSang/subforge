@@ -100,7 +100,7 @@ SubForge 已能为长音频生成源语言字幕和翻译字幕，但自动结�
 - **R8.3** THE SYSTEM SHALL 支持 `openai_compatible` 协议，通过兼容端点的 input_audio 内容发送音频。
 - **R8.4** WHEN 处理模式为 `transcribe_then_translate` THE SYSTEM SHALL 要求 Gemini 输出源语言文本，再通过所选文本 LLM Profile 生成目标译文。
 - **R8.5** WHEN 处理模式为 `bilingual_once` THE SYSTEM SHALL 要求 Gemini 同时输出结构化源文和译文；缺少任意一项均视为失败。
-- **R8.6** THE SYSTEM SHALL 默认限制 Gemini 目标片段为 60 秒，并允许配置不超过 180 秒的硬上限。
+- **R8.6** THE SYSTEM SHALL 默认限制 Gemini 单次调用为 60 秒；超过上限的长片段 SHALL 按 SubForge 自产语音区间（ffmpeg silencedetect）自动切块逐段识别并拼回绝对时间轴，单段语音超限时均匀切分，检测失败时回退整段一次识别并附带警告，而不是拒绝请求。
 - **R8.7** THE SYSTEM SHALL 允许配置源语言、模型名、识别提示词、代理、TLS 校验和 CA bundle。
 - **R8.8** THE SYSTEM SHALL 对 HTTP 成功但内容为空、语义为空或格式错误执行有界重试；重试耗尽后返回安全错误。
 - **R8.9** THE SYSTEM SHALL 不把 API Key、Authorization、完整请求音频或敏感 prompt 写入日志、任务事件、HTML、SQLite 或 Library metadata。

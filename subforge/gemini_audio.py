@@ -4,7 +4,10 @@ import asyncio
 import base64
 import inspect
 import json
+import math
 import os
+import shutil
+import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -22,6 +25,8 @@ from subforge.segment_processing import (
     SegmentRequest,
     extract_audio_segment,
 )
+
+_FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 from subforge.ui.profiles import mask_secret
 
 GeminiProtocol = Literal["google_native", "openai_compatible"]
@@ -92,8 +97,8 @@ class GeminiAudioProfileStore:
             raise ValueError("unsupported Gemini audio protocol")
         if default_processing_mode not in {"transcribe_then_translate", "bilingual_once"}:
             raise ValueError("unsupported Gemini processing mode")
-        if not 1 <= int(max_segment_seconds) <= 180:
-            raise ValueError("max_segment_seconds must be between 1 and 180")
+        if not 1 <= int(max_segment_seconds):
+            raise ValueError("max_segment_seconds must be at least 1")
         profiles = self._load()
         existing = next((profile for profile in profiles if profile.profile_id == profile_id), None)
         if existing is None:
@@ -275,6 +280,72 @@ class OpenAICompatibleAudioTransport(_BaseGeminiTransport):
 TranslateFn = Callable[[list[SubtitleEntry], str, str], Awaitable[list[SubtitleEntry]] | list[SubtitleEntry]]
 
 
+def detect_speech_regions(clip_path: Path, clip_duration: float) -> list[tuple[float, float]]:
+    """用 ffmpeg silencedetect 找出语音区间（时间轴由 SubForge 产生，不依赖模型）。"""
+    result = subprocess.run(
+        [_FFMPEG, "-i", str(clip_path),
+         "-af", "silencedetect=noise=-35dB:d=0.4", "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+    )
+    silences: list[tuple[float, float]] = []
+    start: float | None = None
+    for line in (result.stderr or "").splitlines():
+        if "silence_start:" in line:
+            try:
+                start = float(line.rsplit(":", 1)[1].strip().split(" ")[0])
+            except ValueError:
+                start = None
+        elif "silence_end:" in line and start is not None:
+            try:
+                end = float(line.rsplit(":", 1)[1].strip().split(" ")[0])
+                silences.append((max(0.0, start), min(clip_duration, end)))
+            except ValueError:
+                pass
+            start = None
+    regions: list[tuple[float, float]] = []
+    cursor = 0.0
+    for silence_start, silence_end in silences:
+        if silence_start - cursor > 0.05:
+            regions.append((cursor, silence_start))
+        cursor = max(cursor, silence_end)
+    if clip_duration - cursor > 0.05:
+        regions.append((cursor, clip_duration))
+    return [region for region in regions if region[1] - region[0] > 0.05]
+
+
+def plan_chunks_from_regions(
+    regions: list[tuple[float, float]],
+    max_seconds: float,
+    clip_duration: float,
+) -> list[tuple[float, float]]:
+    """单段语音超过上限时均匀切分；不跨静音合并，保持语音边界。"""
+    chunks: list[tuple[float, float]] = []
+    for start, end in regions:
+        span = end - start
+        if span <= max_seconds:
+            chunks.append((start, end))
+            continue
+        parts = math.ceil(span / max_seconds)
+        bounds = [start + span * index / parts for index in range(parts + 1)]
+        chunks.extend(zip(bounds, bounds[1:]))
+    return [
+        (round(max(0.0, start), 3), round(min(clip_duration, end), 3))
+        for start, end in chunks
+    ]
+
+
+def cut_wav_bytes(clip_path: Path, start: float, end: float) -> bytes:
+    """从 16k mono wav 截取 [start, end) 并返回 wav 字节。"""
+    result = subprocess.run(
+        [_FFMPEG, "-y", "-i", str(clip_path), "-ss", f"{start:.3f}",
+         "-t", f"{end - start:.3f}", "-c:a", "pcm_s16le", "-f", "wav", "-"],
+        capture_output=True, timeout=120,
+    )
+    if result.returncode != 0 or not result.stdout:
+        raise GeminiAudioError(f"片段切块失败（ffmpeg {result.returncode}）")
+    return result.stdout
+
+
 class GeminiAudioAdapter:
     def __init__(
         self,
@@ -283,16 +354,18 @@ class GeminiAudioAdapter:
         *,
         extractor: Callable[[SegmentRequest], ExtractedAudio] = extract_audio_segment,
         translate_fn: TranslateFn | None = None,
+        speech_regions: Callable[[Path, float], list[tuple[float, float]]] = detect_speech_regions,
+        chunk_cutter: Callable[[Path, float, float], bytes] = cut_wav_bytes,
     ) -> None:
         self.profile = profile
         self.transport = transport
         self._extractor = extractor
         self._translate = translate_fn
+        self._speech_regions = speech_regions
+        self._chunk_cutter = chunk_cutter
 
     async def process(self, request: SegmentRequest) -> SegmentCandidate:
         duration = request.target_end - request.target_start
-        if duration > self.profile.max_segment_seconds:
-            raise ValueError(f"此 Gemini Profile 最长支持 {self.profile.max_segment_seconds} 秒片段")
         if duration <= 0:
             raise ValueError("片段时间范围无效")
         mode = request.processing_mode or self.profile.default_processing_mode
@@ -300,43 +373,106 @@ class GeminiAudioAdapter:
             raise ValueError("未知 Gemini 处理模式")
         extracted = await asyncio.to_thread(self._extractor, request)
         try:
-            audio = await asyncio.to_thread(extracted.path.read_bytes)
+            chunks, detection_failed = await self._plan_chunks(request, extracted)
             extra = request.recognition_prompt.strip() or self.profile.recognition_prompt
             context = f"\n可能出现的专有词或上下文：{extra}" if extra else ""
-            if mode == "bilingual_once":
-                prompt = (
-                    f"请逐字理解这段{request.source_language}音频，并翻译为{request.target_language}。"
-                    "只输出一个 JSON 对象，严格包含 source_text 和 target_text 两个非空字符串；"
-                    "不要输出时间戳、Markdown 或解释。" + context
-                )
-                raw = await self.transport.generate(audio, "audio/wav", prompt)
-                source_text, target_text = self._parse_bilingual(raw)
-            else:
-                prompt = (
-                    f"请把这段音频逐字转写为{request.source_language}文本。"
-                    "只输出转写正文，不要翻译，不要时间戳，不要 Markdown 或解释。" + context
-                )
-                source_text = (await self.transport.generate(audio, "audio/wav", prompt)).strip()
+            source_entries: list[SubtitleEntry] = []
+            target_entries: list[SubtitleEntry] = []
+            skipped = 0
+            for chunk_index, (chunk_start, chunk_end) in enumerate(chunks):
+                if len(chunks) == 1:
+                    audio = await asyncio.to_thread(extracted.path.read_bytes)
+                else:
+                    audio = await asyncio.to_thread(self._chunk_cutter, extracted.path, chunk_start, chunk_end)
+                if mode == "bilingual_once":
+                    prompt = (
+                        f"请逐字理解这段{request.source_language}音频，并翻译为{request.target_language}。"
+                        "只输出一个 JSON 对象，严格包含 source_text 和 target_text 两个非空字符串；"
+                        "不要输出时间戳、Markdown 或解释。" + context
+                    )
+                    raw = await self.transport.generate(audio, "audio/wav", prompt)
+                    source_text, target_text = self._parse_bilingual(raw)
+                else:
+                    prompt = (
+                        f"请把这段音频逐字转写为{request.source_language}文本。"
+                        "只输出转写正文，不要翻译，不要时间戳，不要 Markdown 或解释。" + context
+                    )
+                    source_text = (await self.transport.generate(audio, "audio/wav", prompt)).strip()
+                    target_text = ""
                 if not source_text:
-                    raise GeminiAudioError("Gemini 转写结果为空")
+                    skipped += 1
+                    continue
+                index = len(source_entries) + 1
+                # 候选时间钳制到目标选区（块可能包含前后上下文）
+                abs_start = max(request.target_start, extracted.start + chunk_start)
+                abs_end = min(request.target_end, extracted.start + chunk_end)
+                if abs_start >= abs_end:
+                    skipped += 1
+                    continue
+                source_entries.append(SubtitleEntry(
+                    index,
+                    round(abs_start, 3),
+                    round(abs_end, 3),
+                    source_text,
+                ))
+                if target_text:
+                    target_entries.append(SubtitleEntry(
+                        index,
+                        round(abs_start, 3),
+                        round(abs_end, 3),
+                        target_text,
+                    ))
+            if not source_entries:
+                raise GeminiAudioError("Gemini 未在片段中识别出任何文本")
+            warnings: list[str] = []
+            if len(chunks) > 1:
+                warnings.append(f"长片段已按语音区间切分为 {len(chunks)} 块分别识别" + (f"，跳过 {skipped} 块空结果" if skipped else ""))
+            if detection_failed:
+                warnings.append("语音区间检测失败，已回退为整段一次识别")
+            if mode == "transcribe_then_translate":
                 if self._translate is None:
                     raise GeminiAudioError("转写后翻译模式缺少文本翻译配置")
-                source_entries = [SubtitleEntry(1, request.target_start, request.target_end, source_text)]
                 translated = self._translate(source_entries, request.source_language, request.target_language)
                 target_entries = await translated if inspect.isawaitable(translated) else translated
-                if len(target_entries) != 1 or not target_entries[0].text.strip():
+                if len(target_entries) != len(source_entries) or any(not entry.text.strip() for entry in target_entries):
                     raise GeminiAudioError("文本 LLM 未返回完整片段译文")
-                target_text = target_entries[0].text.strip()
+                target_entries = [
+                    SubtitleEntry(entry.index, source_entries[entry.index - 1].start, source_entries[entry.index - 1].end, entry.text.strip())
+                    for entry in target_entries
+                ]
+            elif len(target_entries) != len(source_entries):
+                raise GeminiAudioError("Gemini 双语结果部分缺失")
             return SegmentCandidate(
-                source_entries=[SubtitleEntry(1, request.target_start, request.target_end, source_text)],
-                target_entries=[SubtitleEntry(1, request.target_start, request.target_end, target_text)],
+                source_entries=source_entries,
+                target_entries=target_entries,
                 processor="gemini",
                 target_start=request.target_start,
                 target_end=request.target_end,
-                warnings=("Gemini 只生成文本，候选沿用 SubForge 选区时间轴",),
+                warnings=(
+                    "Gemini 只生成文本，候选沿用 SubForge 选区时间轴",
+                    *warnings,
+                ),
             )
         finally:
             extracted.cleanup()
+
+    async def _plan_chunks(
+        self,
+        request: SegmentRequest,
+        extracted: ExtractedAudio,
+    ) -> tuple[list[tuple[float, float]], bool]:
+        """长片段按语音区间切成不超过 Profile 上限的块；失败时退回单块整段。"""
+        clip_duration = extracted.end - extracted.start
+        if clip_duration <= self.profile.max_segment_seconds:
+            return [(0.0, clip_duration)], False
+        try:
+            regions = await asyncio.to_thread(self._speech_regions, extracted.path, clip_duration)
+            chunks = plan_chunks_from_regions(regions, self.profile.max_segment_seconds, clip_duration)
+        except Exception:
+            return [(0.0, clip_duration)], True
+        if not chunks:
+            return [(0.0, clip_duration)], True
+        return chunks, False
 
     @staticmethod
     def _parse_bilingual(raw: str) -> tuple[str, str]:

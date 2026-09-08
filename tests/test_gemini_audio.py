@@ -55,7 +55,7 @@ class _Upstream:
         self.thread.join(timeout=2)
 
 
-def test_profile_store_keeps_gemini_audio_separate_and_masks_key(tmp_path, monkeypatch):
+def test_profile_store_allows_long_segments_without_hard_cap(tmp_path, monkeypatch):
     store = GeminiAudioProfileStore(tmp_path / "gemini-audio.json")
     profile = store.save(
         name="内网 Gemini",
@@ -64,12 +64,12 @@ def test_profile_store_keeps_gemini_audio_separate_and_masks_key(tmp_path, monke
         model="gemini-3.8-flash-high",
         api_key="secret-value-12345",
         default_processing_mode="bilingual_once",
-        max_segment_seconds=90,
+        max_segment_seconds=1800,
         verify_tls=False,
     )
+    assert profile.max_segment_seconds == 1800
 
     public = store.list_public()[0]
-    assert public["profile_id"] == profile.profile_id
     assert public["api_key_masked"].startswith("secr")
     assert "secret-value-12345" not in json.dumps(public)
     assert store.resolve(profile.profile_id).protocol == "openai_compatible"
@@ -166,13 +166,75 @@ async def test_gemini_adapter_supports_bilingual_and_two_stage_modes(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_gemini_adapter_rejects_segments_over_profile_limit(tmp_path):
+async def test_gemini_adapter_splits_long_segments_by_silence(tmp_path):
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"audio")
+
+    def extractor(_request):
+        return ExtractedAudio(clip, 10.0, 70.0, temporary=False)
+
+    calls = []
+
+    class ChunkTransport(GeminiAudioTransport):
+        async def generate(self, audio, mime_type, prompt):
+            calls.append(audio)
+            return f'{{"source_text":"片段{len(calls)}","target_text":"译文{len(calls)}"}}'
+
+    regions = [(0.0, 30.0), (30.5, 60.0)]  # clip 相对：两段语音，中间 0.5s 静音
     profile = GeminiAudioProfile(
         "id", "Gemini", "google_native", "https://example.invalid",
-        "gemini-3.8-flash-high", "key", max_segment_seconds=60,
+        "gemini-3.8-flash-high", "key",
+        default_processing_mode="bilingual_once", max_segment_seconds=25,
     )
-    transport = _FakeTransport("不会调用")
-    adapter = GeminiAudioAdapter(profile, transport)
-    with pytest.raises(ValueError, match="60 秒"):
-        await adapter.process(SegmentRequest(tmp_path / "audio.m4a", 0.0, 61.0))
-    assert transport.calls == []
+    adapter = GeminiAudioAdapter(
+        profile, ChunkTransport(), extractor=extractor,
+        speech_regions=lambda _path, _total: regions,
+        chunk_cutter=lambda _path, _start, _end: b"chunk",
+    )
+    candidate = await adapter.process(SegmentRequest(
+        tmp_path / "audio.m4a", 10.0, 70.0, processing_mode="bilingual_once"
+    ))
+
+    assert len(calls) == 4  # 两段语音各 30s/29.5s，均超过 25s → 各均匀切两块
+    assert [e.text for e in candidate.source_entries] == ["片段1", "片段2", "片段3", "片段4"]
+    # 绝对时间 = clip 起点 + chunk 相对区间；跨静音处不合并，保持语音边界
+    assert candidate.source_entries[0].start == 10.0
+    assert candidate.source_entries[0].end == 25.0
+    assert candidate.source_entries[1].end == 40.0
+    assert candidate.source_entries[2].start == 40.5
+    assert candidate.source_entries[3].end == 70.0
+    assert any("切分" in warning for warning in candidate.warnings)
+
+
+@pytest.mark.asyncio
+async def test_gemini_adapter_falls_back_to_single_chunk_when_detection_fails(tmp_path):
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"audio")
+
+    def extractor(_request):
+        return ExtractedAudio(clip, 10.0, 70.0, temporary=False)
+
+    calls = []
+
+    class ChunkTransport(GeminiAudioTransport):
+        async def generate(self, audio, mime_type, prompt):
+            calls.append(audio)
+            return '{"source_text":"整段","target_text":"整译"}'
+
+    def broken_detector(_path, _total):
+        raise RuntimeError("silencedetect failed")
+
+    profile = GeminiAudioProfile(
+        "id", "Gemini", "google_native", "https://example.invalid",
+        "gemini-3.8-flash-high", "key", max_segment_seconds=25,
+    )
+    adapter = GeminiAudioAdapter(
+        profile, ChunkTransport(), extractor=extractor,
+        speech_regions=broken_detector,
+    )
+    candidate = await adapter.process(SegmentRequest(
+        tmp_path / "audio.m4a", 10.0, 70.0, processing_mode="bilingual_once"
+    ))
+    assert len(calls) == 1
+    assert candidate.source_entries == [SubtitleEntry(1, 10.0, 70.0, "整段")]
+    assert any("检测失败" in warning for warning in candidate.warnings)

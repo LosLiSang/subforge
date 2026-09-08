@@ -184,7 +184,7 @@ class GeminiAudioProfile:
     ca_bundle: str = ""
 ```
 
-API Key 使用与现有 LLM Profile 相同的安全规则，但存储命名空间独立。硬上限 `max_segment_seconds <= 180`。
+API Key 使用与现有 LLM Profile 相同的安全规则，但存储命名空间独立。`max_segment_seconds` 表示单次模型调用的切块上限（默认 60，不设硬上限）：选区超过该值时，用 ffmpeg silencedetect 检测语音区间并切块逐段识别，时间偏移由 SubForge 拼回；单段语音超限均匀切分，检测失败回退整段一次识别并附带警告。
 
 ## UI 流程
 

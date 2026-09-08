@@ -105,7 +105,7 @@
           <span class="profile-row-model">{{ profile.model }}</span>
           <span class="profile-row-url">{{ profile.base_url }}</span>
           <span class="chip">{{ '转写后翻译' if profile.default_processing_mode == 'transcribe_then_translate' else '一次生成双语' }}</span>
-          <span class="chip">≤ {{ profile.max_segment_seconds }} 秒</span>
+          <span class="chip">单次 ≤ {{ profile.max_segment_seconds }} 秒</span>
           <span class="badge {{ 'ok' if profile.api_key_masked != '未配置' else '' }}">{{ profile.api_key_masked }}</span>
         </div>
         <div class="profile-row-actions">
@@ -133,7 +133,7 @@
         <label>模型名<input name="model" required value="gemini-3.8-flash-high"></label>
         <div class="subtitle-time-fields">
           <label>默认处理模式<select name="default_processing_mode"><option value="transcribe_then_translate">转写后交给文本 LLM 翻译</option><option value="bilingual_once">一次生成源文与译文</option></select></label>
-          <label>最大片段秒数<input type="number" name="max_segment_seconds" min="1" max="180" value="60" required></label>
+          <label>单次调用上限（秒，超长片段自动按语音区间切分）<input type="number" name="max_segment_seconds" min="1" value="60" required></label>
         </div>
         <label>API Key<input type="password" name="api_key" autocomplete="new-password" placeholder="留空不修改；也可使用 GEMINI_API_KEY"></label>
         <label>识别提示词<textarea name="recognition_prompt" rows="3" placeholder="人名、作品名、专业词或输出约束"></textarea></label>

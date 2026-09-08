@@ -53,7 +53,8 @@ def write_srt(entries: list[SubtitleEntry], path: Path) -> None:
         start_str = _format_timestamp(entry.start)
         end_str = _format_timestamp(entry.end)
         lines.append(f"{start_str} --> {end_str}")
-        lines.append(entry.text)
+        # 空文本条目写单个空格：纯空行会被 SRT 块解析吞掉，无法往返
+        lines.append(entry.text if entry.text.strip() else " ")
         lines.append("")  # blank line separator
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -73,13 +74,12 @@ def read_srt(path: Path) -> list[SubtitleEntry]:
         if cached is not None:
             return copy.deepcopy(cached)
     content = path.read_text(encoding="utf-8")
-    blocks = content.strip().split("\n\n")
+    blocks = content.strip("\n").split("\n\n")
     entries: list[SubtitleEntry] = []
     for block in blocks:
-        block = block.strip()
-        if not block:
-            continue
         lines = block.split("\n")
+        while lines and not lines[-1]:
+            lines.pop()
         if len(lines) < 3:
             continue
         index = int(lines[0])

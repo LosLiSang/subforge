@@ -2006,3 +2006,11 @@ def test_cancel_running_import(tmp_path):
         # 再次取消运行中的任务应 409
         dup = client.post(f"/api/imports/{task_id}/cancel", headers=headers)
         assert dup.status_code == 409
+
+
+def test_segment_toolbar_time_chip_and_bilingual_mode_sync_assets():
+    """时间摘要可点击开表单；bilingual_once 隐藏翻译配置的字段同步存在。"""
+    js = (Path(__file__).parent.parent / "subforge" / "ui" / "static" / "player.js").read_text(encoding="utf-8")
+    assert "editSegmentTime" in js
+    assert "dialog-open-sync" in js
+    assert "llmField.hidden=processor==='gemini'&&mode==='bilingual_once'" in js

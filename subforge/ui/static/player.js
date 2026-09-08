@@ -164,9 +164,15 @@ function updateSegmentSelection(){
   const contiguous=indices.length>0&&indices.every((value,pos)=>pos===0||value===indices[pos-1]+1);
   segmentButton.disabled=!contiguous;
   const summary=segmentToolbar.querySelector('[data-segment-summary]');
-  if(!indices.length)summary.textContent='勾选一条或连续多条字幕';
-  else if(!contiguous)summary.textContent=`已选择 ${indices.length} 条，但范围不连续`;
-  else summary.textContent=`已选择第 ${indices[0]+1}–${indices.at(-1)+1} 条 · ${fmt(source[indices[0]].start)}–${fmt(source[indices.at(-1)].end)}`;
+  if(!indices.length){summary.textContent='勾选一条或连续多条字幕';return;}
+  if(!contiguous){summary.textContent=`已选择 ${indices.length} 条，但范围不连续`;return;}
+  summary.textContent=`已选择第 ${indices[0]+1}–${indices.at(-1)+1} 条 · `;
+  const editTime=document.createElement('button');
+  editTime.type='button';editTime.className='ghost small';editTime.dataset.editSegmentTime='';
+  editTime.textContent=`${fmt(source[indices[0]].start)}–${fmt(source[indices.at(-1)].end)} ✎`;
+  editTime.title='点击直接修改起止时间并配置重处理';
+  editTime.onclick=()=>segmentButton.click();
+  summary.append(editTime);
 }
 segmentToolbar?.querySelector('[data-clear-segment-selection]')?.addEventListener('click',()=>{selectedSegmentRows.clear();for(const input of document.querySelectorAll('[data-select-segment]'))input.checked=false;updateSegmentSelection()});
 const segmentDialog=document.getElementById('segment-reprocess-dialog');
@@ -178,6 +184,9 @@ function syncSegmentProcessorFields(){
 }
 segmentForm?.elements.processor?.addEventListener('change',syncSegmentProcessorFields);
 segmentForm?.elements.processing_mode?.addEventListener('change',syncSegmentProcessorFields);
+/* 表单级委泑：无论哪个控件以何种方式触发 change，都重新同步字段可见性 */
+segmentForm?.addEventListener('change',syncSegmentProcessorFields);
+segmentForm?.addEventListener('dialog-open-sync',syncSegmentProcessorFields);
 segmentForm?.elements.gemini_profile_id?.addEventListener('change',()=>{const option=segmentForm.elements.gemini_profile_id.selectedOptions[0];if(option?.dataset.defaultMode)segmentForm.elements.processing_mode.value=option.dataset.defaultMode;syncSegmentProcessorFields()});
 syncSegmentProcessorFields();
 segmentButton?.addEventListener('click',()=>{
@@ -186,7 +195,9 @@ segmentButton?.addEventListener('click',()=>{
   segmentForm.elements.start_time.value=String(Number(source[indices[0]].start.toFixed(3)));
   segmentForm.elements.end_time.value=String(Number(source[indices.at(-1)].end.toFixed(3)));
   segmentForm.querySelector('[data-segment-range]').textContent=`第 ${indices[0]+1}–${indices.at(-1)+1} 条 · 可直接修改下方时间`;
-  const error=segmentForm.querySelector('[data-segment-error]');error.hidden=true;error.textContent='';segmentDialog.showModal();
+  const error=segmentForm.querySelector('[data-segment-error]');error.hidden=true;error.textContent='';
+  segmentForm.dispatchEvent(new Event('dialog-open-sync'));
+  segmentDialog.showModal();
 });
 for(const button of segmentDialog?.querySelectorAll('[data-close-segment-reprocess]')||[])button.addEventListener('click',()=>segmentDialog.close());
 const candidateDialog=document.getElementById('segment-candidate-dialog');

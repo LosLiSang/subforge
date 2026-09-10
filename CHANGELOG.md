@@ -2,7 +2,7 @@
 
 本文件记录 SubForge 的显著变更。版本号遵循 [Semantic Versioning](https://semver.org/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [0.5.0] - Unreleased
+## [0.5.0] - 2026-09-10
 
 ### Added
 - **创作者实体**：社团/声优作为可复用实体，内部 ID 区分同名记录；RJ 作品可关联多社团/声优，直播归档仅关联声优。支持创建/编辑/合并/删除，作品详情可按创作者筛选。

@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.13"
           # 仓库未提交 uv.lock（见 .gitignore），默认按 uv.lock 建缓存键

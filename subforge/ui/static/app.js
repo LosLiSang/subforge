@@ -2,6 +2,18 @@
 (()=>{
   const themeKey='subforge.theme',accentKey='subforge.accent';
   const accents=new Set(['blue','cyan','green','violet','amber','rose']);
+  const syncToIframe = (theme, accent) => {
+    try {
+      const ifr = document.getElementById('content-frame');
+      if (ifr) {
+        if (ifr.contentDocument?.documentElement) {
+          if (theme) ifr.contentDocument.documentElement.dataset.theme = theme;
+          if (accent) ifr.contentDocument.documentElement.dataset.accent = accent;
+        }
+        ifr.contentWindow?.postMessage({ __theme: theme, __accent: accent }, '*');
+      }
+    } catch (e) {}
+  };
   const applyTheme=theme=>{
     const value=theme==='light'?'light':'dark';
     document.documentElement.dataset.theme=value;
@@ -12,6 +24,7 @@
       if(label)label.textContent=value==='light'?'黑色主题':'白色主题';
       toggle.title=value==='light'?'切换到黑色主题':'切换到白色主题';
     }
+    syncToIframe(value, null);
   };
   const applyAccent=accent=>{
     const value=accents.has(accent)?accent:'blue';
@@ -21,6 +34,7 @@
       button.classList.toggle('active',active);
       button.setAttribute('aria-pressed',active?'true':'false');
     }
+    syncToIframe(null, value);
   };
   applyTheme(localStorage.getItem(themeKey)||'dark');
   applyAccent(localStorage.getItem(accentKey)||'blue');
@@ -35,6 +49,35 @@
     if(event.key===themeKey)applyTheme(event.newValue||'dark');
     if(event.key===accentKey)applyAccent(event.newValue||'blue');
   });
+  // Top window: 监听 iframe 加载，确保内页立即获得当前主题和强调色
+  const ifr = document.getElementById('content-frame');
+  if (ifr) {
+    ifr.addEventListener('load', () => {
+      try {
+        const theme = document.documentElement.dataset.theme || localStorage.getItem(themeKey) || 'dark';
+        const accent = document.documentElement.dataset.accent || localStorage.getItem(accentKey) || 'blue';
+        if (ifr.contentDocument?.documentElement) {
+          ifr.contentDocument.documentElement.dataset.theme = theme;
+          ifr.contentDocument.documentElement.dataset.accent = accent;
+        }
+      } catch (e) {}
+    });
+  }
+  // Iframe 内页：启动时继承父窗口配置，并监听跨窗口主题消息
+  if (window.parent && window.parent !== window) {
+    try {
+      const pTheme = window.parent.document.documentElement.dataset.theme;
+      const pAccent = window.parent.document.documentElement.dataset.accent;
+      if (pTheme) applyTheme(pTheme);
+      if (pAccent) applyAccent(pAccent);
+    } catch (e) {}
+  }
+  window.addEventListener('message', (e) => {
+    if (e.data && typeof e.data === 'object') {
+      if (e.data.__theme) applyTheme(e.data.__theme);
+      if (e.data.__accent) applyAccent(e.data.__accent);
+    }
+  });
 })();
 for(const form of document.querySelectorAll('form[data-secure]')){form.addEventListener('submit',e=>{if(form.dataset.confirm&&!confirm(form.dataset.confirm)){e.preventDefault();return}let input=form.querySelector('input[name=csrf_token]');if(!input){input=document.createElement('input');input.type='hidden';input.name='csrf_token';form.append(input)}input.value=window.SUBFORGE_CSRF||'';});}
 const originalFetch=window.fetch;window.fetch=(input,init={})=>{init.headers=new Headers(init.headers||{});if(init.method&&init.method.toUpperCase()!=='GET'){init.headers.set('X-CSRF-Token',window.SUBFORGE_CSRF||'');}return originalFetch(input,init)};
@@ -46,6 +89,45 @@ for(const tab of document.querySelectorAll('[data-import-tab]'))tab.addEventList
 /* 导入弹窗：类型切换控制 RJ 号字段显隐（仅 RJ 作品有 RJ 号） */
 function syncKindFields(){for(const sel of document.querySelectorAll('[data-kind-select]')){const scope=sel.closest('[data-import-panel], [data-work-edit-form]')||sel.closest('form');const rjField=scope?.querySelector('[data-rj-field]');if(rjField)rjField.style.display=sel.value==='rj_work'?'':'none';const creatorPicker=scope?.querySelector('[data-creator-picker]');if(creatorPicker){creatorPicker.dataset.contextKind=sel.value;creatorPicker.dispatchEvent(new CustomEvent('creator-context-change'));}}}
 for(const sel of document.querySelectorAll('[data-kind-select]')){sel.addEventListener('change',syncKindFields);}syncKindFields();
+
+/* 本地导入：fetch 提交，转换期间禁用按钮并在对话框内显示错误。 */
+const localImportForm = document.querySelector('[data-local-import-form]');
+if (localImportForm) {
+  localImportForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const error = localImportForm.querySelector('[data-local-import-error]');
+    const button = localImportForm.querySelector('[data-local-import-submit]');
+    error.hidden = true;
+    if (!localImportForm.elements.selection_id.value) {
+      error.textContent = '请先选择音频或视频文件';
+      error.hidden = false;
+      return;
+    }
+    button.disabled = true;
+    button.textContent = '导入中…';
+    try {
+      const body = new URLSearchParams(new FormData(localImportForm)).toString();
+      const response = await fetch(localImportForm.action, {
+        method: 'POST',
+        body,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+      if (response.ok) {
+        window.location.replace(response.url);
+        return;
+      }
+      const data = await response.json().catch(() => ({}));
+      error.textContent = data.error || `导入失败（HTTP ${response.status}）`;
+      error.hidden = false;
+    } catch (err) {
+      error.textContent = `导入失败：${err.message}`;
+      error.hidden = false;
+    } finally {
+      button.disabled = false;
+      button.textContent = '导入';
+    }
+  });
+}
 
 /* 可复用创作者 Tag 输入：点击显示全部、忽略大小写/空格的前缀匹配、逗号/Enter 添加。 */
 const normalizeCreatorName=value=>(value||'').toLocaleLowerCase().replace(/\s+/g,'');
@@ -86,8 +168,8 @@ async function pollTaskRows(){
   const query=new URLSearchParams();for(const row of active)query.append('task_id',row.dataset.taskId);
   const response=await fetch(`/api/tasks/status?${query}`);if(!response.ok)return;
   const byId=new Map((await response.json()).map(task=>[task.task_id,task]));let reachedTerminal=false;
-  for(const row of active){const task=byId.get(row.dataset.taskId);if(!task)continue;const status=row.querySelector('.task-status'),stage=row.querySelector('.task-stage'),progress=row.querySelector('.task-progress'),batches=row.querySelector('.task-batches');if(status)status.textContent=task.status;if(stage&&task.stage)stage.textContent=task.stage;if(progress&&task.progress!=null)progress.textContent=Math.round(task.progress*100);if(batches&&task.total!=null)batches.textContent=`${task.completed||0} / ${task.total}`;if(task.message!=null)showTaskMessage(row,task.message);if(!['queued','running'].includes(task.status))reachedTerminal=true}
-  if(reachedTerminal)location.reload();
+  for(const row of active){const task=byId.get(row.dataset.taskId);if(!task)continue;const status=row.querySelector('.task-status'),stage=row.querySelector('.task-stage'),progress=row.querySelector('.task-progress'),batches=row.querySelector('.task-batches'),sep=row.querySelector('.task-progress-sep'),fill=row.querySelector('.task-progress-fill');if(status){status.textContent=task.status;status.className='status-badge status-'+task.status+' task-status';}if(stage&&task.stage){stage.textContent=task.stage;stage.className='chip task-stage chip-stage-'+task.stage;}if(progress&&task.progress!=null)progress.textContent=Math.round(task.progress*100);if(fill&&task.progress!=null)fill.style.width=`${Math.round(task.progress*100)}%`;if(batches&&task.total!=null){batches.textContent=`${task.completed||0} / ${task.total}`;batches.hidden=false;if(sep)sep.hidden=false;}if(task.message!=null)showTaskMessage(row,task.message);if(!['queued','running'].includes(task.status))reachedTerminal=true}
+  if(reachedTerminal&&!document.querySelector('dialog[open]'))location.reload();
  }catch(_error){}finally{taskPollInFlight=false}
 }
 function taskPollDelay(){const fastStage=taskRows.some(row=>{const status=row.querySelector('.task-status')?.textContent.trim(),stage=row.querySelector('.task-stage')?.textContent.trim();return['queued','running'].includes(status)&&['model','asr'].includes(stage)});return fastStage?250:1000}
@@ -149,14 +231,35 @@ const workSearch = document.getElementById('work-search');
 if (workSearch) {
   let searchTimer = null;
   let composing = false;
-  const applyWorkSearch = () => {
+  let inFlightAbort = null;
+  const applyWorkSearch = async () => {
     clearTimeout(searchTimer);
     const url = new URL(window.location.href);
     const query = workSearch.value.trim();
     if (query) url.searchParams.set('q', query); else url.searchParams.delete('q');
     url.searchParams.delete('page');
+    const pageSizeSel = document.querySelector('[data-page-size-select]');
+    if (pageSizeSel) url.searchParams.set('limit', pageSizeSel.value);
     const target = `${url.pathname}${url.search}`;
-    if (target !== `${window.location.pathname}${window.location.search}`) window.location.assign(target);
+    if (target === `${window.location.pathname}${window.location.search}`) return;
+    if (inFlightAbort) inFlightAbort.abort();
+    inFlightAbort = new AbortController();
+    window.history.replaceState(null, '', target);
+    try {
+      const res = await fetch(target, { headers: { 'sec-fetch-dest': 'iframe' }, signal: inFlightAbort.signal });
+      if (!res.ok) { window.location.assign(target); return; }
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      const newGrid = doc.querySelector('.works-grid');
+      const curGrid = document.querySelector('.works-grid');
+      if (newGrid && curGrid) curGrid.replaceWith(newGrid);
+      const newPagination = doc.querySelector('.library-pagination');
+      const curPagination = document.querySelector('.library-pagination');
+      if (newPagination && curPagination) curPagination.replaceWith(newPagination);
+      else if (newPagination && !curPagination) { const g = document.querySelector('.works-grid'); if (g) g.after(newPagination); }
+      else if (!newPagination && curPagination) curPagination.remove();
+    } catch (e) {
+      if (e.name !== 'AbortError') window.location.assign(target);
+    }
   };
   const scheduleWorkSearch = () => {
     if (composing) return;
@@ -180,11 +283,12 @@ if (window.parent !== window) {
 
 /* 作品详情：处理设置统一在 Dialog 中编辑，单音轨与整部作品共用。 */
 const processingDialog=document.getElementById('processing-dialog');
-for(const button of document.querySelectorAll('[data-open-processing]'))button.addEventListener('click',()=>{if(!processingDialog)return;const form=processingDialog.querySelector('[data-processing-form]');form.action=button.dataset.action;form.elements.mode.value=button.dataset.mode||'continue';form.elements.mode.dispatchEvent(new Event('change',{bubbles:true}));processingDialog.querySelector('[data-processing-title]').textContent=button.dataset.title||'处理设置';button.closest('details')?.removeAttribute('open');processingDialog.showModal()});
 const processingForm=document.querySelector('[data-processing-form]');
-function syncAsrProfileField(){const form=processingForm;if(!form)return;const provider=form.elements.asr_provider?.value;const field=form.querySelector('[data-asr-profile-field]');if(field)field.hidden=provider!=='model';}
-processingForm?.elements.asr_provider?.addEventListener('change',syncAsrProfileField);
-syncAsrProfileField();
+function setProcessingFieldVisible(field, visible){if(!field)return;field.hidden=!visible;for(const control of field.querySelectorAll('input,select,textarea'))control.disabled=!visible;}
+function syncAsrFields(){const form=processingForm;if(!form)return;const provider=form.elements.asr_provider?.value;setProcessingFieldVisible(form.querySelector('[data-asr-profile-field]'),provider==='model');setProcessingFieldVisible(form.querySelector('[data-whisper-field]'),provider==='local');setProcessingFieldVisible(form.querySelector('[data-local-asr-field]'),provider==='local');setProcessingFieldVisible(form.querySelector('[data-network-asr-field]'),provider==='deepgram'||provider==='model');setProcessingFieldVisible(form.querySelector('[data-merge-profile-field]'),provider==='model');}
+processingForm?.elements.asr_provider?.addEventListener('change',syncAsrFields);
+for(const button of document.querySelectorAll('[data-open-processing]'))button.addEventListener('click',()=>{if(!processingDialog)return;const form=processingDialog.querySelector('[data-processing-form]');form.action=button.dataset.action;if(form.elements.scope)form.elements.scope.value=button.dataset.scope||'incomplete';if(form.elements.mode){form.elements.mode.value=button.dataset.mode||'continue';form.elements.mode.dispatchEvent(new Event('change',{bubbles:true}));}setProcessingFieldVisible(form.querySelector('[data-scope-field]'),Boolean(button.dataset.action&&button.dataset.action.includes('/items/')));processingDialog.querySelector('[data-processing-title]').textContent=button.dataset.title||'自定义处理';syncAsrFields();button.closest('details')?.removeAttribute('open');processingDialog.showModal()});
+syncAsrFields();
 processingForm?.addEventListener('submit',event=>{if(processingForm.elements.mode.value!=='from_scratch')return;if(!window.confirm('从头进行 ASR 与翻译会覆盖现有源字幕、翻译字幕，并清除断点记录（原字幕会保留备份）。是否继续？'))event.preventDefault()});
 const trackRenameDialog=document.getElementById('track-rename-dialog');
 for(const button of document.querySelectorAll('[data-open-track-rename]'))button.addEventListener('click',()=>{if(!trackRenameDialog)return;const form=trackRenameDialog.querySelector('[data-track-rename-form]');form.action=button.dataset.action;form.elements.filename.value=button.dataset.filename||'';button.closest('details')?.removeAttribute('open');trackRenameDialog.showModal();form.elements.filename.focus();form.elements.filename.select()});
@@ -200,12 +304,13 @@ for(const row of document.querySelectorAll('.track-row[data-track-player]')){con
 for (const btn of document.querySelectorAll('[data-play-track]')) {
   btn.addEventListener('click', () => {
     const url = btn.dataset.playTrack;
-    const trackId = url.split('/').filter(Boolean).slice(-2)[0];
+    const trackId = btn.dataset.trackId || url.split('/').filter(Boolean).slice(-2)[0];
     const row = btn.closest('.track-row');
-    const title = row?.querySelector('h2')?.textContent || '播放中';
+    const title = btn.dataset.trackTitle || row?.querySelector('h2')?.textContent || '播放中';
+    const itemId = btn.dataset.itemId || row?.dataset.itemId || '';
     const player = window.top.SubForgePlayer || window.SubForgePlayer;
     if (!player) return;
-    player.setTrack(trackId, title, row?.dataset.itemId || '');
+    player.setTrack(trackId, title, itemId);
     player.play(); // 切换音轨后直接播放（此刻有用户手势，自动播放放行）
     const topBar = window.top.document?.getElementById('player-bar');
     if (topBar) topBar.hidden = false;
@@ -352,4 +457,16 @@ for(const button of document.querySelectorAll('[data-edit-gemini-profile]'))butt
   }
   form.elements.api_key.value='';form.elements.verify_tls.checked=!!profile.verify_tls;
   form.scrollIntoView({behavior:'smooth',block:'start'});form.elements.name.focus();
+});
+
+/* 作品库：底部分页条支持动态配置每页条数（默认10条，可选12/14/20） */
+document.addEventListener('change', (e) => {
+  const select = e.target.closest('[data-page-size-select]');
+  if (!select) return;
+  const newLimit = select.value;
+  const url = new URL(window.location.href);
+  url.searchParams.set('limit', newLimit);
+  url.searchParams.delete('page');
+  const target = `${url.pathname}${url.search}`;
+  window.location.assign(target);
 });

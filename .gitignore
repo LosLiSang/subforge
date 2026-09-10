@@ -24,3 +24,8 @@ site/
 
 # local QA screenshots & scratch
 artifacts/
+
+# Local test & debug runners
+agent_server.py
+runcss_server.py
+tmp_test_retry/

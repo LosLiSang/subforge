@@ -14,10 +14,10 @@
     <span class="profile-row-model">{{ p.model }}</span>
     <span class="profile-row-url">{{ p.base_url }}</span>
     <span class="profile-row-badges">
-      {% for cap in p.capabilities %}<span class="chip">{{ {'transcribe':'转写','translate':'翻译','merge':'合并'}.get(cap, cap) }}</span>{% endfor %}
-      <span class="chip">{{ p.proxy_url or '直连' }}</span>
+      {% for cap in p.capabilities %}<span class="chip chip-cap chip-cap-{{ cap }}">{{ {'transcribe':'转写','translate':'翻译','merge':'合并'}.get(cap, cap) }}</span>{% endfor %}
+      <span class="chip {{ 'chip-direct' if not p.proxy_url else 'chip-proxy' }}">{{ p.proxy_url or '直连' }}</span>
       <span class="chip {{ 'chip-ok' if p.verify_tls else 'chip-warn' }}">{{ 'TLS 校验' if p.verify_tls else '不校验 TLS' }}</span>
-      <span class="chip">{{ p.api_key_masked }}</span>
+      <span class="chip chip-key">{{ p.api_key_masked }}</span>
     </span>
   </div>
   <div class="profile-row-actions">
@@ -55,11 +55,12 @@
 {% endfor %}
 
 <dialog id="profile-dialog" class="profile-dialog">
-  <form method="post" action="/profiles" data-secure class="field-list" data-profile-form>
+  <form method="post" action="/profiles" data-secure data-profile-form>
     <header class="dialog-head">
       <h2 data-dialog-title>新增配置</h2>
       <button type="button" class="ghost small" data-close-dialog>✕</button>
     </header>
+    <div class="dialog-body field-list">
     <input type="hidden" name="profile_id" value="">
     <input type="hidden" name="copy_from_profile_id" value="">
     <label>名称<input name="name" required></label>
@@ -81,6 +82,7 @@
     <label>独立代理<input name="proxy_url" placeholder="留空直连；不会继承模型下载代理"></label>
     <label>自定义 CA 文件<input name="ca_bundle" placeholder="可选：C:\path\to\ca.pem"></label>
     <label class="check-field"><span><input type="checkbox" name="verify_tls" checked> 校验 TLS 证书</span><small>公网端点必须保持开启。仅在你完全信任的内网服务使用"不校验"。</small></label>
+    </div>
     <footer class="dialog-actions">
       <button type="button" class="ghost" data-close-dialog>取消</button>
       <button class="primary" data-dialog-submit>保存</button>

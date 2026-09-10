@@ -130,6 +130,11 @@ class Config:
     llm_proxy_url: str = ""
     llm_verify_tls: bool = True
     llm_ca_bundle: str = ""
+    # Network ASR task-level chunk size (seconds)
+    asr_chunk_seconds: int = 60
+    # Shared cross-process network ASR request pool
+    remote_asr_global_workers: int = 0
+    remote_asr_limiter_dir: Path | None = None
     # Deepgram ASR
     deepgram_api_key: str = ""
     deepgram_model: str = "nova-3"
@@ -231,6 +236,9 @@ def load_config(
     kwargs["llm_proxy_url"] = ""
     kwargs["llm_verify_tls"] = True
     kwargs["llm_ca_bundle"] = ""
+    kwargs["asr_chunk_seconds"] = 60
+    kwargs["remote_asr_global_workers"] = 0
+    kwargs["remote_asr_limiter_dir"] = None
     kwargs["deepgram_api_key"] = toml_data.get("deepgram", {}).get("api_key", "")
     kwargs["deepgram_model"] = toml_data.get("deepgram", {}).get("model", "nova-3")
     keyterms = toml_data.get("deepgram", {}).get("keyterms", [])

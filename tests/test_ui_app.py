@@ -467,6 +467,40 @@ def test_import_flow_never_exposes_server_path_and_lists_waiting_item(tmp_path):
     assert runtime.tasks.latest_for_track(track_id) is None
 
 
+def test_local_import_failure_preserves_selection_for_retry(tmp_path, monkeypatch):
+    library = tmp_path / "Library"
+    audio = tmp_path / "retry.m4a"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, audio=audio, library=library)
+    selected = client.post("/picker/audio", headers=headers).json()
+    original = LibraryStore.import_audio
+    calls = 0
+
+    def flaky_import(self, request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("temporary failure")
+        return original(self, request)
+
+    monkeypatch.setattr(LibraryStore, "import_audio", flaky_import)
+    form = {
+        "selection_id": selected["selection_id"],
+        "kind": "rj_work",
+        "rj_code": "RJ00000202",
+        "title": "重试导入",
+    }
+
+    first = client.post("/items/import", headers=headers, data=form)
+    assert first.status_code == 400
+    assert first.json() == {"error": "temporary failure"}
+    assert selected["selection_id"] in client.app.state.runtime.selections
+
+    second = client.post("/items/import", headers=headers, data=form, follow_redirects=False)
+    assert second.status_code == 303
+    assert selected["selection_id"] not in client.app.state.runtime.selections
+
+
 def test_local_import_can_automatically_enqueue_subtitle_processing(tmp_path):
     library = tmp_path / "Library"
     audio = tmp_path / "auto.m4a"
@@ -499,6 +533,7 @@ def test_local_import_can_automatically_enqueue_subtitle_processing(tmp_path):
         "llm_profile_id": profile.profile_id,
         "asr_profile_id": "",
         "merge_profile_id": "",
+        "asr_chunk_seconds": 60,
     }
     assert UiSettingsStore(tmp_path / "ui.json").get_last_processing_snapshot() == task.config_snapshot
 
@@ -518,6 +553,7 @@ def test_auto_processing_reuses_the_most_recent_processing_configuration(tmp_pat
         "llm_profile_id": profile.profile_id,
         "asr_profile_id": "",
         "merge_profile_id": "",
+        "asr_chunk_seconds": 60,
     }
     UiSettingsStore(tmp_path / "ui.json").set_last_processing_snapshot(recent)
 
@@ -824,18 +860,27 @@ def test_library_paginates_twelve_works_and_searches_across_all_pages(tmp_path):
     store.close()
 
     first = client.get("/").text
-    assert first.count('class="work-card') == 12
+    assert first.count('class="work-card') == 10
     assert "分页作品 01" in first
-    assert "分页作品 12" in first
-    assert "分页作品 13" not in first
+    assert "分页作品 10" in first
+    assert "分页作品 11" not in first
     assert 'class="library-pagination"' in first
     assert 'href="/?page=2"' in first
     assert "第 1 / 2 页" in first
+    assert 'data-page-size-select' in first
 
     second = client.get("/?page=2").text
-    assert second.count('class="work-card') == 1
+    assert second.count('class="work-card') == 3
+    assert "分页作品 11" in second
     assert "分页作品 13" in second
     assert "第 2 / 2 页" in second
+
+    # 测试自定义每页条数参数
+    twelve = client.get("/?limit=12").text
+    assert twelve.count('class="work-card') == 12
+    assert "分页作品 12" in twelve
+    assert "分页作品 13" not in twelve
+    assert 'href="/?limit=12&amp;page=2"' in twelve or 'href="/?page=2&amp;limit=12"' in twelve
 
     clamped = client.get("/?page=999").text
     assert "分页作品 13" in clamped
@@ -929,9 +974,8 @@ def test_detail_renders_track_rows_with_status_badges(tmp_path):
     assert f'data-track-duration="/tracks/{imported.track_id}/media">1:02' in html
     assert f'action="/items/{item_id}/process"' in html
     assert 'data-process-incomplete-form' in html
-    assert '>处理全部未完成音轨</button>' in html
-    assert 'data-title="处理全部未完成音轨"' in html
-    assert '>处理设置…</button>' in html
+    assert '一键处理未完成' in html
+    assert '>自定义处理…</button>' in html
     assert f'action="/tracks/{imported.track_id}/rename"' in html
     assert f'action="/tracks/{imported.track_id}/delete"' in html
     assert f'data-track-player="/tracks/{imported.track_id}/play"' in html
@@ -1083,7 +1127,46 @@ def test_process_item_enqueues_every_incomplete_track(tmp_path):
         "llm_profile_id": profile.profile_id,
         "asr_profile_id": "",
         "merge_profile_id": "",
+        "asr_chunk_seconds": 60,
     }
+
+
+def test_process_item_with_scope_all_enqueues_playable_tracks(tmp_path):
+    library = tmp_path / "Library"
+    one = tmp_path / "one.mp3"
+    complete = tmp_path / "complete.mp3"
+    one.write_bytes(b"one")
+    complete.write_bytes(b"complete")
+    client, headers = _authenticated_client(
+        tmp_path, library=library,
+        worker=FakeWorkerAdapter([{"type": "task_completed", "stage": "complete"}]),
+    )
+    store = LibraryStore.open(library)
+    first = store.import_audio(ImportRequest(
+        source=one, kind=ItemKind.RJ_WORK, title="BatchAll", rj_code="RJ00000804"
+    ))
+    completed = store.import_audio(ImportRequest(
+        source=complete, kind=ItemKind.RJ_WORK, title="BatchAll", rj_code="RJ00000804"
+    ))
+    store.update_track_status(completed.track_id, "playable")
+    store.close()
+    profile = ModelProfileStore(tmp_path / "profiles.json").save(
+        name="Test", base_url="https://example.com/v1", model="chat", api_key="key"
+    )
+
+    response = client.post(
+        f"/items/{first.item_id}/process",
+        headers=headers,
+        data={
+            "asr_provider": "local", "scene": "asmr", "whisper_model": "medium",
+            "llm_profile_id": profile.profile_id, "scope": "all", "mode": "from_scratch",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    tasks = client.app.state.runtime.tasks
+    assert tasks.latest_for_track(first.track_id) is not None
+    assert tasks.latest_for_track(completed.track_id) is not None
 
 
 def test_track_rename_delete_and_subtitle_download_routes(tmp_path):
@@ -1383,7 +1466,7 @@ def test_retry_failed_subtitle_task_reuses_same_task(tmp_path):
     client, headers = _authenticated_client(tmp_path, library=library, worker=CompleteWorker())
     client.get("/")
     runtime = client.app.state.runtime
-    store = runtime.library
+    store = runtime.open_active_library()
     profile = runtime.deps.profiles.save("p", "https://api.example.com", "model", api_key="k")
     imported = store.import_audio(ImportRequest(
         source=audio, kind=ItemKind.RJ_WORK, title="Retry", rj_code="RJ00000405",
@@ -2191,8 +2274,365 @@ def test_full_process_records_selection_history(tmp_path):
     }, follow_redirects=False)
     assert response.status_code == 303, response.text
 
-    store = runtime.library
+    store = runtime.open_active_library()
     assert store.selection_order("full.translation_profile") == [p2.profile_id]
     assert store.selection_order("full.asr_profile") == [asr.profile_id]
     assert store.selection_order("full.asr_provider") == ["model"]
     assert store.selection_order("full.whisper_model") == ["large-v3"]
+
+
+def _wait_task_status(client, headers, task_id, status, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        payload = client.get(f"/tasks/{task_id}", headers=headers).json()
+        if payload.get("status") == status:
+            return payload
+        time.sleep(0.02)
+    raise AssertionError(f"task did not reach {status} in time")
+
+
+def test_failed_segment_task_can_retry_from_task_center(tmp_path):
+    """失败的片段重处理任务可从任务中心重试：同一 task_id、重新生成候选。"""
+    from subforge.segment_processing import SegmentProcessingError
+
+    library = tmp_path / "Library"
+    audio = tmp_path / "retry-seg.m4a"
+    audio.write_bytes(b"audio")
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="RetrySeg", author="Author"
+    ))
+    write_srt([SubtitleEntry(1, 0.0, 1.0, "旧原文")], store.track_subtitle_path(imported.track_id, "ja"))
+    write_srt([SubtitleEntry(1, 0.0, 1.0, "旧译文")], store.track_subtitle_path(imported.track_id, "zh"))
+    store.close()
+
+    calls = {"n": 0}
+
+    class FlakySegmentProcessor:
+        async def process(self, request):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise SegmentProcessingError("ASR 临时失败")
+            return SegmentCandidate(
+                [SubtitleEntry(1, 0.0, 1.0, "候选原文")],
+                [SubtitleEntry(1, 0.0, 1.0, "候选译文")],
+                "whisper", request.target_start, request.target_end,
+            )
+
+    shared = FlakySegmentProcessor()
+    model_profiles = ModelProfileStore(tmp_path / "profiles.json")
+    profile = model_profiles.save(
+        "DeepSeek 重试", "https://api.example.com/v1", "deepseek-chat",
+        capabilities=["translate"],
+    )
+    client, headers = _authenticated_client(
+        tmp_path, library=library, model_profiles=model_profiles,
+        segment_processor_factory=lambda _o: shared,
+    )
+    task_id = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "1", "processor": "whisper",
+        "llm_profile_id": profile.profile_id,
+    })
+    _wait_task_status(client, headers, task_id, "failed")
+
+    # 任务中心为失败的片段任务提供重试入口
+    page = client.get("/downloads").text
+    assert f'/tasks/{task_id}/retry' in page
+
+    response = client.post(
+        f"/tasks/{task_id}/retry", headers=headers, follow_redirects=False
+    )
+    assert response.status_code == 303, response.text
+    candidate = _await_segment_candidate(client, headers, task_id)
+    assert candidate["candidate"]["source"][0]["text"] == "候选原文"
+    assert calls["n"] == 2
+
+
+def test_segment_retry_rejected_when_translation_profile_missing(tmp_path):
+    """片段任务引用的翻译配置已删除时，重试被拒绝且原因明确（fail-closed）。"""
+    library = tmp_path / "Library"
+    audio = tmp_path / "ghost-prof.m4a"
+    audio.write_bytes(b"audio")
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="GhostProf", author="Author"
+    ))
+    write_srt([SubtitleEntry(1, 0.0, 1.0, "旧原文")], store.track_subtitle_path(imported.track_id, "ja"))
+    write_srt([SubtitleEntry(1, 0.0, 1.0, "旧译文")], store.track_subtitle_path(imported.track_id, "zh"))
+    store.close()
+
+    # 不注入自定义处理器：真实路径下任务因翻译配置不存在而失败
+    client, headers = _authenticated_client(tmp_path, library=library)
+    task_id = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "1", "processor": "whisper",
+        "llm_profile_id": "ghost-profile-id",
+    })
+    _wait_task_status(client, headers, task_id, "failed")
+
+    response = client.post(f"/tasks/{task_id}/retry", headers=headers)
+    assert response.status_code == 404
+    assert "翻译配置" in response.json()["error"]
+
+
+def test_segment_retry_gemini_validates_both_profiles(tmp_path):
+    """Gemini 片段任务重试时分别校验音频转写配置与翻译配置（transcribe_then_translate）。"""
+    library = tmp_path / "Library"
+    audio = tmp_path / "gemini-retry.m4a"
+    audio.write_bytes(b"audio")
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="GeminiRetry", author="Author"
+    ))
+    track_id = imported.track_id
+
+    def _seed_failed_task(task_id: str, payload: dict) -> None:
+        with store._db_lock, store._db:
+            store._db.execute(
+                """INSERT INTO tasks(task_id,track_id,status,stage,progress,config_snapshot,updated_at,kind,payload_json)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (task_id, track_id, "failed", "segment", 0.05, "{}",
+                 "2026-01-01T00:00:00Z", "segment_reprocess", json.dumps(payload)),
+            )
+
+    model_profiles = ModelProfileStore(tmp_path / "profiles.json")
+    asr_profile = model_profiles.save(
+        "内网 Gemini", "https://gw.example/v1", "gemini-3.8-flash-high",
+        capabilities=["transcribe"],
+    )
+    # 1) 缺少音频转写模型配置 → 400
+    _seed_failed_task("gem-1", {"processor": "gemini", "processing_mode": "transcribe_then_translate"})
+    # 2) 音频转写配置不存在 → 404（独立报错）
+    _seed_failed_task("gem-2", {
+        "processor": "gemini", "processing_mode": "transcribe_then_translate",
+        "asr_profile_id": "ghost-asr",
+    })
+    # 3) 缺少翻译配置 → 400
+    _seed_failed_task("gem-3", {
+        "processor": "gemini", "processing_mode": "transcribe_then_translate",
+        "asr_profile_id": asr_profile.profile_id,
+    })
+    # 4) 翻译配置不存在 → 404（独立报错）
+    _seed_failed_task("gem-4", {
+        "processor": "gemini", "processing_mode": "transcribe_then_translate",
+        "asr_profile_id": asr_profile.profile_id, "llm_profile_id": "ghost-llm",
+    })
+    # 5) bilingual_once 只需要音频转写配置，可正常重试入队
+    _seed_failed_task("gem-5", {
+        "processor": "gemini", "processing_mode": "bilingual_once",
+        "asr_profile_id": asr_profile.profile_id,
+    })
+    store.close()
+    client, headers = _authenticated_client(tmp_path, library=library, model_profiles=model_profiles)
+    client.get("/downloads")  # 触发 Library/TaskManager 初始化
+
+    response = client.post("/tasks/gem-1/retry", headers=headers)
+    assert response.status_code == 400
+    assert "音频转写模型配置" in response.json()["error"]
+
+    response = client.post("/tasks/gem-2/retry", headers=headers)
+    assert response.status_code == 404
+    assert "音频转写模型配置不存在" in response.json()["error"]
+
+    response = client.post("/tasks/gem-3/retry", headers=headers)
+    assert response.status_code == 400
+    assert "翻译配置" in response.json()["error"]
+
+    response = client.post("/tasks/gem-4/retry", headers=headers)
+    assert response.status_code == 404
+    assert "翻译配置不存在" in response.json()["error"]
+
+    response = client.post("/tasks/gem-5/retry", headers=headers, follow_redirects=False)
+    assert response.status_code == 303
+
+
+def test_downloads_page_shows_task_context_and_worker_summary(tmp_path):
+    """任务中心显示片段时间范围、ASR/翻译模型、入队/开始时间与 Worker 摘要。"""
+    model_profiles = ModelProfileStore(tmp_path / "profiles.json")
+    profile = model_profiles.save(
+        "DeepSeek 主力", "https://api.example.com/v1", "deepseek-chat",
+        capabilities=["translate"],
+    )
+    library = tmp_path / "Library"
+    audio = tmp_path / "ctx.m4a"
+    audio.write_bytes(b"audio")
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="Context", author="Author"
+    ))
+    write_srt([SubtitleEntry(1, 4.0, 6.0, "旧原文")], store.track_subtitle_path(imported.track_id, "ja"))
+    write_srt([SubtitleEntry(1, 4.0, 6.0, "旧译文")], store.track_subtitle_path(imported.track_id, "zh"))
+    # 直接落一条 full_process 任务，验证快照信息展示
+    with store._db_lock, store._db:
+        store._db.execute(
+            """INSERT INTO tasks(task_id,track_id,status,stage,progress,config_snapshot,updated_at,kind,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (
+                "full-1", imported.track_id, "failed", "translation", 0.4,
+                json.dumps({
+                    "asr_provider": "local", "scene": "asmr",
+                    "whisper_model": "large-v3", "llm_profile_id": profile.profile_id,
+                }),
+                "2026-01-01T00:00:00Z", "full_process", "2026-01-01T08:30:00Z",
+            ),
+        )
+    store.close()
+
+    class FakeSegmentProcessor:
+        async def process(self, request):
+            return SegmentCandidate(
+                [SubtitleEntry(1, 4.0, 6.0, "候选原文")],
+                [SubtitleEntry(1, 4.0, 6.0, "候选译文")],
+                "whisper", request.target_start, request.target_end,
+            )
+
+    client, headers = _authenticated_client(
+        tmp_path, library=library, model_profiles=model_profiles,
+        segment_processor_factory=lambda _o: FakeSegmentProcessor(),
+    )
+    # 显式时间范围 + 模型选择
+    explicit = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "1",
+        "start_time": "0.5", "end_time": "7.5",
+        "processor": "whisper", "whisper_model": "large-v3",
+        "llm_profile_id": profile.profile_id,
+    })
+    _await_segment_candidate(client, headers, explicit)
+    # 旧格式 payload（仅字幕序号）→ 渲染时回退解析出时间范围
+    legacy = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "1", "processor": "whisper",
+    })
+    _await_segment_candidate(client, headers, legacy)
+
+    page = client.get("/downloads").text
+    # 片段范围：显式时间 + 旧 payload 回退解析（4.00→6.00）
+    assert "0.50" in page and "7.50" in page
+    assert "4.00" in page and "6.00" in page
+    # ASR 模型
+    assert "large-v3" in page
+    # 翻译模型（配置名 · 模型名）
+    assert "DeepSeek 主力" in page and "deepseek-chat" in page
+    # 入队/开始时间（MM-DD HH:MM）
+    assert re.search(r"\d{2}-\d{2} \d{2}:\d{2}", page)
+    # Worker 摘要：本地/网络分域
+    assert "本地 ASR" in page and "网络 ASR" in page
+    # full_process 行的快照展示 + 失败重试按钮
+    assert 'action="/tasks/full-1/retry"' in page
+
+
+def test_cancelled_segment_task_can_retry_from_task_center(tmp_path):
+    """已取消的片段任务可从任务中心重试：取消态行显示重试按钮，重试后生成候选。"""
+    library = tmp_path / "Library"
+    audio = tmp_path / "cancel-seg.m4a"
+    audio.write_bytes(b"audio")
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="CancelSeg", author="Author"
+    ))
+    write_srt([SubtitleEntry(1, 0.0, 1.0, "旧原文")], store.track_subtitle_path(imported.track_id, "ja"))
+    write_srt([SubtitleEntry(1, 0.0, 1.0, "旧译文")], store.track_subtitle_path(imported.track_id, "zh"))
+    store.close()
+
+    calls = {"n": 0}
+    model_profiles = ModelProfileStore(tmp_path / "profiles.json")
+    profile = model_profiles.save(
+        "DeepSeek 取消重试", "https://api.example.com/v1", "deepseek-chat",
+        capabilities=["translate"],
+    )
+
+    class CountingSegmentProcessor:
+        async def process(self, request):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                await asyncio.sleep(5)  # 模拟长任务，留出取消窗口
+            return SegmentCandidate(
+                [SubtitleEntry(1, 0.0, 1.0, "候选原文")],
+                [SubtitleEntry(1, 0.0, 1.0, "候选译文")],
+                "whisper", request.target_start, request.target_end,
+            )
+
+    client, headers = _authenticated_client(
+        tmp_path, library=library, model_profiles=model_profiles,
+        segment_processor_factory=lambda _o: CountingSegmentProcessor(),
+    )
+    task_id = _enqueue_segment_reprocess(client, headers, imported.track_id, {
+        "start_index": "1", "end_index": "1", "processor": "whisper",
+        "llm_profile_id": profile.profile_id,
+    })
+
+    cancel = client.post(f"/tasks/{task_id}/cancel", headers=headers, follow_redirects=False)
+    assert cancel.status_code == 303
+    _wait_task_status(client, headers, task_id, "cancelled")
+
+    # 取消态的片段任务行有重试按钮
+    page = client.get("/downloads").text
+    assert f'action="/tasks/{task_id}/retry"' in page
+
+    response = client.post(f"/tasks/{task_id}/retry", headers=headers, follow_redirects=False)
+    assert response.status_code == 303
+    candidate = _await_segment_candidate(client, headers, task_id)
+    assert candidate["candidate"]["source"][0]["text"] == "候选原文"
+    assert calls["n"] == 2
+
+
+def test_cancelled_full_process_task_can_retry(tmp_path):
+    """整轨任务取消后可从任务中心重试：取消态行显示重试按钮，重试后从断点继续。"""
+    library = tmp_path / "Library"
+    audio = tmp_path / "cancel-full.m4a"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, library=library)
+    runtime = client.app.state.runtime
+    profile = runtime.deps.profiles.save(name="p", base_url="http://x", model="m", api_key="k")
+    store = runtime.open_active_library()
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="CancelFull", author="Author"
+    ))
+    with store._db_lock, store._db:
+        store._db.execute(
+            """INSERT INTO tasks(task_id,track_id,status,stage,progress,config_snapshot,updated_at,kind)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            ("full-cancel-1", imported.track_id, "cancelled", "cancelled", 0.3,
+             json.dumps({"asr_provider": "local", "scene": "normal", "whisper_model": "medium", "llm_profile_id": profile.profile_id}),
+             "2026-01-01T00:00:00Z", "full_process"),
+        )
+    page = client.get("/downloads").text
+    assert 'action="/tasks/full-cancel-1/retry"' in page
+
+    response = client.post("/tasks/full-cancel-1/retry", headers=headers, follow_redirects=False)
+    assert response.status_code == 303
+
+
+def test_task_center_can_delete_terminal_tasks(tmp_path):
+    """任务中心可删除终态任务：行消失；运行中任务删除被拒。"""
+    library = tmp_path / "Library"
+    audio = tmp_path / "del.m4a"
+    audio.write_bytes(b"audio")
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="DelTask", author="Author"
+    ))
+    with store._db_lock, store._db:
+        store._db.execute(
+            """INSERT INTO tasks(task_id,track_id,status,stage,progress,config_snapshot,updated_at,kind)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            ("del-1", imported.track_id, "cancelled", "cancelled", 0.1, "{}",
+             "2026-01-01T00:00:00Z", "segment_reprocess"),
+        )
+        store._db.execute(
+            """INSERT INTO tasks(task_id,track_id,status,stage,progress,config_snapshot,updated_at,kind)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            ("del-2", imported.track_id, "awaiting_review", "review", 1.0, "{}",
+             "2026-01-01T00:00:00Z", "segment_reprocess"),
+        )
+    store.close()
+    client, headers = _authenticated_client(tmp_path, library=library)
+    page = client.get("/downloads").text
+    assert 'action="/tasks/del-1/delete"' in page
+
+    response = client.post("/tasks/del-1/delete", headers=headers, follow_redirects=False)
+    assert response.status_code == 303
+    page = client.get("/downloads").text
+    assert 'action="/tasks/del-1/delete"' not in page
+
+    # 待评审任务删除被拒（须先接受/放弃候选）
+    response = client.post("/tasks/del-2/delete", headers=headers)
+    assert response.status_code == 409

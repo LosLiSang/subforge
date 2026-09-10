@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}SubForge Library{% endblock %}</title>
   <link rel="icon" href="/static/subforge-icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/app.css">
-  <link rel="stylesheet" href="/static/theme-overrides.css">
+  <link rel="stylesheet" href="/static/app.css?v=2">
+  <link rel="stylesheet" href="/static/theme-overrides.css?v=2">
 </head>
 <body>
 {% if is_frame %}
 <main class="frame-main">{% block content %}{% endblock %}</main>
 <script>window.SUBFORGE_CSRF={{ csrf_token|tojson }};</script>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=2"></script>
 {% block scripts %}{% endblock %}
 {% else %}
 <div class="shell">
@@ -47,7 +47,7 @@
 </div>
 <div id="player-bar" hidden></div>
 <script>window.SUBFORGE_CSRF={{ csrf_token|tojson }};</script>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=2"></script>
 <script src="/static/global-player.js"></script>
 <script src="/static/float-lyrics.js"></script>
 <script>

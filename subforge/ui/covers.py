@@ -58,6 +58,7 @@ def replace_cover(library_root: Path, item_id: str, source: Path) -> Path:
         raise ValueError("cover must be a JPG, PNG, or WebP image")
     destination = covers_dir(library_root) / f"{item_id}.jpg"
     destination.parent.mkdir(parents=True, exist_ok=True)
+    (covers_dir(library_root) / f"{item_id}.nocover").unlink(missing_ok=True)
     if source.suffix.lower() in {".jpg", ".jpeg"}:
         temporary = destination.with_name(f".{destination.stem}.tmp.jpg")
         shutil.copyfile(source, temporary)
@@ -90,6 +91,15 @@ def cover_for_item(
     cache_path = covers_dir(library_root) / f"{item_id}.jpg"
     if cache_path.exists() and cache_path.stat().st_size > 0:
         return cache_path
+    no_cover_sentinel = covers_dir(library_root) / f"{item_id}.nocover"
+    if no_cover_sentinel.exists():
+        return None
     if media_path is None or not media_path.exists():
         return None
-    return extract_cover(media_path, cache_path)
+    result = extract_cover(media_path, cache_path)
+    if result is None:
+        try:
+            no_cover_sentinel.touch(exist_ok=True)
+        except OSError:
+            pass
+    return result

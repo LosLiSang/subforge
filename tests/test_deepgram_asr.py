@@ -265,3 +265,50 @@ class TestDeepgramTranscribe:
         transcribe(audio, "dg-secret-key", client=client, sleep_fn=lambda _: None, progress_callback=progress.append)
 
         assert progress == [1.0]
+
+    def test_transcribe_chunked_reuses_completed_chunks(self, tmp_path, monkeypatch):
+        from subforge.asr.deepgram import transcribe_chunked
+        from subforge.models import SubtitleEntry
+        from subforge.resume import ResumeState
+
+        audio = tmp_path / "test.wav"
+        audio.write_bytes(b"dummy")
+
+        monkeypatch.setattr("subforge.asr.deepgram._media_duration", lambda _: 120.0)
+        monkeypatch.setattr("subforge.asr.deepgram._cut_audio", lambda *args: None)
+
+        calls = 0
+        def fake_transcribe(chunk_path, **kwargs):
+            nonlocal calls
+            calls += 1
+            return [SubtitleEntry(1, 0.0, 10.0, "text")]
+
+        monkeypatch.setattr("subforge.asr.deepgram.transcribe", fake_transcribe)
+
+        resume_state = ResumeState(
+            schema_version=1,
+            job_key="key",
+            media={},
+            config_fingerprint={},
+            paths={},
+            asr={
+                "status": "partial",
+                "total_chunks": 2,
+                "completed_chunks": {
+                    "0": {"source": [{"index": 1, "start": 0.0, "end": 10.0, "text": "cached"}]},
+                },
+            },
+            translation={},
+        )
+
+        entries = transcribe_chunked(
+            audio,
+            api_key="key",
+            chunk_seconds=60,
+            resume_state=resume_state,
+        )
+
+        assert calls == 1
+        assert len(entries) == 2
+        assert entries[0].text == "cached"
+        assert entries[1].text == "text"

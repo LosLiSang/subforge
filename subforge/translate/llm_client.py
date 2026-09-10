@@ -177,12 +177,36 @@ async def translate_batch(
                 response = await client.post(url, json=body, headers=headers)
             response.raise_for_status()
             data = response.json()
-            content = data["choices"][0]["message"]["content"]
+            choices = data.get("choices")
+            if not choices or not isinstance(choices, list):
+                last_exception = LLMError(
+                    "LLM returned empty choices (possibly blocked by safety filter or content policy)"
+                )
+                if attempt < _MAX_RETRIES:
+                    wait = 2 ** (attempt - 1)
+                    logger.warning(
+                        "LLM: empty choices on attempt %d/%d, waiting %ds...",
+                        attempt, _MAX_RETRIES, wait,
+                    )
+                    if activity_callback:
+                        activity_callback(
+                            f"等待重试 · 空响应/内容拦截 · 请求 {attempt}/{_MAX_RETRIES} · {wait}秒后重试"
+                        )
+                    await asyncio.sleep(wait)
+                continue
+
+            first_choice = choices[0] if isinstance(choices[0], dict) else {}
+            message = first_choice.get("message") or {}
+            content = message.get("content")
+            if isinstance(content, list):
+                content = "".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
             # 并发下服务端可能返回空 content（推理截断/瞬时异常，HTTP 仍 200）。
             # 空 content 当作可重试失败，绝不能静默当作成功返回。
             if content is None or not str(content).strip():
+                finish_reason = first_choice.get("finish_reason", "")
+                reason_str = f", finish_reason='{finish_reason}'" if finish_reason else ""
                 last_exception = LLMError(
-                    "LLM returned empty content (finish_reason may be 'length')"
+                    f"LLM returned empty content (finish_reason may be 'length'{reason_str})"
                 )
                 if attempt < _MAX_RETRIES:
                     wait = 2 ** (attempt - 1)

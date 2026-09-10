@@ -234,3 +234,35 @@ class TestEmptyContentRetry:
             await translate_batch(messages, config, client=mock_client)
 
         assert mock_client.post.call_count == 3
+
+    async def test_empty_choices_retries_then_succeeds(self, config, messages):
+        """服务端因内容过滤/安全审查返回 choices=[] 时，不能抛 IndexError，应重试。"""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        empty_choices_resp = MagicMock(spec=httpx.Response)
+        empty_choices_resp.status_code = 200
+        empty_choices_resp.json.return_value = {"choices": []}
+        empty_choices_resp.raise_for_status = MagicMock()
+
+        mock_client.post.side_effect = [
+            empty_choices_resp,
+            _ok_response("你好"),
+        ]
+
+        result = await translate_batch(messages, config, client=mock_client)
+        assert result == "你好"
+        assert mock_client.post.call_count == 2
+
+    async def test_all_empty_choices_raises_llm_error_not_index_error(self, config, messages):
+        """连续返回 choices=[] 时，最终应抛出 LLMError 而非未捕获的 IndexError。"""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        empty_choices_resp = MagicMock(spec=httpx.Response)
+        empty_choices_resp.status_code = 200
+        empty_choices_resp.json.return_value = {"choices": []}
+        empty_choices_resp.raise_for_status = MagicMock()
+
+        mock_client.post.return_value = empty_choices_resp
+
+        with pytest.raises(LLMError, match="empty choices"):
+            await translate_batch(messages, config, client=mock_client)
+
+        assert mock_client.post.call_count == 3

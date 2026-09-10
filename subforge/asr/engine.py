@@ -41,9 +41,9 @@ def _preprocess_audio(input_path: Path) -> Path:
     try:
         subprocess.run(
             cmd, check=True, capture_output=True,
-            encoding="utf-8", errors="replace",
+            encoding="utf-8", errors="replace", timeout=300,
         )
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.warning("ASR: ffmpeg preprocessing failed: %s",
                        e.stderr.strip() if e.stderr else str(e))
         out_path.unlink(missing_ok=True)

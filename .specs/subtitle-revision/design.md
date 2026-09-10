@@ -217,6 +217,14 @@ API Key 使用与现有 LLM Profile 相同的安全规则，但存储命名空�
 
 片段任务是局部临时任务，不把 Track 标记为 failed；其事件 stage 为 `segment_extract`、`segment_asr`、`segment_translate`、`segment_candidate`。
 
+### 任务中心集成与重试
+
+- 片段重处理是持久异步任务（kind=segment_reprocess），候选经任务中心评审；失败后可**手动重试**：复用同一 task_id + 原 payload 重新入队，不触碰音轨处理状态
+- 重试前 fail-closed 校验 payload 引用的配置：whisper + transcribe_then_translate 需翻译 Profile；gemini 需音频转写 Profile（bilingual_once 只需转写 Profile）；缺失报 400，Profile 已删除报 404 且按「音频转写/翻译」分别提示
+- 入队前把解析后的时间窗归一化写进 payload（`target_start`/`target_end`），任务中心展示与实际处理范围一致；旧 payload 渲染时按字幕序号回退反解
+- tasks 表含 `created_at`（入队）/ `started_at`（每次实际开始，重试时重置）/ `finished_at`（终态；自动重试新一轮开始时清除旧值）
+- 并发域：本地 ASR（整轨 local + 片段 whisper，含 GPU 推理）与网络 ASR（整轨 deepgram/model + 片段 gemini）分属两个信号量，互不抢占；容量分别由 `asr_concurrency`（默认 1）与 `remote_asr_concurrency`（默认 2）在 UI 启动时固定
+
 ## 配置页面
 
 新增“原生音频模型”分区，与：

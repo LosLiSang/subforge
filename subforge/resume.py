@@ -134,6 +134,29 @@ class ResumeStore:
         )
         tmp_path.replace(path)
 
+    def save_asr_chunk(
+        self,
+        state: ResumeState,
+        chunk_index: int,
+        entries: list[SubtitleEntry],
+        targets: list[SubtitleEntry] | None = None,
+        total_chunks: int = 0,
+    ) -> None:
+        state.asr["status"] = "partial"
+        state.asr["total_chunks"] = total_chunks
+        completed = state.asr.setdefault("completed_chunks", {})
+        completed[str(chunk_index)] = {
+            "source": [
+                {"index": entry.index, "start": entry.start, "end": entry.end, "text": entry.text}
+                for entry in entries
+            ],
+            "target": [
+                {"index": entry.index, "start": entry.start, "end": entry.end, "text": entry.text}
+                for entry in (targets or [])
+            ],
+        }
+        self.save(state)
+
     def mark_asr_done(self, state: ResumeState) -> None:
         state.asr["status"] = "done"
         self.save(state)

@@ -310,6 +310,34 @@ def test_import_rj_folder_converts_videos_defaults_title_and_reports_partial_suc
     assert any(track.media.endswith("movie.m4a") for track in item.tracks)
 
 
+def test_import_single_video_converts_to_m4a(tmp_path, monkeypatch):
+    import subprocess
+    source = tmp_path / "movie.mp4"
+    source.write_bytes(b"video")
+    store = LibraryStore.initialize(tmp_path / "Library")
+
+    monkeypatch.setattr("subforge.library.shutil.which", lambda name: "ffmpeg" if name == "ffmpeg" else None)
+    def fake_run(cmd, **kwargs):
+        output = Path(cmd[-1])
+        output.write_bytes(b"converted")
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+    monkeypatch.setattr("subforge.library.subprocess.run", fake_run)
+
+    result = store.import_audio(ImportRequest(
+        source=source,
+        kind=ItemKind.RJ_WORK,
+        title="Single video",
+        rj_code="RJ01546797",
+    ))
+
+    assert result.created is True
+    assert source.read_bytes() == b"video"
+    item = store.get_item(result.item_id)
+    assert item.tracks[0].media == "media/movie.m4a"
+    archived = store.track_media_path(result.track_id)
+    assert archived.read_bytes() == b"converted"
+
+
 def test_recently_used_creators_are_persisted_and_sorted_first(tmp_path):
     root = tmp_path / "Library"
     store = LibraryStore.initialize(root)

@@ -5,7 +5,8 @@ import logging
 import time
 
 
-from subforge.asr.deepgram import transcribe as deepgram_transcribe
+from subforge.asr.deepgram import transcribe as deepgram_transcribe, transcribe_chunked as deepgram_transcribe_chunked
+from subforge.asr.remote_limiter import RemoteAsrRequestLimiter
 from subforge.asr.engine import _audio_duration_seconds, transcribe as asr_transcribe
 from subforge.asr.model_manager import ensure_model
 from subforge.config import Config
@@ -70,7 +71,7 @@ def _target_srt_is_complete(source_entries: list, target_entries: list) -> bool:
     return source_indices == target_indices and all(entry.text.strip() for entry in target_entries)
 
 
-def _run_asr(job: Job, config: Config, progress_callback, model_ready_callback=None) -> list:
+def _run_asr(job: Job, config: Config, progress_callback, model_ready_callback=None, resume_state=None, resume_store=None) -> list:
     if config.asr_provider == "local":
         if config.direct_model_path:
             model_reference = str(config.direct_model_path)
@@ -101,6 +102,22 @@ def _run_asr(job: Job, config: Config, progress_callback, model_ready_callback=N
     if config.asr_provider == "deepgram":
         if model_ready_callback:
             model_ready_callback()
+        if config.remote_asr_global_workers > 0:
+            return deepgram_transcribe_chunked(
+                job.file_path,
+                api_key=config.deepgram_api_key,
+                model=config.deepgram_model,
+                language=job.source_lang,
+                keyterms=config.deepgram_keyterms,
+                chunk_seconds=config.asr_chunk_seconds,
+                limiter=RemoteAsrRequestLimiter(
+                    config.remote_asr_limiter_dir,
+                    config.remote_asr_global_workers,
+                ),
+                progress_callback=progress_callback,
+                resume_state=resume_state,
+                resume_store=resume_store,
+            )
         return deepgram_transcribe(
             job.file_path,
             api_key=config.deepgram_api_key,
@@ -133,7 +150,7 @@ def _merge_fn_from_profile(profile: dict | None):
     return merge_fn
 
 
-async def _run_asr_model(job: Job, config: Config, progress_callback, model_ready_callback=None) -> list:
+async def _run_asr_model(job: Job, config: Config, progress_callback, model_ready_callback=None, resume_state=None, resume_store=None) -> list:
     """用统一模型 Profile 作为 ASR（Gemini 类音频模型）。
 
     异步直接 await（transport 为异步），不在 worker 线程里再套 asyncio.run。
@@ -142,10 +159,19 @@ async def _run_asr_model(job: Job, config: Config, progress_callback, model_read
     if not profile:
         raise ValueError("ASR 模型 Profile 缺失")
     gemini_profile = gemini_profile_from_mapping(profile)
+    # 任务快照控制本次请求粒度，但不能突破 ASR Profile 的硬上限。
+    gemini_profile.max_segment_seconds = min(
+        gemini_profile.max_segment_seconds,
+        max(10, int(config.asr_chunk_seconds)),
+    )
+    remote_limiter = (
+        RemoteAsrRequestLimiter(config.remote_asr_limiter_dir, config.remote_asr_global_workers)
+        if config.remote_asr_global_workers > 0 else None
+    )
     transport = (
-        GoogleGeminiTransport(gemini_profile)
+        GoogleGeminiTransport(gemini_profile, request_limiter=remote_limiter)
         if gemini_profile.protocol == "google_native"
-        else OpenAICompatibleAudioTransport(gemini_profile)
+        else OpenAICompatibleAudioTransport(gemini_profile, request_limiter=remote_limiter)
     )
     if model_ready_callback:
         model_ready_callback()
@@ -153,21 +179,32 @@ async def _run_asr_model(job: Job, config: Config, progress_callback, model_read
     if duration <= 0:
         raise ValueError("无法读取媒体时长，无法进行分片转写")
     merge_profile = config.merge_profile or None
-    adapter = GeminiAudioAdapter(
-        gemini_profile,
-        transport,
-        merge_fn=_merge_fn_from_profile(merge_profile),
-        merge_prompt=str((merge_profile or {}).get("merge_prompt", "")),
-        progress_callback=progress_callback,
+    adapter_kwargs = {
+        "merge_fn": _merge_fn_from_profile(merge_profile),
+        "merge_prompt": str((merge_profile or {}).get("merge_prompt", "")),
+        "progress_callback": progress_callback,
+    }
+    if config.remote_asr_global_workers > 0:
+        adapter_kwargs["chunk_concurrency"] = config.remote_asr_global_workers
+    # transport 在每次真实 HTTP attempt 上获取网络 ASR 槽；
+    # adapter 不再包住含重试/退避的整个 generate()。
+    adapter = GeminiAudioAdapter(gemini_profile, transport, **adapter_kwargs)
+    process_kwargs = {}
+    if resume_state is not None:
+        process_kwargs["resume_state"] = resume_state
+    if resume_store is not None:
+        process_kwargs["resume_store"] = resume_store
+    candidate = await adapter.process(
+        SegmentRequest(
+            media_path=job.file_path,
+            target_start=0.0,
+            target_end=duration,
+            source_language=job.source_lang,
+            target_language=job.target_lang,
+            processing_mode="transcribe",
+        ),
+        **process_kwargs,
     )
-    candidate = await adapter.process(SegmentRequest(
-        media_path=job.file_path,
-        target_start=0.0,
-        target_end=duration,
-        source_language=job.source_lang,
-        target_language=job.target_lang,
-        processing_mode="transcribe",
-    ))
     return candidate.source_entries
 
 
@@ -243,14 +280,26 @@ async def process_one(
         if entries is None:
             job.status = JobStatus.ASR_RUNNING
             current_stage = "model"
+            if config.asr_provider == "model":
+                profile_name = (config.asr_profile or {}).get("name") or (config.asr_profile or {}).get("model") or "Gemini"
+                model_desc = f"Model ({profile_name})"
+            elif config.asr_provider == "deepgram":
+                model_desc = f"Deepgram ({config.deepgram_model})"
+            else:
+                model_desc = job.model_size
             emit_event(event_sink, make_event(
                 EventType.ASR_PREPARING,
                 job.id,
                 stage="model",
-                message=f"Preparing ASR model {job.model_size}",
+                message=f"Preparing ASR model {model_desc}",
             ))
-            logger.info("[%s] %s: ASR model preparing", job.id, job.file_path.name)
-            def _asr_progress(value: float) -> None:
+            logger.info("[%s] %s: ASR model preparing (%s)", job.id, job.file_path.name, model_desc)
+            def _asr_progress(
+                value: float,
+                completed: int | None = None,
+                total: int | None = None,
+                message: str | None = None,
+            ) -> None:
                 progress = max(0.0, min(1.0, value))
                 job.asr_progress = progress
                 emit_event(event_sink, make_event(
@@ -258,15 +307,23 @@ async def process_one(
                     job.id,
                     stage="asr",
                     progress=progress,
+                    completed=completed,
+                    total=total,
+                    message=message,
                 ))
 
-            def _model_ready() -> None:
+            def _model_ready(message: str | None = None) -> None:
                 nonlocal current_stage
                 current_stage = "asr"
-                emit_event(event_sink, make_event(EventType.ASR_STARTED, job.id, stage="asr"))
+                emit_event(event_sink, make_event(
+                    EventType.ASR_STARTED,
+                    job.id,
+                    stage="asr",
+                    message=message or "ASR 模型已就绪，开始转写",
+                ))
 
             if config.asr_provider == "model":
-                entries = await _run_asr_model(job, config, _asr_progress, _model_ready)
+                entries = await _run_asr_model(job, config, _asr_progress, _model_ready, resume_state=state, resume_store=store)
             else:
                 entries = await asyncio.to_thread(
                     _run_asr,
@@ -274,6 +331,8 @@ async def process_one(
                     config,
                     _asr_progress,
                     _model_ready,
+                    state,
+                    store,
                 )
             job.asr_progress = 1.0
             emit_event(event_sink, make_event(
@@ -281,6 +340,7 @@ async def process_one(
                 job.id,
                 stage="asr",
                 progress=1.0,
+                message="ASR 转写完成",
             ))
             logger.debug("[%s] DBG: ASR stage returned, entries=%d", job.id, len(entries))
 
@@ -324,6 +384,7 @@ async def process_one(
             progress=0.0,
             completed=0,
             total=total_batches,
+            message="开始翻译",
         ))
         def _tl_progress(done: int, _total: int) -> None:
             emit_event(event_sink, make_event(
@@ -333,6 +394,7 @@ async def process_one(
                 progress=done / _total if _total else 1.0,
                 completed=done,
                 total=_total,
+                message=f"翻译中（{done}/{_total} 批次）",
             ))
 
         def _llm_activity(message: str) -> None:
@@ -366,6 +428,7 @@ async def process_one(
             progress=1.0,
             completed=total_batches,
             total=total_batches,
+            message="翻译完成",
         ))
         logger.info("[%s] %s: Target SRT → %s", job.id, job.file_path.name, target_srt_path)
 
@@ -373,7 +436,12 @@ async def process_one(
         job.finished_at = time.time()
         elapsed = job.finished_at - job.started_at
         logger.info("[%s] %s: Done in %.1fs", job.id, job.file_path.name, elapsed)
-        emit_event(event_sink, make_event(EventType.TASK_COMPLETED, job.id, stage="complete"))
+        emit_event(event_sink, make_event(
+            EventType.TASK_COMPLETED,
+            job.id,
+            stage="complete",
+            message=f"处理完成（耗时 {elapsed:.1f}s）",
+        ))
 
     except LLMError as e:
         job.status = JobStatus.FAILED

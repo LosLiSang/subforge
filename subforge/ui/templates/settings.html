@@ -11,6 +11,7 @@
   <button type="button" class="tab" data-tab="network" role="tab" aria-selected="false">网络与密钥</button>
   <button type="button" class="tab" data-tab="concurrency" role="tab" aria-selected="false">处理能力</button>
   <button type="button" class="tab" data-tab="translation" role="tab" aria-selected="false">翻译</button>
+  <button type="button" class="tab" data-tab="processing" role="tab" aria-selected="false">默认处理</button>
   <button type="button" class="tab" data-tab="audio-models" role="tab" aria-selected="false">音频模型</button>
 </nav>
 
@@ -53,7 +54,7 @@
   <section id="settings-network" class="dash-section tab-panel" data-tab-panel="network">
     <div class="field-list">
       <div class="field">
-        <div class="field-label deepgram-key-label">Deepgram API Key <span class="badge {{ 'ok' if deepgram_key_configured else '' }}" data-deepgram-status>{{ deepgram_key_masked if deepgram_key_configured else '未配置' }}</span>{% if deepgram_key_deletable %}<button type="button" class="key-delete-x" data-delete-deepgram aria-label="删除 Deepgram API Key">×</button>{% endif %}</div>
+        <div class="field-label deepgram-key-label">Deepgram API Key <span class="badge {{ 'ok' if deepgram_key_configured else 'badge-none' }}" data-deepgram-status>{{ deepgram_key_masked if deepgram_key_configured else '未配置' }}</span>{% if deepgram_key_deletable %}<button type="button" class="key-delete-x" data-delete-deepgram aria-label="删除 Deepgram API Key">×</button>{% endif %}</div>
         <input type="password" name="deepgram_api_key" placeholder="留空不修改">
         <small>用于云端语音识别。</small>
       </div>
@@ -70,10 +71,15 @@
       <div class="field">
         <div class="field-label">同时加载 ASR 模型数</div>
         <input class="narrow" type="number" name="asr_concurrency" min="1" value="{{ asr_concurrency }}">
-        <small>控制同时运行的媒体 Worker 数；每个本地 ASR Worker 会独立加载模型，数值过高可能耗尽内存或显存。重启 UI 后生效。</small>
+        <small>控制本地 ASR（Whisper GPU/内存推理）同时运行的任务数；每个本地 Worker 会独立加载模型，数值过高可能耗尽内存或显存。</small>
       </div>
       <div class="field">
-        <div class="field-label">全局翻译请求 Worker 数</div>
+        <div class="field-label">网络 ASR 最大并发请求数</div>
+        <input class="narrow" type="number" name="remote_asr_concurrency" min="1" value="{{ remote_asr_concurrency }}">
+        <small>控制 Deepgram / Gemini 音频模型等网络 ASR 任务（含片段重处理）的并发上限；受 API 配额约束，与本地 GPU 推理互不抢占。重启 UI 后生效。</small>
+      </div>
+      <div class="field">
+        <div class="field-label">全局翻译最大并发请求数</div>
         <input class="narrow" type="number" name="translate_workers" min="1" value="{{ translate_workers }}">
         <small>所有音轨和 Worker 进程共享此请求上限，不会再按同时处理的音轨数成倍放大。与 ASR 模型数量相互独立，修改后新任务立即使用。</small>
       </div>
@@ -90,6 +96,69 @@
     </div>
   </section>
 
+  <section id="settings-processing" class="dash-section tab-panel" data-tab-panel="processing">
+    <div class="field-list">
+      <div class="field">
+        <div class="field-label">默认 ASR 引擎</div>
+        <select name="default_asr_provider" data-custom-select data-asr-provider>
+          <option value="local" {% if default_processing.asr_provider == 'local' or not default_processing.asr_provider %}selected{% endif %}>本地 Whisper</option>
+          <option value="deepgram" {% if default_processing.asr_provider == 'deepgram' %}selected{% endif %}>Deepgram</option>
+          {% if audio_profiles %}<option value="model" {% if default_processing.asr_provider == 'model' %}selected{% endif %}>音频模型（Gemini 等）</option>{% endif %}
+        </select>
+        <small>自动处理任务默认采用的语音识别引擎。</small>
+      </div>
+      <div class="field" data-local-asr-field>
+        <div class="field-label">默认场景（Whisper）</div>
+        <select name="default_scene" data-custom-select>
+          <option value="asmr" {% if default_processing.scene == 'asmr' or not default_processing.scene %}selected{% endif %}>ASMR（针对环境音、耳语与拟音优化）</option>
+          <option value="normal" {% if default_processing.scene == 'normal' %}selected{% endif %}>普通语音（清晰讲话、播客、朗读）</option>
+        </select>
+      </div>
+      <div class="field" data-whisper-field>
+        <div class="field-label">默认 Whisper 模型</div>
+        <select name="default_whisper_model" data-custom-select>
+          {% for m in models %}
+          <option value="{{ m }}" {% if default_processing.whisper_model == m %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% if audio_profiles %}
+      <div class="field" data-asr-profile-field>
+        <div class="field-label">默认音频转写模型</div>
+        <select name="default_asr_profile_id" data-custom-select>
+          <option value="">（未选择）</option>
+          {% for p in audio_profiles %}
+          <option value="{{ p.profile_id }}" {% if default_processing.asr_profile_id == p.profile_id %}selected{% endif %}>{{ p.name }} · {{ p.model }} · ≤{{ p.max_request_seconds }}秒</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field" data-merge-profile-field>
+        <div class="field-label">默认合并模型（可选）</div>
+        <select name="default_merge_profile_id" data-custom-select>
+          <option value="">不合并</option>
+          {% for p in merge_profiles %}
+          <option value="{{ p.profile_id }}" {% if default_processing.merge_profile_id == p.profile_id %}selected{% endif %}>{{ p.name }} / {{ p.model }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div class="field" data-network-asr-field>
+        <div class="field-label">网络 ASR 单次分片大小（秒）</div>
+        <input class="narrow" type="number" name="default_asr_chunk_seconds" min="10" max="3600" value="{{ default_processing.asr_chunk_seconds or 60 }}">
+        <small>Deepgram 或音频模型每次请求的音频长度。</small>
+      </div>
+      <div class="field">
+        <div class="field-label">默认翻译配置</div>
+        <select name="default_llm_profile_id" data-custom-select>
+          {% for p in translation_profiles %}
+          <option value="{{ p.profile_id }}" {% if default_processing.llm_profile_id == p.profile_id %}selected{% endif %}>{{ p.name }} / {{ p.model }}</option>
+          {% endfor %}
+        </select>
+        <small>新导入音频勾选「导入后自动处理」时，将优先使用此处配置；作品详情页快捷「一键处理未完成」也将默认以该配置执行。</small>
+      </div>
+    </div>
+  </section>
+
   <div class="dash-actions">
     <button class="primary">保存设置</button>
   </div>
@@ -101,11 +170,11 @@
       <article class="profile-row">
         <div class="profile-row-main">
           <strong class="profile-row-name">{{ profile.name }}</strong>
-          <span class="chip">{{ 'Google 原生' if profile.protocol == 'google_native' else 'OpenAI 兼容' }}</span>
+          <span class="chip chip-protocol-{{ profile.protocol }}">{{ 'Google 原生' if profile.protocol == 'google_native' else 'OpenAI 兼容' }}</span>
           <span class="profile-row-model">{{ profile.model }}</span>
           <span class="profile-row-url">{{ profile.base_url }}</span>
-          <span class="chip">单次 ≤ {{ profile.max_request_seconds }} 秒</span>
-          <span class="badge {{ 'ok' if profile.api_key_masked != '未配置' else '' }}">{{ profile.api_key_masked }}</span>
+          <span class="chip chip-limit">单次 ≤ {{ profile.max_request_seconds }} 秒</span>
+          <span class="badge {{ 'ok' if profile.api_key_masked != '未配置' else 'badge-none' }}">{{ profile.api_key_masked }}</span>
         </div>
         <div class="profile-row-actions">
           <div class="profile-controls">

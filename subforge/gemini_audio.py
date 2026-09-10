@@ -17,7 +17,9 @@ from uuid import uuid4
 
 import httpx
 
+from subforge.asr.remote_limiter import RemoteAsrRequestLimiter
 from subforge.models import SubtitleEntry
+from subforge.ui.profiles import mask_secret
 from subforge.segment_processing import (
     ExtractedAudio,
     SegmentCandidate,
@@ -87,7 +89,7 @@ def _parse_clock_time(value) -> float | None:
                 seconds = seconds * 60 + float(part)
             return seconds
     return None
-from subforge.ui.profiles import mask_secret
+
 
 GeminiProtocol = Literal["google_native", "openai_compatible"]
 GeminiProcessingMode = Literal["transcribe", "transcribe_then_translate", "bilingual_once"]
@@ -261,10 +263,12 @@ class _BaseGeminiTransport:
         *,
         client: httpx.AsyncClient | None = None,
         retry_delays: tuple[float, ...] = (1, 2),
+        request_limiter: RemoteAsrRequestLimiter | None = None,
     ) -> None:
         self.profile = profile
         self._client = client
         self._retry_delays = retry_delays
+        self._request_limiter = request_limiter
 
     def _new_client(self) -> httpx.AsyncClient:
         verify: bool | str = self.profile.verify_tls
@@ -287,7 +291,11 @@ class _BaseGeminiTransport:
             attempts = len(self._retry_delays) + 1
             for attempt in range(attempts):
                 try:
-                    response = await client.post(url, headers=headers, json=body)
+                    if self._request_limiter is None:
+                        response = await client.post(url, headers=headers, json=body)
+                    else:
+                        async with self._request_limiter.slot():
+                            response = await client.post(url, headers=headers, json=body)
                     if response.status_code == 401:
                         raise GeminiAudioError("Gemini 音频鉴权失败（401）")
                     if response.status_code == 429 or response.status_code >= 500:
@@ -356,7 +364,11 @@ class OpenAICompatibleAudioTransport(_BaseGeminiTransport):
         }
 
         def parse(data: dict) -> str:
-            content = data["choices"][0]["message"]["content"]
+            choices = data.get("choices") or []
+            if not choices:
+                return ""
+            first = choices[0] if isinstance(choices[0], dict) else {}
+            content = first.get("message", {}).get("content", "")
             if isinstance(content, list):
                 return "\n".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
             return str(content or "")
@@ -385,14 +397,14 @@ def detect_speech_regions(clip_path: Path, clip_duration: float) -> list[tuple[f
     for line in (result.stderr or "").splitlines():
         if "silence_start:" in line:
             try:
-                start = float(line.rsplit(":", 1)[1].strip().split(" ")[0])
-            except ValueError:
+                start = float(line.split("silence_start:")[1].split("|")[0].strip())
+            except (ValueError, IndexError):
                 start = None
         elif "silence_end:" in line and start is not None:
             try:
-                end = float(line.rsplit(":", 1)[1].strip().split(" ")[0])
+                end = float(line.split("silence_end:")[1].split("|")[0].strip())
                 silences.append((max(0.0, start), min(clip_duration, end)))
-            except ValueError:
+            except (ValueError, IndexError):
                 pass
             start = None
     regions: list[tuple[float, float]] = []
@@ -411,16 +423,32 @@ def plan_chunks_from_regions(
     max_seconds: float,
     clip_duration: float,
 ) -> list[tuple[float, float]]:
-    """单段语音超过上限时均匀切分；不跨静音合并，保持语音边界。"""
+    """在静音边界处切分，将相邻语音区域打包成不超过 max_seconds 的大块。"""
+    if not regions:
+        return []
     chunks: list[tuple[float, float]] = []
-    for start, end in regions:
-        span = end - start
-        if span <= max_seconds:
-            chunks.append((start, end))
-            continue
+    chunk_start = regions[0][0]
+    chunk_end = regions[0][1]
+    for start, end in regions[1:]:
+        if end - chunk_start <= max_seconds:
+            chunk_end = end
+        else:
+            span = chunk_end - chunk_start
+            if span > max_seconds:
+                parts = math.ceil(span / max_seconds)
+                bounds = [chunk_start + span * index / parts for index in range(parts + 1)]
+                chunks.extend(zip(bounds, bounds[1:]))
+            else:
+                chunks.append((chunk_start, chunk_end))
+            chunk_start = start
+            chunk_end = end
+    span = chunk_end - chunk_start
+    if span > max_seconds:
         parts = math.ceil(span / max_seconds)
-        bounds = [start + span * index / parts for index in range(parts + 1)]
+        bounds = [chunk_start + span * index / parts for index in range(parts + 1)]
         chunks.extend(zip(bounds, bounds[1:]))
+    else:
+        chunks.append((chunk_start, chunk_end))
     return [
         (round(max(0.0, start), 3), round(min(clip_duration, end), 3))
         for start, end in chunks
@@ -469,6 +497,8 @@ class GeminiAudioAdapter:
         progress_callback: Callable[[float], None] | None = None,
         speech_regions: Callable[[Path, float], list[tuple[float, float]]] = detect_speech_regions,
         chunk_cutter: Callable[[Path, float, float], bytes] = cut_wav_bytes,
+        remote_limiter: RemoteAsrRequestLimiter | None = None,
+        chunk_concurrency: int = 4,
     ) -> None:
         self.profile = profile
         self.transport = transport
@@ -480,8 +510,10 @@ class GeminiAudioAdapter:
         self._progress = progress_callback
         self._speech_regions = speech_regions
         self._chunk_cutter = chunk_cutter
+        self._remote_limiter = remote_limiter
+        self._chunk_concurrency = max(1, int(chunk_concurrency))
 
-    async def process(self, request: SegmentRequest) -> SegmentCandidate:
+    async def process(self, request: SegmentRequest, *, resume_state: Any = None, resume_store: Any = None) -> SegmentCandidate:
         duration = request.target_end - request.target_start
         if duration <= 0:
             raise ValueError("片段时间范围无效")
@@ -493,11 +525,21 @@ class GeminiAudioAdapter:
             chunks, detection_failed = await self._plan_chunks(request, extracted)
             extra = request.recognition_prompt.strip() or self.profile.recognition_prompt
             context = f"\n可能出现的专有词或上下文：{extra}" if extra else ""
-            source_entries: list[SubtitleEntry] = []
-            target_entries: list[SubtitleEntry] = []
-            fallback_used = False
-            total_chunks = max(1, len(chunks))
-            for chunk_index, (chunk_start, chunk_end) in enumerate(chunks):
+            chunk_gate = asyncio.Semaphore(
+                max(1, self._remote_limiter.limit if self._remote_limiter is not None else self._chunk_concurrency)
+            )
+
+            async def process_chunk(chunk_index: int, chunk_start: float, chunk_end: float):
+                async with chunk_gate:
+                    return await _process_chunk(chunk_index, chunk_start, chunk_end)
+
+            async def _process_chunk(chunk_index: int, chunk_start: float, chunk_end: float):
+                if resume_state is not None:
+                    cached = (resume_state.asr.get("completed_chunks") or {}).get(str(chunk_index))
+                    if cached:
+                        cached_entries = [SubtitleEntry(**e) for e in cached.get("source", [])]
+                        cached_targets = [SubtitleEntry(**e) for e in cached.get("target", [])]
+                        return chunk_index, cached_entries, cached_targets, False
                 if len(chunks) == 1:
                     audio = await asyncio.to_thread(extracted.path.read_bytes)
                 else:
@@ -508,36 +550,94 @@ class GeminiAudioAdapter:
                     else self.profile.transcribe_prompt.strip()
                 )
                 if not template:
-                    base = DEFAULT_BILINGUAL_PROMPT if mode == "bilingual_once" else DEFAULT_TRANSCRIBE_PROMPT
-                    template = base
-                # 不用 str.format：模板含字面 JSON 大括号，显式替换避免 KeyError
+                    template = DEFAULT_BILINGUAL_PROMPT if mode == "bilingual_once" else DEFAULT_TRANSCRIBE_PROMPT
                 template = template.replace("{source_language}", request.source_language).replace("{target_language}", request.target_language)
                 if mode == "bilingual_once" and "{target_language}" not in template and "翻译" not in template:
                     template += chr(10) + f"听写语言：{request.source_language}；翻译目标语言：{request.target_language}。"
                 prompt = template + context
+                # 请求槽由 transport 在每次真实 HTTP attempt 上管理；
+                # adapter 只负责限制本进程的分片 worker 数。
                 raw = await self.transport.generate(audio, "audio/wav", prompt)
                 segments, structured = self._parse_segments(raw, bilingual=mode == "bilingual_once")
-                if not structured:
-                    fallback_used = True
-                timed = self._assign_times(segments, chunk_span)
-                for rel_start, rel_end, seg in timed:
+                entries: list[SubtitleEntry] = []
+                targets: list[SubtitleEntry] = []
+                for rel_start, rel_end, seg in self._assign_times(segments, chunk_span):
                     if not seg["source"]:
                         continue
-                    # 绝对时间 = 截取起点 + 块内相对时间；候选钳制到目标选区
                     abs_start = max(request.target_start, extracted.start + chunk_start + rel_start)
                     abs_end = min(request.target_end, extracted.start + chunk_start + rel_end)
                     if abs_start >= abs_end - 0.001:
                         continue
-                    index = len(source_entries) + 1
-                    source_entries.append(SubtitleEntry(
-                        index, round(abs_start, 3), round(abs_end, 3), seg["source"],
-                    ))
+                    entries.append(SubtitleEntry(0, round(abs_start, 3), round(abs_end, 3), seg["source"]))
                     if seg["target"]:
-                        target_entries.append(SubtitleEntry(
-                            index, round(abs_start, 3), round(abs_end, 3), seg["target"],
-                        ))
-                if self._progress is not None:
-                    self._progress(min(1.0, (chunk_index + 1) / total_chunks))
+                        targets.append(SubtitleEntry(0, round(abs_start, 3), round(abs_end, 3), seg["target"]))
+                if resume_state is not None and resume_store is not None:
+                    resume_store.save_asr_chunk(resume_state, chunk_index, entries, targets, len(chunks))
+                return chunk_index, entries, targets, not structured
+
+            chunk_queue: asyncio.Queue[tuple[int, float, float] | None] = asyncio.Queue()
+            results = []
+            for index, (start, end) in enumerate(chunks):
+                chunk_queue.put_nowait((index, start, end))
+
+            concurrency_count = min(self._chunk_concurrency, len(chunks))
+
+            def _report(completed: int, total: int, ratio: float, message: str | None = None) -> None:
+                if not self._progress:
+                    return
+                try:
+                    self._progress(ratio, completed=completed, total=total, message=message)
+                except TypeError:
+                    try:
+                        self._progress(ratio, completed, total)
+                    except TypeError:
+                        self._progress(ratio)
+
+            completed_map = resume_state.asr.get("completed_chunks", {}) if resume_state else {}
+            done_count = len(completed_map) if completed_map else 0
+            if len(chunks) > 0:
+                if done_count > 0:
+                    _report(done_count, len(chunks), min(0.99, done_count / len(chunks)), f"ASR 转写中（分片 {done_count}/{len(chunks)} · 并发 {concurrency_count}）")
+                else:
+                    _report(0, len(chunks), 0.0, f"ASR 转写中（0/{len(chunks)} 分片 · 并发 {concurrency_count}）")
+
+            async def consume_chunks() -> None:
+                nonlocal done_count
+                while True:
+                    item = await chunk_queue.get()
+                    try:
+                        if item is None:
+                            return
+                        res = await process_chunk(*item)
+                        results.append(res)
+                        done_count += 1
+                        if len(chunks) > 0:
+                            ratio = min(0.99, done_count / len(chunks))
+                            msg = f"ASR 转写中（分片 {done_count}/{len(chunks)} · 并发 {concurrency_count}）"
+                            _report(done_count, len(chunks), ratio, msg)
+                    finally:
+                        chunk_queue.task_done()
+
+            workers = [asyncio.create_task(consume_chunks()) for _ in range(concurrency_count)]
+            await chunk_queue.join()
+            for _ in workers:
+                chunk_queue.put_nowait(None)
+            await asyncio.gather(*workers)
+            source_entries = []
+            target_entries = []
+            fallback_used = False
+            for _chunk_index, entries, targets, used_fallback in sorted(results, key=lambda item: item[0]):
+                source_entries.extend(entries)
+                target_entries.extend(targets)
+                fallback_used = fallback_used or used_fallback
+            for index, entry in enumerate(source_entries, 1):
+                source_entries[index - 1] = replace(entry, index=index)
+            for index, entry in enumerate(target_entries, 1):
+                target_entries[index - 1] = replace(entry, index=index)
+            if len(chunks) > 0:
+                _report(len(chunks), len(chunks), 1.0, "ASR 分片转写完成")
+            elif self._progress is not None:
+                self._progress(1.0)
             if not source_entries:
                 raise GeminiAudioError("Gemini 未在片段中识别出任何文本")
             warnings: list[str] = []

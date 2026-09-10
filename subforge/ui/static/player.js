@@ -9,6 +9,8 @@ let transcriptRows=[];
 let lastSourceText='',lastTargetText='';
 let lastTranscriptInteract=0;
 const selectedSegmentRows=new Set();
+let selectionAnchorIndex=null;
+let previewingSegment=false,previewEndTarget=0;
 let player=window.top.SubForgePlayer||window.SubForgePlayer;
 
 /* 播放器音频源：统一用全局单例（iframe 内 audio），播放页不再自建 <audio>。 */
@@ -37,11 +39,14 @@ function wireAudio(){
     if(document.getElementById('play-time'))document.getElementById('play-time').textContent=`${fmt(audio.currentTime)} / ${fmt(audio.duration||0)}`;
     setToggle(audio.paused);
     if(document.getElementById('play-seek')){const s=document.getElementById('play-seek');s.max=audio.duration||0;s.value=audio.currentTime||0;}
+    if(previewingSegment&&audio.currentTime>=previewEndTarget){stopSegmentPreview();}
     updateSubs();
   };
-  player.on('timeupdate',render,'page');player.on('play',render,'page');player.on('pause',render,'page');
+  player.on('timeupdate',render,'page');player.on('play',render,'page');
+  player.on('pause',()=>{if(previewingSegment&&audio&&audio.currentTime>=previewEndTarget-0.15)stopSegmentPreview();},'page');
   audio.addEventListener('loadedmetadata',render);
   audio.addEventListener('ended',()=>{
+    stopSegmentPreview();
     if(nextTrackId) window.location.href=`/tracks/${encodeURIComponent(nextTrackId)}/play`;
   });
   // 字幕/进度逐帧对齐 audio.currentTime；不依赖稀疏的 timeupdate 事件，
@@ -123,6 +128,53 @@ function loadSubtitleData(){
 }
 
 /* 全部字幕列表：仅当 <details> 展开后调用。 */
+function selectedSegmentIndices(){return [...selectedSegmentRows].sort((a,b)=>a-b)}
+function setSegmentSelection(start,end){
+  selectedSegmentRows.clear();
+  const lo=Math.min(start,end),hi=Math.max(start,end);
+  for(let k=lo;k<=hi;k++)selectedSegmentRows.add(k);
+  syncRowSelectionStyles();
+  updateSegmentSelection();
+}
+function clearSegmentSelection(){
+  selectedSegmentRows.clear();
+  selectionAnchorIndex=null;
+  stopSegmentPreview();
+  syncRowSelectionStyles();
+  updateSegmentSelection();
+}
+function syncRowSelectionStyles(){
+  transcriptRows.forEach((row,idx)=>{
+    row.classList.toggle('is-selected',selectedSegmentRows.has(idx));
+  });
+}
+function stopSegmentPreview(){
+  if(!previewingSegment)return;
+  previewingSegment=false;
+  if(previewButton){
+    previewButton.textContent='▶ 试听';
+    previewButton.classList.remove('active');
+  }
+  if(player&&!player.paused)player.pause();
+}
+function toggleSegmentPreview(){
+  if(previewingSegment){
+    stopSegmentPreview();
+    return;
+  }
+  const indices=selectedSegmentIndices();
+  if(!indices.length)return;
+  const first=source[indices[0]],last=source[indices.at(-1)];
+  if(!first||!last)return;
+  previewEndTarget=last.end;
+  previewingSegment=true;
+  if(previewButton){
+    previewButton.textContent='⏸ 停止';
+    previewButton.classList.add('active');
+  }
+  player.seek(first.start);
+  player.play().catch(()=>stopSegmentPreview());
+}
 function renderTranscript(){
   const transcript=document.getElementById('transcript');
   if(!transcript)return;
@@ -136,17 +188,32 @@ function renderTranscript(){
   const fragment=document.createDocumentFragment();
   source.forEach((entry,i)=>{
     const row=document.createElement('div');row.dataset.entry=i;row.className='transcript-row';
-    const select=document.createElement('input');select.type='checkbox';select.className='transcript-select';select.dataset.selectSegment=String(i);select.setAttribute('aria-label',`选择第 ${i+1} 条字幕`);select.checked=selectedSegmentRows.has(i);
-    select.onchange=()=>{select.checked?selectedSegmentRows.add(i):selectedSegmentRows.delete(i);updateSegmentSelection()};
+    if(selectedSegmentRows.has(i))row.classList.add('is-selected');
     const seek=document.createElement('button');seek.type='button';seek.className='transcript-seek';
     const time=document.createElement('span');time.className='transcript-time';time.textContent=`${fmt(entry.start)}\n${fmt(entry.end)}`;
     const sourceText=document.createElement('span');sourceText.textContent=entry.text;
     const targetText=document.createElement('span');targetText.textContent=target[i]?.text||'（未翻译）';
     seek.append(time,sourceText,targetText);
-    seek.onclick=()=>{lastTranscriptInteract=Date.now();player.seek(entry.start);player.play()};
+    seek.onclick=(e)=>{
+      lastTranscriptInteract=Date.now();
+      if(e.shiftKey&&selectionAnchorIndex!==null){
+        e.preventDefault();
+        setSegmentSelection(selectionAnchorIndex,i);
+      }else{
+        selectionAnchorIndex=i;
+        setSegmentSelection(i,i);
+        player.seek(entry.start);
+        player.play();
+      }
+    };
     const edit=document.createElement('button');edit.type='button';edit.className='ghost small transcript-edit';edit.dataset.editSubtitle=String(i);edit.textContent='校正';
-    edit.onclick=()=>openSubtitleEditor(i);
-    row.append(select,seek,edit);fragment.append(row);
+    edit.onclick=(e)=>{
+      e.stopPropagation();
+      selectionAnchorIndex=i;
+      setSegmentSelection(i,i);
+      openSubtitleEditor(i);
+    };
+    row.append(seek,edit);fragment.append(row);
   });
   transcript.replaceChildren(fragment);
   transcriptRows=[...transcript.children];
@@ -157,24 +224,49 @@ function renderTranscript(){
 
 const segmentToolbar=document.querySelector('[data-segment-toolbar]');
 const segmentButton=document.querySelector('[data-open-segment-reprocess]');
-function selectedSegmentIndices(){return [...selectedSegmentRows].sort((a,b)=>a-b)}
+const singleEditButton=segmentToolbar?.querySelector('[data-open-single-edit]');
+const previewButton=segmentToolbar?.querySelector('[data-preview-segment]');
 function updateSegmentSelection(){
   if(!segmentToolbar)return;
-  const indices=selectedSegmentIndices();segmentToolbar.hidden=!transcriptsLoaded;
+  const indices=selectedSegmentIndices();
+  const hasSelection=indices.length>0;
+  segmentToolbar.hidden=!transcriptsLoaded||!hasSelection;
+  if(!hasSelection){
+    stopSegmentPreview();
+    return;
+  }
   const contiguous=indices.length>0&&indices.every((value,pos)=>pos===0||value===indices[pos-1]+1);
   segmentButton.disabled=!contiguous;
+  if(singleEditButton)singleEditButton.hidden=indices.length!==1;
+  if(previewButton)previewButton.disabled=!contiguous;
   const summary=segmentToolbar.querySelector('[data-segment-summary]');
-  if(!indices.length){summary.textContent='勾选一条或连续多条字幕';return;}
-  if(!contiguous){summary.textContent=`已选择 ${indices.length} 条，但范围不连续`;return;}
-  summary.textContent=`已选择第 ${indices[0]+1}–${indices.at(-1)+1} 条 · `;
+  if(!summary)return;
+  if(!contiguous){summary.textContent=`已选择 ${indices.length} 条（不连续）`;return;}
+  const first=source[indices[0]],last=source[indices.at(-1)];
+  const startText=first?fmt(first.start):'--:--';
+  const endText=last?fmt(last.end):'--:--';
+  summary.textContent=indices.length===1
+    ?`第 ${indices[0]+1} 条 · `
+    :`第 ${indices[0]+1}–${indices.at(-1)+1} 条 (${indices.length}句) · `;
   const editTime=document.createElement('button');
   editTime.type='button';editTime.className='ghost small';editTime.dataset.editSegmentTime='';
-  editTime.textContent=`${fmt(source[indices[0]].start)}–${fmt(source[indices.at(-1)].end)} ✎`;
+  editTime.textContent=`${startText}–${endText} ✎`;
   editTime.title='点击直接修改起止时间并配置重处理';
   editTime.onclick=()=>segmentButton.click();
   summary.append(editTime);
 }
-segmentToolbar?.querySelector('[data-clear-segment-selection]')?.addEventListener('click',()=>{selectedSegmentRows.clear();for(const input of document.querySelectorAll('[data-select-segment]'))input.checked=false;updateSegmentSelection()});
+segmentToolbar?.querySelector('[data-clear-segment-selection]')?.addEventListener('click',clearSegmentSelection);
+previewButton?.addEventListener('click',toggleSegmentPreview);
+singleEditButton?.addEventListener('click',()=>{
+  const indices=selectedSegmentIndices();
+  if(indices.length===1)openSubtitleEditor(indices[0]);
+});
+window.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    if(document.querySelector('dialog[open]'))return;
+    if(selectedSegmentRows.size>0)clearSegmentSelection();
+  }
+});
 const segmentDialog=document.getElementById('segment-reprocess-dialog');
 const segmentForm=segmentDialog?.querySelector('[data-segment-reprocess-form]');
 function syncSegmentProcessorFields(){
@@ -239,7 +331,7 @@ segmentForm?.addEventListener('submit',async event=>{
 const editDialog=document.getElementById('subtitle-edit-dialog');
 const editForm=editDialog?.querySelector('[data-subtitle-edit-form]');
 function applyRevisionPayload(data){
-  source=data.source||[];target=data.target||[];sourceIndex=targetIndex=0;selectedSegmentRows.clear();
+  source=data.source||[];target=data.target||[];sourceIndex=targetIndex=0;clearSegmentSelection();
   lastSourceText=lastTargetText='';
   (window.top.SubForgeFloatLyrics||window.SubForgeFloatLyrics)?.invalidate?.(track);
   if(transcriptsLoaded)renderTranscript();else updateSubs();
@@ -311,9 +403,7 @@ splitForm?.addEventListener('submit',async event=>{
 editDialog?.querySelector('[data-subtitle-reprocess]')?.addEventListener('click',()=>{
   const index=Number(editForm.elements.index.value);
   if(!index||!source[index-1]&&!target[index-1])return;
-  selectedSegmentRows.clear();selectedSegmentRows.add(index-1);
-  for(const input of document.querySelectorAll('[data-select-segment]'))input.checked=selectedSegmentRows.has(Number(input.dataset.selectSegment));
-  updateSegmentSelection();
+  setSegmentSelection(index-1,index-1);
   editDialog.close();
   openSegmentDialogForIndices([index-1]);
 });

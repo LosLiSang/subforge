@@ -116,23 +116,70 @@ class UiSettingsStore:
         data.pop("media_concurrency", None)
         self._save(data)
 
-    def get_last_processing_snapshot(self) -> dict[str, str] | None:
+    def get_remote_asr_concurrency(self) -> int:
+        """网络 ASR（Deepgram / Gemini 等 API）并发上限；与本地 GPU 推理解耦。"""
+        value = int(self._load().get("remote_asr_concurrency", 2))
+        return max(1, value)
+
+    def set_remote_asr_concurrency(self, value: int) -> None:
+        if value < 1:
+            raise ValueError("remote_asr_concurrency must be at least 1")
+        data = self._load()
+        data["remote_asr_concurrency"] = value
+        self._save(data)
+
+    def get_last_processing_snapshot(self) -> dict[str, object] | None:
         value = self._load().get("last_processing_snapshot")
         if not isinstance(value, dict):
             return None
         core = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
         keys = (*core, "asr_profile_id", "merge_profile_id")
         snapshot = {key: str(value.get(key, "")) for key in keys}
+        try:
+            snapshot["asr_chunk_seconds"] = int(value.get("asr_chunk_seconds", 60))
+        except (TypeError, ValueError):
+            snapshot["asr_chunk_seconds"] = 60
         return snapshot if all(snapshot[key] for key in core) else None
 
-    def set_last_processing_snapshot(self, snapshot: dict[str, str]) -> None:
+    def set_last_processing_snapshot(self, snapshot: dict[str, object]) -> None:
         core = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
         keys = (*core, "asr_profile_id", "merge_profile_id")
         normalized = {key: str(snapshot.get(key, "")).strip() for key in keys}
+        try:
+            normalized["asr_chunk_seconds"] = max(10, min(3600, int(snapshot.get("asr_chunk_seconds", 60))))
+        except (TypeError, ValueError):
+            normalized["asr_chunk_seconds"] = 60
         if not all(normalized[key] for key in core):
             raise ValueError("processing snapshot is incomplete")
         data = self._load()
         data["last_processing_snapshot"] = normalized
+        self._save(data)
+
+    def get_default_processing_snapshot(self) -> dict[str, object] | None:
+        value = self._load().get("default_processing_snapshot")
+        if not isinstance(value, dict):
+            return None
+        core = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
+        keys = (*core, "asr_profile_id", "merge_profile_id")
+        snapshot = {key: str(value.get(key, "")) for key in keys}
+        try:
+            snapshot["asr_chunk_seconds"] = int(value.get("asr_chunk_seconds", 60))
+        except (TypeError, ValueError):
+            snapshot["asr_chunk_seconds"] = 60
+        return snapshot if all(snapshot[key] for key in core) else None
+
+    def set_default_processing_snapshot(self, snapshot: dict[str, object]) -> None:
+        core = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
+        keys = (*core, "asr_profile_id", "merge_profile_id")
+        normalized = {key: str(snapshot.get(key, "")).strip() for key in keys}
+        try:
+            normalized["asr_chunk_seconds"] = max(10, min(3600, int(snapshot.get("asr_chunk_seconds", 60))))
+        except (TypeError, ValueError):
+            normalized["asr_chunk_seconds"] = 60
+        if not all(normalized[key] for key in core):
+            raise ValueError("default processing snapshot is incomplete")
+        data = self._load()
+        data["default_processing_snapshot"] = normalized
         self._save(data)
 
     def get_translate_workers(self) -> int:

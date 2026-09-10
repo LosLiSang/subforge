@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import logging
+import math
+import subprocess
+import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlencode
 
 import httpx
 
+from subforge.asr.remote_limiter import RemoteAsrRequestLimiter
 from subforge.models import SubtitleEntry
 
 _MAX_ENTRY_DURATION = 6.0
@@ -163,6 +168,7 @@ def transcribe(
     progress_callback: Callable[[float], None] | None = None,
     client: httpx.Client | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
+    limiter: RemoteAsrRequestLimiter | None = None,
 ) -> list[SubtitleEntry]:
     """Transcribe audio with Deepgram's pre-recorded API."""
     if not api_key:
@@ -187,7 +193,12 @@ def transcribe(
         audio = file_path.read_bytes()
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                response = client.post(url, content=audio, headers=headers)
+                if limiter is None:
+                    response = client.post(url, content=audio, headers=headers)
+                else:
+                    # 槽只覆盖一次真实 HTTP 请求；429/5xx 后的退避不占槽。
+                    with limiter.sync_slot():
+                        response = client.post(url, content=audio, headers=headers)
                 if response.status_code in (401, 403):
                     raise DeepgramAuthError(
                         f"Deepgram authentication failed ({response.status_code})"
@@ -223,3 +234,119 @@ def transcribe(
     raise DeepgramError(
         f"Deepgram ASR failed after {_MAX_RETRIES} retries. Last error: {last_exception}"
     ) from last_exception
+
+
+def _media_duration(path: Path) -> float:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        raise DeepgramError("无法读取音频时长，无法进行网络 ASR 分片")
+    try:
+        duration = float(result.stdout.strip())
+    except ValueError as exc:
+        raise DeepgramError("音频时长无效，无法进行网络 ASR 分片") from exc
+    if duration <= 0:
+        raise DeepgramError("音频时长必须大于 0")
+    return duration
+
+
+def _cut_audio(path: Path, start: float, end: float, output: Path) -> None:
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}",
+         "-i", str(path), "-t", f"{end - start:.3f}",
+         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(output)],
+        capture_output=True, timeout=120,
+    )
+    if result.returncode != 0 or not output.exists() or output.stat().st_size == 0:
+        raise DeepgramError(f"网络 ASR 分片切割失败（ffmpeg {result.returncode}）")
+
+
+def transcribe_chunked(
+    file_path: Path,
+    api_key: str,
+    model: str = "nova-3",
+    language: str = "ja",
+    keyterms: list[str] | None = None,
+    chunk_seconds: int = 60,
+    limiter: RemoteAsrRequestLimiter | None = None,
+    progress_callback: Callable[[float], None] | None = None,
+    resume_state: Any = None,
+    resume_store: Any = None,
+) -> list[SubtitleEntry]:
+    """Transcribe fixed-duration audio chunks concurrently.
+
+    The limiter surrounds one real Deepgram request, not the complete file.
+    Results are restored to chronological chunk order before renumbering.
+    """
+    if not api_key:
+        raise DeepgramAuthError("Deepgram API key is required")
+    chunk_seconds = max(1, int(chunk_seconds))
+    duration = _media_duration(file_path)
+    try:
+        from subforge.gemini_audio import detect_speech_regions, plan_chunks_from_regions
+        regions = detect_speech_regions(file_path, duration)
+        chunks = plan_chunks_from_regions(regions, float(chunk_seconds), duration)
+    except Exception:
+        chunks = []
+    if not chunks:
+        chunks = [
+            (start, min(duration, start + chunk_seconds))
+            for start in (index * chunk_seconds for index in range(math.ceil(duration / chunk_seconds)))
+        ]
+
+    def run_chunk(index: int, start: float, end: float) -> tuple[int, float, list[SubtitleEntry]]:
+        if resume_state is not None:
+            cached = (resume_state.asr.get("completed_chunks") or {}).get(str(index))
+            if cached:
+                cached_entries = [SubtitleEntry(**e) for e in cached.get("source", [])]
+                return index, start, cached_entries
+        with tempfile.TemporaryDirectory(prefix="subforge-dg-") as temp_dir:
+            chunk_path = Path(temp_dir) / "chunk.wav"
+            _cut_audio(file_path, start, end, chunk_path)
+            entries = transcribe(
+                chunk_path, api_key=api_key, model=model, language=language,
+                keyterms=keyterms, limiter=limiter,
+            )
+            offset_entries = [
+                SubtitleEntry(0, round(entry.start + start, 3), round(entry.end + start, 3), entry.text)
+                for entry in entries
+            ]
+            if resume_state is not None and resume_store is not None:
+                resume_store.save_asr_chunk(resume_state, index, offset_entries, [], len(chunks))
+            return index, start, offset_entries
+
+    results: list[tuple[int, float, list[SubtitleEntry]]] = []
+    max_workers = min(len(chunks), max(1, (limiter.limit if limiter else 4)))
+
+    def _report_dg(completed: int, total: int, ratio: float, msg: str) -> None:
+        if not progress_callback:
+            return
+        try:
+            progress_callback(ratio, completed=completed, total=total, message=msg)
+        except TypeError:
+            try:
+                progress_callback(ratio, completed, total)
+            except TypeError:
+                progress_callback(ratio)
+
+    if progress_callback and len(chunks) > 0:
+        _report_dg(0, len(chunks), 0.0, f"Deepgram 转写中（0/{len(chunks)} 分片 · 并发 {max_workers}）")
+
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="deepgram-chunk") as pool:
+        futures = [pool.submit(run_chunk, index, start, end) for index, (start, end) in enumerate(chunks)]
+        for completed, future in enumerate(as_completed(futures), 1):
+            results.append(future.result())
+            if progress_callback:
+                _report_dg(completed, len(chunks), completed / len(chunks), f"Deepgram 转写中（分片 {completed}/{len(chunks)} · 并发 {max_workers}）")
+
+    merged: list[SubtitleEntry] = []
+    for _index, _start, entries in sorted(results, key=lambda result: result[0]):
+        merged.extend(entries)
+    merged.sort(key=lambda entry: (entry.start, entry.end))
+    return [
+        SubtitleEntry(index, entry.start, entry.end, entry.text)
+        for index, entry in enumerate(merged, 1)
+    ]

@@ -18,12 +18,14 @@
 
 {% macro create_dialog(dialog_id='creator-quick-create-dialog') -%}
 <dialog id="{{ dialog_id }}" class="profile-dialog creator-dialog" data-creator-create-dialog>
-  <form method="dialog" class="field-list" data-creator-create-form>
+  <form method="dialog" data-creator-create-form>
     <header class="dialog-head"><h2>新建创作者</h2><button type="button" class="ghost small" data-close-dialog>✕</button></header>
+    <div class="dialog-body field-list">
     <input type="hidden" name="picker_id">
     <label>名称<input name="name" required autocomplete="off"></label>
     <fieldset class="creator-kind-field"><legend>身份</legend><label><input type="radio" name="kind" value="circle"> 社团</label><label><input type="radio" name="kind" value="voice_actor" checked> 声优</label></fieldset>
     <p class="import-error" data-dialog-error hidden></p>
+    </div>
     <footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button type="submit">创建</button></footer>
   </form>
 </dialog>

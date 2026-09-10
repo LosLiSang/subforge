@@ -402,3 +402,23 @@ class TestReadReusableSrt:
         )
 
         assert read_reusable_srt(path) is None
+
+    def test_save_and_reload_asr_chunk(self, tmp_path):
+        from subforge.resume import ResumeStore, ResumeState
+        store = ResumeStore(tmp_path)
+        job = Job(Path(tmp_path / "audio.mp3"))
+        config = Config()
+        state = store.create(job, config, tmp_path / "source.srt", tmp_path / "target.srt")
+        assert state.asr["status"] == "pending"
+
+        entries = [SubtitleEntry(1, 0.0, 5.0, "hello")]
+        store.save_asr_chunk(state, 0, entries, [], 2)
+        assert state.asr["status"] == "partial"
+        assert state.asr["total_chunks"] == 2
+        assert "0" in state.asr["completed_chunks"]
+        assert state.asr["completed_chunks"]["0"]["source"][0]["text"] == "hello"
+
+        loaded = store.load(job, config)
+        assert loaded is not None
+        assert loaded.asr["status"] == "partial"
+        assert loaded.asr["completed_chunks"]["0"]["source"][0]["text"] == "hello"

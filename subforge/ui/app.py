@@ -14,6 +14,7 @@ import shutil
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode
 from uuid import uuid4
@@ -27,6 +28,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from subforge.asr.model_manager import cached_models
+from subforge.asr.remote_limiter import RemoteAsrRequestLimiter
 from subforge.asr.engine import _audio_duration_seconds
 from subforge import __version__
 from subforge.config import Config, DEFAULT_MODELS_DIR
@@ -39,7 +41,12 @@ from subforge.gemini_audio import (
 from subforge.library import CreatorKind, ImportRequest, ItemKind, LibraryStore
 from subforge.models import SubtitleEntry
 from subforge.presets import ASMR_PRESET
-from subforge.segment_processing import SegmentProcessor, SegmentRequest, WhisperSegmentAdapter
+from subforge.segment_processing import (
+    SegmentProcessingError,
+    SegmentProcessor,
+    SegmentRequest,
+    WhisperSegmentAdapter,
+)
 from subforge.subtitle_revision import SubtitleRevisionStore
 from subforge.translate.context import translate_all
 from subforge.translate.llm_client import translate_batch
@@ -70,6 +77,7 @@ class UiRuntime:
         self.deps = deps
         self.sessions: dict[str, str] = {}
         self.selections: dict[str, Path] = {}
+        self.pending_selections: set[str] = set()
         self.imports: dict[str, dict] = {}  # 后台 URL 下载导入任务状态
         self.download_procs: dict[str, "subprocess.Popen"] = {}  # task_id -> yt-dlp 子进程（用于取消）
         self.segment_candidates: dict[str, dict] = {}  # 已废弃：候选改为任务结果持久化
@@ -164,6 +172,7 @@ class UiRuntime:
                 translate_workers_resolver=self.deps.settings.get_translate_workers,
                 translation_prompt_resolver=self.deps.settings.get_translation_prompt,
                 segment_runner=_make_segment_runner(self.deps, self),
+                remote_asr_concurrency=self.deps.settings.get_remote_asr_concurrency(),
             )
         return self.library
 
@@ -198,27 +207,36 @@ def _make_segment_runner(deps: UiDependencies, runtime: "UiRuntime"):
     return run
 
 
-async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, payload: dict, report) -> dict:
-    """生成片段候选；返回可持久化的结果 dict，不改动正式字幕。"""
-    library = runtime.open_active_library()
-    if library is None:
-        raise RuntimeError("Library 未配置")
+def _resolve_segment_window(library, track_id: str, payload: dict):
+    """解析片段重处理的时间窗与相交的现有字幕条目。
 
-    def value(name: str, default: str = "") -> str:
-        return str(payload.get(name, default))
-
-    start_index = int(value("start_index"))
-    end_index = int(value("end_index"))
+    入队前归一化与后台执行共用同一套解析逻辑，保证任务中心显示的
+    片段范围与实际处理范围一致。
+    """
     document = SubtitleRevisionStore(library).load(track_id)
-    if start_index < 1 or end_index < start_index or end_index > max(len(document.source_entries), len(document.target_entries)):
-        raise ValueError("请选择连续且有效的字幕范围")
+    raw_start_idx = str(payload.get("start_index", "")).strip()
+    raw_end_idx = str(payload.get("end_index", "")).strip()
+    has_indices = raw_start_idx.isdigit() and raw_end_idx.isdigit()
 
-    start_time_raw = value("start_time")
-    end_time_raw = value("end_time")
+    start_time_raw = str(payload.get("start_time", "")).strip()
+    end_time_raw = str(payload.get("end_time", "")).strip()
     duration = _audio_duration_seconds(library.track_media_path(track_id))
+
+    if has_indices:
+        start_index = int(raw_start_idx)
+        end_index = int(raw_end_idx)
+        max_entries = max(len(document.source_entries), len(document.target_entries))
+        if start_index < 1 or end_index < start_index or (max_entries > 0 and end_index > max_entries):
+            raise ValueError("请选择连续且有效的字幕范围")
+    elif not (start_time_raw or end_time_raw):
+        raise ValueError("请提供有效的字幕范围或起止时间")
+
     if start_time_raw or end_time_raw:
-        target_start = float(start_time_raw) if start_time_raw else 0.0
-        target_end = float(end_time_raw) if end_time_raw else (duration or 0.0)
+        try:
+            target_start = float(start_time_raw) if start_time_raw else 0.0
+            target_end = float(end_time_raw) if end_time_raw else (duration or 0.0)
+        except ValueError:
+            raise ValueError("片段时间范围格式无效")
         if target_start < 0:
             target_start = 0.0
         if duration and target_end > duration + 0.001:
@@ -228,15 +246,128 @@ async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, pay
         selected_source = [e for e in document.source_entries if e.start < target_end and e.end > target_start]
         selected_target = [e for e in document.target_entries if e.start < target_end and e.end > target_start]
     else:
-        if start_index > len(document.source_entries):
+        if not has_indices or start_index > len(document.source_entries) or not document.source_entries:
             raise ValueError("请选择连续且有效的字幕范围")
         selected_source = document.source_entries[start_index - 1:end_index]
         selected_target = document.target_entries[start_index - 1:end_index]
         target_start = selected_source[0].start
         target_end = selected_source[-1].end
+    return document, target_start, target_end, selected_source, selected_target
+
+
+def _enrich_segment_payload_range(library, track_id: str, payload: dict) -> None:
+    """入队前把解析后的时间窗写进 payload（best-effort，失败不阻塞入队）。"""
+    try:
+        _document, target_start, target_end, _source, _target = _resolve_segment_window(library, track_id, payload)
+    except (KeyError, TypeError, ValueError, OSError, SegmentProcessingError):
+        return
+    payload["target_start"] = round(float(target_start), 3)
+    payload["target_end"] = round(float(target_end), 3)
+
+
+def _format_instant(value: str | None) -> str | None:
+    """UTC ISO 时间戳 → 本地时区「月-日 时:分」展示。"""
+    if not value:
+        return None
+    try:
+        instant = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return instant.astimezone().strftime("%m-%d %H:%M")
+
+
+def _profile_label(profiles, profile_id) -> str | None:
+    if not profile_id:
+        return None
+    try:
+        profile = profiles.resolve(str(profile_id))
+    except KeyError:
+        return None
+    return f"{profile.name} · {profile.model}"
+
+
+def _segment_range_display(library, task) -> str | None:
+    """片段任务处理的时间范围文案；旧 payload 回退到按字幕序号解析。"""
+    payload = task.payload or {}
+    start = payload.get("target_start", payload.get("start_time"))
+    end = payload.get("target_end", payload.get("end_time"))
+    if start in (None, "") or end in (None, ""):
+        try:
+            _document, start, end, _source, _target = _resolve_segment_window(library, task.track_id, payload)
+        except Exception:
+            return None
+    try:
+        return f"{float(start):.2f} → {float(end):.2f} 秒"
+    except (TypeError, ValueError):
+        return None
+
+
+def _task_display_context(library, deps, task) -> dict:
+    """任务中心的行内上下文：片段时间范围、ASR/翻译模型、入队/开始时间。"""
+    snapshot = task.config_snapshot or {}
+    payload = task.payload or {}
+    profiles = deps.profiles
+    if task.kind == "segment_reprocess":
+        processor_name = str(payload.get("processor", "whisper"))
+        asr_profile = _profile_label(profiles, payload.get("asr_profile_id"))
+        if processor_name == "gemini":
+            asr_display = asr_profile or "音频模型（配置缺失）"
+        else:
+            asr_display = f"Whisper {payload.get('whisper_model', 'large-v3')}"
+        if str(payload.get("processing_mode", "transcribe_then_translate")) == "bilingual_once":
+            translation_display = "音频模型一次生成双语"
+        else:
+            translation_display = _profile_label(profiles, payload.get("llm_profile_id")) or "翻译配置已删除"
+        range_display = _segment_range_display(library, task)
+    else:
+        provider = str(snapshot.get("asr_provider", "local"))
+        asr_profile = _profile_label(profiles, snapshot.get("asr_profile_id"))
+        if asr_profile:
+            asr_display = asr_profile
+        elif provider == "local":
+            asr_display = f"本地 Whisper {snapshot.get('whisper_model', 'medium')}"
+        elif provider == "deepgram":
+            asr_display = "Deepgram"
+        else:
+            asr_display = provider
+        translation_display = _profile_label(profiles, snapshot.get("llm_profile_id")) or "翻译配置已删除"
+        range_display = None
+    return {
+        "range": range_display,
+        "asr": asr_display,
+        "translation": translation_display,
+        "created": _format_instant(task.created_at),
+        "started": _format_instant(task.started_at),
+    }
+
+
+async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, payload: dict, report) -> dict:
+    """生成片段候选；返回可持久化的结果 dict，不改动正式字幕。"""
+    library = runtime.open_active_library()
+    if library is None:
+        raise RuntimeError("Library 未配置")
+
+    def value(name: str, default: str = "") -> str:
+        return str(payload.get(name, default))
+
+    try:
+        document, target_start, target_end, selected_source, selected_target = _resolve_segment_window(library, track_id, payload)
+    except SegmentProcessingError as exc:
+        raise RuntimeError(str(exc)) from exc
 
     processor_name = value("processor", "whisper")
     processing_mode = value("processing_mode", "transcribe_then_translate")
+    duration = max(0.0, target_end - target_start)
+    if processor_name == "gemini":
+        asr_profile_id = value("asr_profile_id")
+        if not asr_profile_id:
+            raise ValueError("请选择音频转写模型配置")
+        asr_profile = deps.profiles.resolve(asr_profile_id)
+        limit = max(10.0, float(asr_profile.max_request_seconds or 60.0))
+        estimated_chunks = max(1, math.ceil(duration / limit)) if duration > 0 else 1
+    else:
+        estimated_chunks = 1
+
     options = {
         "processor": processor_name,
         "whisper_model": value("whisper_model", "large-v3"),
@@ -273,6 +404,7 @@ async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, pay
             )
 
             async def translate_segment(entries, _source_language, _target_language):
+                report("translation", 0.85, "翻译中…", completed=estimated_chunks, total=estimated_chunks)
                 return await translate_all(entries, translation_config, translate_batch)
 
         if processor_name == "whisper":
@@ -294,19 +426,31 @@ async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, pay
                 raise ValueError("请选择音频转写模型配置")
             asr_profile = deps.profiles.resolve(asr_profile_id)
             gemini_profile = gemini_profile_from_mapping(asdict(asr_profile))
-            transport = (
-                GoogleGeminiTransport(gemini_profile)
-                if gemini_profile.protocol == "google_native"
-                else OpenAICompatibleAudioTransport(gemini_profile)
+            remote_limiter = RemoteAsrRequestLimiter(
+                library.root / ".subforge" / "remote-asr-slots",
+                deps.settings.get_remote_asr_concurrency(),
             )
+            transport = (
+                GoogleGeminiTransport(gemini_profile, request_limiter=remote_limiter)
+                if gemini_profile.protocol == "google_native"
+                else OpenAICompatibleAudioTransport(gemini_profile, request_limiter=remote_limiter)
+            )
+            def on_gemini_progress(ratio: float, completed: int | None = None, total: int | None = None, message: str | None = None):
+                tot = total if total is not None else estimated_chunks
+                comp = completed if completed is not None else 0
+                msg = message or f"ASR 转写中（分片 {comp}/{tot}）"
+                report("asr", 0.05 + 0.85 * max(0.0, min(1.0, ratio)), msg, completed=comp, total=tot)
+
             processor = GeminiAudioAdapter(
                 gemini_profile, transport, translate_fn=translate_segment,
-                progress_callback=lambda p: report("segment", 0.05 + 0.9 * p, None),
+                progress_callback=on_gemini_progress,
+                chunk_concurrency=deps.settings.get_remote_asr_concurrency(),
             )
         else:
             raise ValueError("未知片段处理器")
 
-    report("segment", 0.05, "正在生成候选…")
+    init_msg = f"ASR 转写中（分片 0/{estimated_chunks}）" if processor_name == "gemini" else "Whisper 转写中（分片 0/1）"
+    report("asr", 0.05, init_msg, completed=0, total=estimated_chunks)
     request_model = SegmentRequest(
         media_path=library.track_media_path(track_id),
         target_start=target_start,
@@ -382,16 +526,23 @@ def create_app(deps: UiDependencies) -> Starlette:
             requested_page = int(request.query_params.get("page", "1"))
         except ValueError:
             requested_page = 1
-        page_count = max(1, (total_items + 11) // 12)
+        limit_param = request.query_params.get("limit") or request.query_params.get("page_size")
+        try:
+            page_size = max(1, min(60, int(limit_param))) if limit_param else 10
+        except ValueError:
+            page_size = 10
+        page_count = max(1, (total_items + page_size - 1) // page_size)
         current_page = min(max(1, requested_page), page_count)
-        page_start = (current_page - 1) * 12
-        page_items = items[page_start:page_start + 12]
+        page_start = (current_page - 1) * page_size
+        page_items = items[page_start:page_start + page_size]
 
         def page_url(page_number: int) -> str:
             params: list[tuple[str, str]] = []
             if search_query:
                 params.append(("q", search_query))
             params.extend(("creator", creator_id) for creator_id in selected_creator_ids)
+            if limit_param:
+                params.append(("limit", str(page_size)))
             if page_number > 1:
                 params.append(("page", str(page_number)))
             query = urlencode(params)
@@ -425,6 +576,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             search_query=search_query,
             current_page=current_page,
             page_count=page_count,
+            page_size=page_size,
             total_items=total_items,
             pagination_items=pagination_items,
             previous_page_url=page_url(current_page - 1) if current_page > 1 else None,
@@ -461,6 +613,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             translate_workers_resolver=deps.settings.get_translate_workers,
             translation_prompt_resolver=deps.settings.get_translation_prompt,
             segment_runner=_make_segment_runner(deps, runtime),
+            remote_asr_concurrency=deps.settings.get_remote_asr_concurrency(),
         )
         deps.settings.set_active_library(selected)
         return RedirectResponse("/", status_code=303)
@@ -521,9 +674,12 @@ def create_app(deps: UiDependencies) -> Starlette:
         values = await _read_form_values(request)
         form = {key: entries[-1] for key, entries in values.items()}
         selection_id = form.get("selection_id", "")
-        source = runtime.selections.pop(selection_id, None)
+        source = runtime.selections.get(selection_id)
         if source is None:
             return JSONResponse({"error": "Invalid or expired selection"}, status_code=400)
+        if selection_id in runtime.pending_selections:
+            return JSONResponse({"error": "This selection is already being imported"}, status_code=409)
+        runtime.pending_selections.add(selection_id)
         try:
             kind = ItemKind(form.get("kind", ""))
             result = await asyncio.to_thread(
@@ -539,6 +695,10 @@ def create_app(deps: UiDependencies) -> Starlette:
             )
         except (ValueError, OSError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        finally:
+            runtime.pending_selections.discard(selection_id)
+        if runtime.selections.get(selection_id) is source:
+            runtime.selections.pop(selection_id, None)
         if form.get("auto_process") == "on" and result.created and runtime.tasks is not None:
             snapshot = _automatic_processing_snapshot(deps)
             if snapshot is not None:
@@ -726,20 +886,53 @@ def create_app(deps: UiDependencies) -> Starlette:
             status_counts[track.status] = status_counts.get(track.status, 0) + 1
         total_seconds = sum(_track_duration_seconds(library, track) for track in item.tracks)
         snapshot_profile = None
+        snapshot_asr_profile = None
+        snapshot_merge_profile = None
         if latest_snapshot and latest_snapshot.get("llm_profile_id"):
             snapshot_profile = next(
                 (p for p in public_profiles if p["profile_id"] == latest_snapshot["llm_profile_id"]),
                 None,
             )
+        if latest_snapshot and latest_snapshot.get("asr_profile_id"):
+            snapshot_asr_profile = next(
+                (p for p in public_profiles if p["profile_id"] == latest_snapshot["asr_profile_id"]),
+                None,
+            )
+        if latest_snapshot and latest_snapshot.get("merge_profile_id"):
+            snapshot_merge_profile = next(
+                (p for p in public_profiles if p["profile_id"] == latest_snapshot["merge_profile_id"]),
+                None,
+            )
+        actionable_incomplete_tracks = [
+            track for track in item.tracks
+            if track.status not in ("playable", "completed", "no_speech")
+            and not (task_by_track.get(track.track_id) and task_by_track[track.track_id].status in ("queued", "running"))
+        ]
+        active_tracks = [
+            track for track in item.tracks
+            if (task_by_track.get(track.track_id) and task_by_track[track.track_id].status in ("queued", "running"))
+            or track.status in ("queued", "processing", "running")
+        ]
+        first_playable_track = next(
+            (track for track in item.tracks if track_media_available.get(track.track_id)),
+            None,
+        )
         overview = {
             "track_count": len(item.tracks),
             "total_duration_label": _format_duration(total_seconds) if total_seconds else "--:--",
             "total_size": sum(track.size for track in item.tracks),
             "status_counts": [(status, status_counts[status]) for status in sorted(status_counts)],
             "playable_count": status_counts.get("playable", 0) + status_counts.get("completed", 0),
-            "processing_count": status_counts.get("queued", 0) + status_counts.get("running", 0),
+            "processing_count": status_counts.get("queued", 0) + status_counts.get("running", 0) + status_counts.get("processing", 0),
             "failed_count": status_counts.get("failed", 0),
             "no_speech_count": status_counts.get("no_speech", 0),
+            "actionable_incomplete_count": len(actionable_incomplete_tracks),
+            "active_task_count": len(active_tracks),
+            "all_completed": (
+                (status_counts.get("playable", 0) + status_counts.get("completed", 0) + status_counts.get("no_speech", 0)) == len(item.tracks)
+                and len(item.tracks) > 0
+            ),
+            "first_playable_track_id": first_playable_track.track_id if first_playable_track else None,
         }
         return runtime.render(
             "detail.html", request, item=item, task_by_track=task_by_track,
@@ -755,6 +948,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             track_durations=track_durations,
             default_profile_id=default_profile_id,
             overview=overview, snapshot_profile=snapshot_profile,
+            snapshot_asr_profile=snapshot_asr_profile,
+            snapshot_merge_profile=snapshot_merge_profile,
         )
 
     async def edit_item(request: Request) -> Response:
@@ -857,8 +1052,16 @@ def create_app(deps: UiDependencies) -> Starlette:
                     "item": item,
                     "track": track,
                     "queue_position": queued_position if task.status == "queued" else None,
+                    "context": _task_display_context(library, deps, task),
                 })
             processing_tasks.reverse()
+            worker_summary = runtime.tasks.summary()
+        else:
+            worker_summary = {
+                "local_running": 0, "local_capacity": deps.settings.get_asr_concurrency(),
+                "remote_running": 0, "remote_capacity": deps.settings.get_remote_asr_concurrency(),
+                "queued": 0,
+            }
         models_dir = deps.settings.get_models_dir()
         model_names = ["tiny", "base", "small", "medium", "large-v3"]
         cached = cached_models(models_dir, model_names)
@@ -880,6 +1083,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             proxy_url=deps.settings.get_proxy_url(),
             processing_tasks=processing_tasks,
             import_tasks=list(reversed(list(runtime.imports.values()))),
+            worker_summary=worker_summary,
         )
 
     async def about_page(request: Request) -> Response:
@@ -894,7 +1098,18 @@ def create_app(deps: UiDependencies) -> Starlette:
             try:
                 if form.get("deepgram_api_key"):
                     deps.settings.set_deepgram_api_key(form["deepgram_api_key"])
+                if form.get("default_asr_provider"):
+                    deps.settings.set_default_processing_snapshot({
+                        "asr_provider": form.get("default_asr_provider", "local"),
+                        "scene": form.get("default_scene", "asmr"),
+                        "whisper_model": form.get("default_whisper_model", "large-v3"),
+                        "llm_profile_id": form.get("default_llm_profile_id", ""),
+                        "asr_profile_id": form.get("default_asr_profile_id", ""),
+                        "merge_profile_id": form.get("default_merge_profile_id", ""),
+                        "asr_chunk_seconds": form.get("default_asr_chunk_seconds", 60),
+                    })
                 deps.settings.set_asr_concurrency(int(form.get("asr_concurrency", "1")))
+                deps.settings.set_remote_asr_concurrency(int(form.get("remote_asr_concurrency", "2")))
                 deps.settings.set_translate_workers(int(form.get("translate_workers", "8")))
                 deps.settings.set_translation_prompt(form.get("translation_prompt", ""))
                 deps.settings.set_proxy_url(form.get("proxy_url", ""))
@@ -907,12 +1122,16 @@ def create_app(deps: UiDependencies) -> Starlette:
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
             return RedirectResponse("/settings", status_code=303)
+        public_profiles = deps.profiles.list_public()
+        translation_profiles = [p for p in public_profiles if "translate" in p.get("capabilities", [])]
+        merge_profiles = deps.profiles.list_for("merge")
         return runtime.render(
             "settings.html", request,
             deepgram_key_masked=deps.settings.deepgram_key_display(),
             deepgram_key_configured=bool(deps.settings.get_deepgram_api_key()),
             deepgram_key_deletable=deps.settings.has_stored_deepgram_api_key(),
             asr_concurrency=deps.settings.get_asr_concurrency(),
+            remote_asr_concurrency=deps.settings.get_remote_asr_concurrency(),
             translate_workers=deps.settings.get_translate_workers(),
             translation_prompt=deps.settings.get_translation_prompt(),
             proxy_url=deps.settings.get_proxy_url(),
@@ -920,6 +1139,10 @@ def create_app(deps: UiDependencies) -> Starlette:
             direct_medium=deps.settings.get_direct_model_path("medium"),
             direct_large_v3=deps.settings.get_direct_model_path("large-v3"),
             audio_profiles=deps.profiles.list_for("transcribe"),
+            default_processing=deps.settings.get_default_processing_snapshot() or deps.settings.get_last_processing_snapshot() or {},
+            translation_profiles=translation_profiles,
+            merge_profiles=merge_profiles,
+            models=["large-v3", "medium", "base"],
         )
 
     async def delete_deepgram_key(request: Request) -> Response:
@@ -1170,18 +1393,23 @@ def create_app(deps: UiDependencies) -> Starlette:
         form = await _read_form(request)
         try:
             selected_snapshot = _snapshot_from_form(deps, form)
-            mode = form.get("mode", "from_scratch")
+            deps.settings.set_last_processing_snapshot(asdict(selected_snapshot))
+            _record_full_process_selection(library, selected_snapshot)
+            scope = form.get("scope", "incomplete")
+            mode = form.get("mode", "continue")
             for track in item.tracks:
                 latest = runtime.tasks.latest_for_track(track.track_id)
-                if track.status == "playable" or (latest and latest.status in {"queued", "running"}):
+                if latest and latest.status in {"queued", "running"}:
+                    continue
+                if scope == "incomplete" and track.status == "playable":
+                    continue
+                if track.status == "playable" and mode == "continue":
                     continue
                 snapshot = selected_snapshot
                 if mode == "continue" and latest and latest.config_snapshot:
                     snapshot = ProcessingSnapshot(**latest.config_snapshot)
                     deps.profiles.resolve(snapshot.llm_profile_id)
                 await runtime.tasks.enqueue(track.track_id, snapshot, mode=mode)
-                deps.settings.set_last_processing_snapshot(asdict(snapshot))
-                _record_full_process_selection(library, snapshot)
         except KeyError:
             return JSONResponse({"error": "LLM profile not found"}, status_code=404)
         except ValueError as exc:
@@ -1252,6 +1480,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             _record_full_process_selection(library, snapshot)
         except KeyError:
             return JSONResponse({"error": "Track or LLM profile not found"}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         return RedirectResponse(f"/items/{library.get_track(task.track_id)[0].item_id}", status_code=303)
 
     async def player_page(request: Request) -> Response:
@@ -1335,7 +1565,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             library.set_cover_source(item.item_id, "embedded")
         if cover_path is None:
             return Response("Not found", status_code=404)
-        return FileResponse(cover_path, media_type="image/jpeg")
+        return FileResponse(cover_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=604800, immutable"})
 
     async def download_track_subtitle(request: Request) -> Response:
         library = runtime.open_active_library()
@@ -1502,6 +1732,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         try:
             form = await _read_form_values(request)
             payload = {name: entries[-1] for name, entries in form.items()}
+            # 入队前归一化时间窗，任务中心可直接展示本次处理的片段时间范围
+            _enrich_segment_payload_range(library, track_id, payload)
             task = await runtime.tasks.enqueue_segment_reprocess(track_id, payload)
             _record_segment_selection(library, payload)
         except KeyError:
@@ -1666,6 +1898,21 @@ def create_app(deps: UiDependencies) -> Starlette:
             return Response("Not found", status_code=404)
         return RedirectResponse(request.headers.get("referer", "/"), status_code=303)
 
+    async def delete_task(request: Request) -> Response:
+        """删除一条终态任务记录（不碰媒体与字幕）。"""
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        if runtime.tasks is None:
+            return Response("Not found", status_code=404)
+        try:
+            runtime.tasks.delete_task(request.path_params["task_id"])
+        except KeyError:
+            return Response("Not found", status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return RedirectResponse(request.headers.get("referer", "/downloads"), status_code=303)
+
     async def retry_task(request: Request) -> Response:
         """重试失败的字幕处理任务：复用配置快照，从断点继续排队。"""
         error = await _authorize_write(request, runtime)
@@ -1677,8 +1924,43 @@ def create_app(deps: UiDependencies) -> Starlette:
             task = runtime.tasks.get_task(request.path_params["task_id"])
         except KeyError:
             return Response("Not found", status_code=404)
-        if task.status != "failed":
-            return JSONResponse({"error": "只有失败的任务可以重试"}, status_code=409)
+        if task.status not in ("failed", "cancelled", "interrupted"):
+            return JSONResponse({"error": "只有失败、已取消或中断的任务可以重试"}, status_code=409)
+        if task.kind == "segment_reprocess":
+            # 片段重处理没有配置快照：参数在 payload 里，重试前校验引用的配置仍在
+            payload = task.payload or {}
+            processor_name = str(payload.get("processor", "whisper"))
+            mode = str(payload.get("processing_mode", "transcribe_then_translate"))
+            try:
+                if processor_name == "gemini":
+                    asr_profile_id = str(payload.get("asr_profile_id") or "")
+                    if not asr_profile_id:
+                        return JSONResponse({"error": "缺少音频转写模型配置，无法重试"}, status_code=400)
+                    try:
+                        deps.profiles.resolve(asr_profile_id)
+                    except KeyError:
+                        return JSONResponse({"error": "音频转写模型配置不存在，无法重试"}, status_code=404)
+                    if mode != "bilingual_once":
+                        llm_profile_id = str(payload.get("llm_profile_id") or "")
+                        if not llm_profile_id:
+                            return JSONResponse({"error": "缺少翻译配置，无法重试"}, status_code=400)
+                        try:
+                            deps.profiles.resolve(llm_profile_id)
+                        except KeyError:
+                            return JSONResponse({"error": "翻译配置不存在，无法重试"}, status_code=404)
+                else:
+                    if mode != "bilingual_once":
+                        llm_profile_id = str(payload.get("llm_profile_id") or "")
+                        if not llm_profile_id:
+                            return JSONResponse({"error": "缺少翻译配置，无法重试"}, status_code=400)
+                        try:
+                            deps.profiles.resolve(llm_profile_id)
+                        except KeyError:
+                            return JSONResponse({"error": "翻译配置不存在，无法重试"}, status_code=404)
+            except KeyError:
+                return JSONResponse({"error": "任务引用的模型配置不存在，无法重试"}, status_code=404)
+            await runtime.tasks.retry_segment(task)
+            return RedirectResponse(request.headers.get("referer", "/downloads"), status_code=303)
         if not task.config_snapshot:
             return JSONResponse({"error": "该任务没有可用的配置快照，无法重试"}, status_code=400)
         try:
@@ -1831,6 +2113,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/tasks/{task_id}/events", task_events),
         Route("/tasks/{task_id}/cancel", cancel_task, methods=["POST"]),
         Route("/tasks/{task_id}/retry", retry_task, methods=["POST"]),
+        Route("/tasks/{task_id}/delete", delete_task, methods=["POST"]),
         Route("/api/imports/{task_id}/retry", retry_import, methods=["POST"]),
     ]
     @asynccontextmanager
@@ -1894,6 +2177,8 @@ def _snapshot_from_form(deps: UiDependencies, form: dict) -> ProcessingSnapshot:
     if not profile.supports("translate"):
         raise ValueError("所选翻译配置不支持文本翻译")
     asr_provider = form.get("asr_provider", "local")
+    if asr_provider not in {"local", "deepgram", "model"}:
+        raise ValueError("不支持的 ASR 提供商")
     asr_profile_id = ""
     if asr_provider == "model":
         asr_profile_id = form.get("asr_profile_id", "")
@@ -1902,7 +2187,13 @@ def _snapshot_from_form(deps: UiDependencies, form: dict) -> ProcessingSnapshot:
         asr_profile = deps.profiles.resolve(asr_profile_id)
         if not asr_profile.supports("transcribe"):
             raise ValueError("所选 ASR 模型不支持音频转写")
-    merge_profile_id = form.get("merge_profile_id", "")
+    try:
+        asr_chunk_seconds = int(form.get("asr_chunk_seconds", "60"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("网络 ASR 分片大小必须是整数秒") from exc
+    if not 10 <= asr_chunk_seconds <= 3600:
+        raise ValueError("网络 ASR 分片大小必须在 10 到 3600 秒之间")
+    merge_profile_id = form.get("merge_profile_id", "") if asr_provider == "model" else ""
     if merge_profile_id:
         merge_profile = deps.profiles.resolve(merge_profile_id)
         if not merge_profile.supports("merge"):
@@ -1914,6 +2205,7 @@ def _snapshot_from_form(deps: UiDependencies, form: dict) -> ProcessingSnapshot:
         llm_profile_id=profile.profile_id,
         asr_profile_id=asr_profile_id,
         merge_profile_id=merge_profile_id,
+        asr_chunk_seconds=asr_chunk_seconds,
     )
 
 
@@ -1923,7 +2215,7 @@ def _automatic_processing_snapshot(deps: UiDependencies) -> ProcessingSnapshot |
     if not translation_profiles:
         return None
     profile_ids = {profile["profile_id"] for profile in translation_profiles}
-    saved = deps.settings.get_last_processing_snapshot() or {}
+    saved = deps.settings.get_default_processing_snapshot() or deps.settings.get_last_processing_snapshot() or {}
     profile_id = str(saved.get("llm_profile_id", ""))
     if profile_id not in profile_ids:
         profile_id = translation_profiles[0]["profile_id"]
@@ -1936,6 +2228,11 @@ def _automatic_processing_snapshot(deps: UiDependencies) -> ProcessingSnapshot |
     else:
         asr_profile_id = ""
     merge_profile_id = str(saved.get("merge_profile_id", ""))
+    try:
+        asr_chunk_seconds = int(saved.get("asr_chunk_seconds", 60))
+    except (TypeError, ValueError):
+        asr_chunk_seconds = 60
+    asr_chunk_seconds = min(3600, max(10, asr_chunk_seconds))
     merge_ids = {p["profile_id"] for p in profiles if "merge" in p.get("capabilities", [])}
     if merge_profile_id not in merge_ids:
         merge_profile_id = ""
@@ -1948,6 +2245,7 @@ def _automatic_processing_snapshot(deps: UiDependencies) -> ProcessingSnapshot |
         llm_profile_id=profile_id,
         asr_profile_id=asr_profile_id,
         merge_profile_id=merge_profile_id,
+        asr_chunk_seconds=asr_chunk_seconds,
     )
 
 
@@ -2367,24 +2665,34 @@ def _creator_ids_from_form(
     return creator_ids
 
 
+_DIR_SIZE_CACHE: dict[str, tuple[int, int]] = {}
+
+
 def _item_directory_sizes(root: Path, items: list) -> dict[str, int]:
     sizes: dict[str, int] = {}
     for item in items:
         if item.kind != ItemKind.RJ_WORK:
             sizes[item.item_id] = sum(track.size for track in item.tracks)
             continue
-        total = 0
         item_dir = root / item.directory
         try:
+            mtime_ns = item_dir.stat().st_mtime_ns
+            if item.item_id in _DIR_SIZE_CACHE:
+                cached_mtime, cached_size = _DIR_SIZE_CACHE[item.item_id]
+                if cached_mtime == mtime_ns:
+                    sizes[item.item_id] = cached_size
+                    continue
+            total = 0
             for path in item_dir.rglob("*"):
                 if path.is_file():
                     try:
                         total += path.stat().st_size
                     except OSError:
                         continue
+            _DIR_SIZE_CACHE[item.item_id] = (mtime_ns, total)
+            sizes[item.item_id] = total
         except OSError:
-            total = sum(track.size for track in item.tracks)
-        sizes[item.item_id] = total
+            sizes[item.item_id] = sum(track.size for track in item.tracks)
     return sizes
 
 

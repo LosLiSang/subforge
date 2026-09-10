@@ -44,9 +44,11 @@ class WindowsFilePicker:
         root.attributes("-topmost", True)
         try:
             selected = filedialog.askopenfilename(
-                title="选择音频",
+                title="选择媒体",
                 filetypes=[
+                    ("Media", "*.mp3 *.wav *.m4a *.flac *.mp4 *.mkv *.webm *.mov *.avi *.m4v"),
                     ("Audio", "*.mp3 *.wav *.m4a *.flac"),
+                    ("Video", "*.mp4 *.mkv *.webm *.mov *.avi *.m4v"),
                     ("All files", "*.*"),
                 ],
             )

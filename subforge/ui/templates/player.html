@@ -3,7 +3,7 @@
 <section class="player" id="player" data-embed="1" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}" data-item-id="{{ item.item_id }}" data-next-track-id="{{ next_track_id or '' }}">
 <audio id="audio" preload="auto" src="/tracks/{{ track.track_id }}/media"></audio>
 </section>
-<script src="/static/player.js"></script>
+<script src="/static/player.js?v=2"></script>
 {% else %}
 <a class="back-link" href="/items/{{ item.item_id }}">← 返回作品</a>
 <section class="player" id="player" data-source-language="{{ track.source_language }}" data-target-language="{{ track.target_language }}" data-track-id="{{ track.track_id }}" data-item-id="{{ item.item_id }}" data-next-track-id="{{ next_track_id or '' }}">
@@ -16,7 +16,7 @@
     <h1>{{ track.media.split('/')[-1] }}</h1>
     <div class="work-meta">
       {% if item.rj_code %}<span class="chip chip-rj">{{ item.rj_code }}</span>{% endif %}
-      {% if item.author %}<span class="chip">{{ item.author }}</span>{% endif %}
+      {% if item.author %}<span class="chip chip-author">{{ item.author }}</span>{% endif %}
     </div>
   </div>
 </div>
@@ -42,16 +42,29 @@
   <div data-subtitle-panel="target"><small>{{ track.target_language }}</small><p id="target-subtitle">正在加载翻译字幕…</p></div>
 </div>
 <details class="track-actions"><summary>全部字幕</summary>
-  <div class="segment-toolbar" data-segment-toolbar hidden>
-    <span data-segment-summary>请选择连续字幕</span>
-    <button type="button" class="ghost small" data-clear-segment-selection>清除选择</button>
-    <button type="button" class="primary small" data-open-segment-reprocess disabled>重新处理所选片段</button>
+  <div class="segment-floating-bar segment-toolbar" data-segment-toolbar hidden>
+    <div class="floating-segment-summary" data-segment-summary>请选择连续字幕</div>
+    <div class="floating-segment-actions">
+      <button type="button" class="ghost small" data-preview-segment title="试听当前选中区间">▶ 试听</button>
+      <button type="button" class="ghost small" data-open-single-edit hidden>✏️ 校正</button>
+      <button type="button" class="primary small" data-open-segment-reprocess disabled>重新处理所选片段</button>
+      <button type="button" class="ghost small floating-clear-btn" data-clear-segment-selection aria-label="清除选择" title="清除选择 (Esc)">×</button>
+    </div>
+  </div>
+  <div class="transcript-header" aria-hidden="true">
+    <div class="transcript-header-inner">
+      <span class="th-time">时间</span>
+      <span class="th-source">原文（{{ track.source_language }}）</span>
+      <span class="th-target">译文（{{ track.target_language }}）</span>
+    </div>
+    <span class="th-action">操作</span>
   </div>
   <div id="transcript"></div>
 </details></section>
 <dialog class="profile-dialog subtitle-edit-dialog" id="subtitle-edit-dialog">
   <form data-subtitle-edit-form>
     <div class="dialog-head"><h2>校正字幕</h2><button type="button" class="ghost small" data-close-subtitle-edit>关闭</button></div>
+    <div class="dialog-body field-list">
     <input type="hidden" name="index">
     <div class="subtitle-time-fields">
       <label>开始时间（秒）<input type="number" name="start" min="0" step="0.001" required></label>
@@ -66,6 +79,7 @@
       <button type="button" class="ghost small" data-subtitle-reprocess>重处理此段</button>
       <button type="button" class="danger small" data-subtitle-delete>删除此条</button>
     </div>
+    </div>
     <div class="dialog-actions subtitle-edit-actions">
       <button type="button" class="ghost" data-restore-subtitles="previous">撤销上次修改</button>
       <button type="button" class="ghost" data-restore-subtitles="baseline">恢复自动版本</button>
@@ -76,6 +90,7 @@
 <dialog class="profile-dialog subtitle-edit-dialog" id="segment-reprocess-dialog">
   <form data-segment-reprocess-form>
     <div class="dialog-head"><h2>片段重处理</h2><button type="button" class="ghost small" data-close-segment-reprocess>关闭</button></div>
+    <div class="dialog-body field-list">
     <input type="hidden" name="start_index"><input type="hidden" name="end_index">
     <p class="dialog-note" data-segment-range></p>
     <div class="subtitle-time-fields">
@@ -98,12 +113,14 @@
     <label>识别提示词（可选）<textarea name="recognition_prompt" rows="2" placeholder="人名、作品名或可能出现的专有词"></textarea></label>
     <p class="dialog-note">相同模型和参数可能得到相同结果。片段会带前后上下文识别，但候选只替换选中范围。</p>
     <p class="dialog-note" data-segment-error hidden></p>
+    </div>
     <div class="dialog-actions"><button type="button" class="ghost" data-close-segment-reprocess>取消</button><button type="submit" class="primary">生成候选</button></div>
   </form>
 </dialog>
 <dialog class="profile-dialog subtitle-edit-dialog" id="subtitle-split-dialog">
   <form data-subtitle-split-form>
     <div class="dialog-head"><h2>拆分字幕</h2><button type="button" class="ghost small" data-close-subtitle-split>关闭</button></div>
+    <div class="dialog-body field-list">
     <input type="hidden" name="index">
     <label>拆分时间（秒）<input type="number" name="split_time" min="0" step="0.001" required></label>
     <div class="subtitle-split-grid">
@@ -113,9 +130,10 @@
       <label>后半译文<textarea name="target_second" rows="2" required></textarea></label>
     </div>
     <p class="dialog-note" data-subtitle-split-error hidden></p>
+    </div>
     <div class="dialog-actions"><button type="button" class="ghost" data-close-subtitle-split>取消</button><button type="submit" class="primary">确认拆分</button></div>
   </form>
 </dialog>
-<script src="/static/player.js"></script>
+<script src="/static/player.js?v=2"></script>
 {% endif %}
 {% endblock %}

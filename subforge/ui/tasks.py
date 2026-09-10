@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import sys
 import tempfile
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +21,17 @@ logger = logging.getLogger(__name__)
 
 # 任务级自动重试：连续失败达此次数才彻底结束（任一次成功即重置/结束）。
 _TASK_MAX_CONSECUTIVE_RETRIES = 3
+
+@asynccontextmanager
+async def _maybe_acquire(semaphore: asyncio.Semaphore | None):
+    if semaphore is not None:
+        await semaphore.acquire()
+    try:
+        yield
+    finally:
+        if semaphore is not None:
+            semaphore.release()
+
 
 
 def _now() -> str:
@@ -41,6 +54,8 @@ class ProcessingSnapshot:
     # 统一模型 Profile：ASR / 合并（翻译继续用 llm_profile_id，保留旧字段兼容）
     asr_profile_id: str = ""
     merge_profile_id: str = ""
+    # 网络 ASR 单个请求的任务级分片大小；旧快照缺失时使用 60 秒。
+    asr_chunk_seconds: int = 60
 
 
 @dataclass
@@ -58,6 +73,7 @@ class TaskRecord:
     payload: dict | None = None
     result: dict | None = None
     created_at: str | None = None
+    started_at: str | None = None
     finished_at: str | None = None
 
 
@@ -146,6 +162,15 @@ class SubprocessWorkerAdapter:
                     logger.warning("Ignoring malformed worker event")
             code = await process.wait()
             stderr_file.close()
+            if os.name == "nt" and code != 0:
+                import subprocess
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                        capture_output=True, timeout=5,
+                    )
+                except Exception:
+                    pass
             if code and process.returncode not in (-15, 1):
                 crash_hint = ""
                 if code >= 0x80000000:
@@ -167,12 +192,25 @@ class SubprocessWorkerAdapter:
         process = self._processes.get(task_id)
         if process is None or process.returncode is not None:
             return
-        process.terminate()
+        if os.name == "nt":
+            import subprocess
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                    capture_output=True, timeout=5,
+                )
+            except Exception:
+                pass
+        else:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except TimeoutError:
+                process.kill()
         try:
             await asyncio.wait_for(process.wait(), timeout=5)
         except TimeoutError:
-            process.kill()
-            await process.wait()
+            pass
 
 
 class TaskManager:
@@ -191,16 +229,24 @@ class TaskManager:
         translation_prompt_resolver=None,
         media_concurrency: int | None = None,
         segment_runner=None,
+        remote_asr_concurrency: int = 2,
     ) -> None:
         if media_concurrency is not None:
             asr_concurrency = media_concurrency
         if asr_concurrency < 1:
             raise ValueError("asr_concurrency must be at least 1")
+        if remote_asr_concurrency < 1:
+            raise ValueError("remote_asr_concurrency must be at least 1")
         if translate_workers < 1:
             raise ValueError("translate_workers must be at least 1")
         self.library = library
         self.worker = worker
-        self._semaphore = asyncio.Semaphore(asr_concurrency)
+        self._max_workers = media_concurrency if media_concurrency is not None else (asr_concurrency + remote_asr_concurrency)
+        self._worker_sem = asyncio.Semaphore(self._max_workers)
+        self._local_sem = asyncio.Semaphore(asr_concurrency)
+        self._remote_sem = asyncio.Semaphore(remote_asr_concurrency)
+        self._local_concurrency = asr_concurrency
+        self._remote_concurrency = remote_asr_concurrency
         self._translate_workers = translate_workers
         self._translate_workers_resolver = translate_workers_resolver
         self._translation_prompt_resolver = translation_prompt_resolver
@@ -212,6 +258,7 @@ class TaskManager:
         self._segment_runner = segment_runner
         self._tasks: dict[str, asyncio.Task] = {}
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
+        self._asr_active: set[str] = set()
         self._restore_unfinished_tasks()
 
     def _restore_unfinished_tasks(self) -> None:
@@ -269,10 +316,37 @@ class TaskManager:
         task.status = "queued"
         task.stage = "queue"
         task.message = "重新排队（重试）"
+        task.started_at = None
+        task.finished_at = None
         self._save(task)
         self.library.update_track_status(task.track_id, "queued")
         self._tasks[task.task_id] = asyncio.create_task(self._run(task))
         return task
+    async def retry_segment(self, task: TaskRecord) -> TaskRecord:
+        task = self.get_task(task.task_id)
+        if not task.payload:
+            raise ValueError("片段重处理任务缺少原始参数，无法重试")
+        task.status = "queued"
+        task.stage = "queue"
+        task.progress = 0.0
+        task.message = "重新排队（重试）"
+        task.result = None
+        task.started_at = None
+        task.finished_at = None
+        self._save(task)
+        self._tasks[task.task_id] = asyncio.create_task(self._run(task))
+        return task
+
+    def _task_domain(self, task: TaskRecord) -> str:
+        if task.kind == "segment_reprocess":
+            processor_name = str((task.payload or {}).get("processor", "whisper"))
+            return "remote" if processor_name == "gemini" else "local"
+        provider = str((task.config_snapshot or {}).get("asr_provider", "local"))
+        return "local" if provider == "local" else "remote"
+
+    def _semaphore_for(self, task: TaskRecord) -> asyncio.Semaphore:
+        return self._local_sem if self._task_domain(task) == "local" else self._remote_sem
+
 
     async def enqueue_segment_reprocess(
         self,
@@ -299,11 +373,18 @@ class TaskManager:
             await self._run_segment(task)
             return
         try:
-            async with self._semaphore:
-                consecutive_failures = 0
-                while True:
+            consecutive_failures = 0
+            while True:
+                semaphore = self._semaphore_for(task)
+                if semaphore is not None:
+                    await semaphore.acquire()
+                asr_slot_held = semaphore is not None
+                self._asr_active.add(task.task_id)
+                try:
                     task.status = "running"
                     task.stage = "queue"
+                    task.started_at = _now()
+                    task.finished_at = None
                     task.message = (
                         f"任务失败，自动重试 ({consecutive_failures}/{_TASK_MAX_CONSECUTIVE_RETRIES})"
                         if consecutive_failures else None
@@ -313,6 +394,14 @@ class TaskManager:
                     request = self._build_request(task)
                     completed_at_start = task.completed
                     async for event in self.worker.events(task, request):
+                        if event.get("type") in {
+                            "asr_completed", "translation_started",
+                            "task_completed", "task_no_speech", "task_failed",
+                        }:
+                            self._asr_active.discard(task.task_id)
+                            if asr_slot_held and semaphore is not None:
+                                semaphore.release()
+                                asr_slot_held = False
                         self._apply_event(task, event)
                         self._save(task)
                         self._publish(task.task_id, event)
@@ -322,11 +411,8 @@ class TaskManager:
                         task.message = "Worker ended without a final event"
                         self._save(task)
                         self.library.update_track_status(task.track_id, "failed")
-                    # 成功（或检测到无语音）即结束；失败则累计连续失败次数。
                     if task.status in ("completed", "no_speech"):
                         break
-                    # 本轮取得进展（翻译完成批次前进）视为“成功”，重置连续失败计数；
-                    # 只有连续无进展的失败累计到上限才彻底结束。
                     if task.completed is not None and task.completed != completed_at_start:
                         consecutive_failures = 0
                     consecutive_failures += 1
@@ -339,6 +425,10 @@ class TaskManager:
                             f"任务失败，自动重试 ({consecutive_failures}/{_TASK_MAX_CONSECUTIVE_RETRIES})"
                         ),
                     })
+                finally:
+                    if asr_slot_held and semaphore is not None:
+                        semaphore.release()
+                    self._asr_active.discard(task.task_id)
         except asyncio.CancelledError:
             if task.status != "cancelled":
                 task.status = "interrupted"
@@ -346,51 +436,77 @@ class TaskManager:
             raise
         except Exception as exc:
             task.status = "failed"
-            task.stage = "worker"
             task.message = str(exc)
             self._save(task)
             self.library.update_track_status(task.track_id, "failed")
         finally:
-            # 终态后从 _tasks 移除：asyncio.Task 协程帧、config_snapshot、
-            # 失败异常及其 traceback 若滞留字典会随任务数无上界累积（内存泄露）。
             self._tasks.pop(task.task_id, None)
 
     async def _run_segment(self, task: TaskRecord) -> None:
         """片段重处理：后台跑候选生成，完成转 awaiting_review。"""
         if self._segment_runner is None:
             task.status = "failed"
-            task.stage = "segment"
+            task.stage = "failed"
             task.message = "片段重处理运行器未配置"
             self._save(task)
             return
         try:
-            task.status = "running"
-            task.stage = "segment"
-            task.message = None
-            self._save(task)
+            semaphore = self._semaphore_for(task)
+            async with _maybe_acquire(semaphore):
+                self._asr_active.add(task.task_id)
+                task.status = "running"
+                task.stage = "asr"
+                task.started_at = _now()
+                task.message = None
+                self._save(task)
 
-            def report(stage: str, progress: float | None, message: str | None = None) -> None:
-                task.stage = stage
-                if progress is not None:
-                    task.progress = max(0.0, min(1.0, progress))
-                if message is not None:
-                    task.message = message
+                def report(
+                    stage: str,
+                    progress: float | None,
+                    message: str | None = None,
+                    completed: int | None = None,
+                    total: int | None = None,
+                ) -> None:
+                    task.stage = stage
+                    if progress is not None:
+                        task.progress = max(0.0, min(1.0, progress))
+                    if message is not None:
+                        task.message = message
+                    if completed is not None:
+                        task.completed = completed
+                    if total is not None:
+                        task.total = total
+                    self._save(task)
+                    self._publish(task.task_id, {
+                        "type": "segment_progress",
+                        "stage": stage,
+                        "progress": task.progress,
+                        "completed": task.completed,
+                        "total": task.total,
+                        "message": message,
+                    })
+
+                result = await self._segment_runner(task.track_id, task.payload or {}, report)
+                task.result = result
+                task.status = "awaiting_review"
+                task.stage = "review"
+                task.progress = 1.0
+                if task.total is None:
+                    task.completed = 1
+                    task.total = 1
+                else:
+                    task.completed = task.total
+                task.message = "候选已就绪，等待评审"
                 self._save(task)
                 self._publish(task.task_id, {
-                    "type": "segment_progress",
-                    "stage": stage,
-                    "progress": task.progress,
-                    "message": message,
+                    "type": "segment_candidate_ready",
+                    "stage": "review",
+                    "status": "awaiting_review",
+                    "progress": 1.0,
+                    "completed": task.completed,
+                    "total": task.total,
+                    "message": task.message,
                 })
-
-            result = await self._segment_runner(task.track_id, task.payload or {}, report)
-            task.result = result
-            task.status = "awaiting_review"
-            task.stage = "review"
-            task.progress = 1.0
-            task.message = "候选已就绪，等待评审"
-            self._save(task)
-            self._publish(task.task_id, {"type": "segment_candidate_ready", "stage": "review"})
         except asyncio.CancelledError:
             if task.status != "cancelled":
                 task.status = "interrupted"
@@ -402,6 +518,7 @@ class TaskManager:
             task.message = str(exc)
             self._save(task)
         finally:
+            self._asr_active.discard(task.task_id)
             self._tasks.pop(task.task_id, None)
 
     def _build_request(self, task: TaskRecord) -> dict:
@@ -431,6 +548,7 @@ class TaskManager:
         overrides = {
             "asr_provider": snapshot.get("asr_provider", "local"),
             "model": model_name,
+            "asr_chunk_seconds": int(snapshot.get("asr_chunk_seconds", 60)),
             "device": "auto",
             "compute_type": "auto",
             "output_dir": str(output_dir),
@@ -446,6 +564,10 @@ class TaskManager:
             "translation_prompt": translation_prompt,
             "translation_limiter_dir": str(
                 (self.library.root / ".subforge" / "translation-slots").resolve()
+            ),
+            "remote_asr_global_workers": self._remote_concurrency,
+            "remote_asr_limiter_dir": str(
+                (self.library.root / ".subforge" / "remote-asr-slots").resolve()
             ),
         }
         if snapshot.get("scene") == "asmr":
@@ -508,10 +630,31 @@ class TaskManager:
         """候选评审结束后更新任务终态（completed / discarded）。"""
         task = self.get_task(task_id)
         task.status = status
-        task.stage = "review"
+        if status == "completed":
+            task.stage = "complete"
+        elif status == "discarded":
+            task.stage = "discarded"
+        else:
+            task.stage = status
+        task.progress = 1.0
+        if task.total is not None and task.completed is None:
+            task.completed = task.total
+        elif task.total is None:
+            task.completed = 1
+            task.total = 1
+        task.finished_at = _now()
         if message is not None:
             task.message = message
         self._save(task)
+        self._publish(task.task_id, {
+            "type": f"segment_{status}",
+            "stage": task.stage,
+            "status": task.status,
+            "progress": 1.0,
+            "completed": task.completed,
+            "total": task.total,
+            "message": message,
+        })
         return task
 
     async def cancel(self, task_id: str) -> None:
@@ -528,6 +671,43 @@ class TaskManager:
             self.library.update_track_status(task.track_id, "waiting")
         self._publish(task_id, {"type": "task_cancelled", "stage": "cancelled"})
 
+    def summary(self) -> dict:
+        local_running = remote_running = queued = 0
+        for task_id in list(self._asr_active):
+            try:
+                task = self.get_task(task_id)
+            except KeyError:
+                continue
+            if self._task_domain(task) == "local":
+                local_running += 1
+            else:
+                remote_running += 1
+        for task_id in list(self._tasks):
+            try:
+                task = self.get_task(task_id)
+            except KeyError:
+                continue
+            if task.status == "queued":
+                queued += 1
+        return {
+            "local_running": local_running,
+            "local_capacity": self._local_concurrency,
+            "remote_running": remote_running,
+            "remote_capacity": self._remote_concurrency,
+            "queued": queued,
+        }
+
+    _DELETABLE_STATUSES = {"completed", "no_speech", "failed", "cancelled", "discarded"}
+
+    def delete_task(self, task_id: str) -> None:
+        task = self.get_task(task_id)
+        if task.status not in self._DELETABLE_STATUSES:
+            raise ValueError(f"任务状态为 {task.status}，不能删除（终态任务才可删除）")
+        if task.task_id in self._tasks:
+            raise ValueError("任务仍在运行，不能删除")
+        with self.library._db_lock, self.library._db:
+            self.library._db.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
+
     def get_task(self, task_id: str) -> TaskRecord:
         with self.library._db_lock:
             row = self.library._db.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
@@ -538,7 +718,7 @@ class TaskManager:
     @staticmethod
     def _row_to_task(row) -> TaskRecord:
         keys = row.keys()
-        return TaskRecord(
+        task = TaskRecord(
             task_id=row["task_id"], track_id=row["track_id"], status=row["status"],
             stage=row["stage"], progress=row["progress"], completed=row["completed"],
             total=row["total"], message=row["message"],
@@ -547,27 +727,47 @@ class TaskManager:
             payload=json.loads(row["payload_json"]) if "payload_json" in keys and row["payload_json"] else None,
             result=json.loads(row["result_json"]) if "result_json" in keys and row["result_json"] else None,
             created_at=(row["created_at"] if "created_at" in keys else None),
+            started_at=(row["started_at"] if "started_at" in keys else None),
             finished_at=(row["finished_at"] if "finished_at" in keys else None),
         )
+        if task.kind == "segment_reprocess":
+            if task.status == "completed" and task.stage in ("review", "segment"):
+                task.stage = "complete"
+            elif task.status == "discarded" and task.stage in ("review", "segment"):
+                task.stage = "discarded"
+            if task.total is None and task.status in ("completed", "awaiting_review", "discarded"):
+                parts = 1
+                try:
+                    payload = task.payload or {}
+                    start_t = float(payload.get("start_time", 0))
+                    end_t = float(payload.get("end_time", 0))
+                    if end_t > start_t:
+                        chunk_sec = float(payload.get("asr_chunk_seconds") or 60)
+                        parts = max(1, math.ceil((end_t - start_t) / chunk_sec))
+                except Exception:
+                    parts = 1
+                task.total = parts
+                task.completed = parts
+        return task
 
     def list_tasks(self, limit: int | None = None) -> list[TaskRecord]:
         with self.library._db_lock:
             if limit is None:
                 rows = self.library._db.execute(
-                    "SELECT task_id FROM tasks ORDER BY updated_at DESC"
+                    "SELECT * FROM tasks ORDER BY updated_at DESC"
                 ).fetchall()
             else:
                 rows = self.library._db.execute(
-                    "SELECT task_id FROM tasks ORDER BY updated_at DESC LIMIT ?", (int(limit),)
+                    "SELECT * FROM tasks ORDER BY updated_at DESC LIMIT ?", (int(limit),)
                 ).fetchall()
-        return [self.get_task(row["task_id"]) for row in rows]
+        return [self._row_to_task(row) for row in rows]
 
     def latest_for_track(self, track_id: str) -> TaskRecord | None:
         with self.library._db_lock:
             row = self.library._db.execute(
-                "SELECT task_id FROM tasks WHERE track_id=? ORDER BY updated_at DESC LIMIT 1", (track_id,)
+                "SELECT * FROM tasks WHERE track_id=? ORDER BY updated_at DESC LIMIT 1", (track_id,)
             ).fetchone()
-        return self.get_task(row["task_id"]) if row else None
+        return self._row_to_task(row) if row else None
 
     def _save(self, task: TaskRecord) -> None:
         if task.status in {"completed", "no_speech", "failed", "cancelled", "discarded", "awaiting_review"} and task.finished_at is None:
@@ -576,8 +776,8 @@ class TaskManager:
             self.library._db.execute(
                 """INSERT OR REPLACE INTO tasks
                    (task_id,track_id,status,stage,progress,completed,total,message,config_snapshot,updated_at,
-                    kind,payload_json,result_json,created_at,finished_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    kind,payload_json,result_json,created_at,started_at,finished_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     task.task_id, task.track_id, task.status, task.stage, task.progress,
                     task.completed, task.total, task.message,
@@ -585,7 +785,7 @@ class TaskManager:
                     task.kind,
                     json.dumps(task.payload) if task.payload else None,
                     json.dumps(task.result) if task.result else None,
-                    task.created_at, task.finished_at,
+                    task.created_at, task.started_at, task.finished_at,
                 ),
             )
 

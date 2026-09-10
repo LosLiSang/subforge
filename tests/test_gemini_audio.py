@@ -195,7 +195,8 @@ async def test_gemini_adapter_splits_long_segments_by_silence(tmp_path):
     ))
 
     assert len(calls) == 4  # 两段语音各 30s/29.5s，均超过 25s → 各均匀切两块
-    assert [e.text for e in candidate.source_entries] == ["片段1", "片段2", "片段3", "片段4"]
+    assert {e.text for e in candidate.source_entries} == {"片段1", "片段2", "片段3", "片段4"}
+    assert [e.start for e in candidate.source_entries] == sorted(e.start for e in candidate.source_entries)
     # 绝对时间 = clip 起点 + chunk 相对区间；跨静音处不合并，保持语音边界
     assert candidate.source_entries[0].start == 10.0
     assert candidate.source_entries[0].end == 25.0
@@ -410,3 +411,43 @@ async def test_gemini_adapter_merge_failure_keeps_original_text(tmp_path):
         tmp_path / "audio.m4a", 0.0, 2.0, processing_mode="transcribe"
     ))
     assert [entry.text for entry in candidate.source_entries] == ["原样"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_adapter_progress_callback_reports_chunks_and_concurrency(tmp_path):
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"audio")
+
+    def extractor(_request):
+        return ExtractedAudio(clip, 0.0, 50.0, temporary=False)
+
+    reports = []
+
+    def on_progress(ratio, completed=None, total=None, message=None):
+        reports.append({"ratio": ratio, "completed": completed, "total": total, "message": message})
+
+    regions = [(0.0, 25.0), (25.0, 50.0)]
+    profile = GeminiAudioProfile(
+        "id", "G", "google_native", "https://x", "m", "k",
+        default_processing_mode="transcribe", max_segment_seconds=25,
+    )
+    adapter = GeminiAudioAdapter(
+        profile,
+        _FakeTransport('{"segments":[{"start":0,"end":25,"text":"分片"}]}'),
+        extractor=extractor,
+        speech_regions=lambda _p, _d: regions,
+        chunk_cutter=lambda _p, _s, _e: b"chunk",
+        chunk_concurrency=4,
+        progress_callback=on_progress,
+    )
+    await adapter.process(SegmentRequest(
+        tmp_path / "audio.m4a", 0.0, 50.0, processing_mode="transcribe"
+    ))
+
+    assert len(reports) >= 3
+    assert reports[0]["total"] == 2
+    assert reports[0]["completed"] == 0
+    assert "并发" in (reports[0]["message"] or "")
+    assert reports[-1]["completed"] == 2
+    assert reports[-1]["total"] == 2
+    assert reports[-1]["ratio"] == 1.0

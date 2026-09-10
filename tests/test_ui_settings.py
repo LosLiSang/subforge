@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from subforge.ui.settings import UiSettingsStore
 from subforge.ui.picker import FakeFilePicker
 
@@ -101,6 +103,7 @@ def test_ui_settings_persists_last_processing_snapshot(tmp_path):
         "llm_profile_id": "profile-1",
         "asr_profile_id": "",
         "merge_profile_id": "",
+        "asr_chunk_seconds": 60,
     }
 
     store.set_last_processing_snapshot(snapshot)
@@ -143,3 +146,30 @@ def test_fake_picker_returns_selected_server_side_paths(tmp_path):
 
     assert picker.choose_audio() == audio
     assert picker.choose_directory() == library
+
+
+def test_remote_asr_concurrency_setting_roundtrip(tmp_path):
+    """网络 ASR 并发独立于本地 ASR 并发：默认 2、可配置、拒绝非法值。"""
+    store = UiSettingsStore(tmp_path / "ui.json")
+    assert store.get_remote_asr_concurrency() == 2
+    store.set_remote_asr_concurrency(3)
+    assert UiSettingsStore(tmp_path / "ui.json").get_remote_asr_concurrency() == 3
+    with pytest.raises(ValueError):
+        store.set_remote_asr_concurrency(0)
+
+
+def test_default_processing_snapshot_roundtrip(tmp_path):
+    store = UiSettingsStore(tmp_path / "ui.json")
+    assert store.get_default_processing_snapshot() is None
+    snapshot = {
+        "asr_provider": "local",
+        "scene": "normal",
+        "whisper_model": "large-v3",
+        "llm_profile_id": "prof-1",
+        "asr_profile_id": "",
+        "merge_profile_id": "",
+        "asr_chunk_seconds": 90,
+    }
+    store.set_default_processing_snapshot(snapshot)
+    loaded = UiSettingsStore(tmp_path / "ui.json").get_default_processing_snapshot()
+    assert loaded == snapshot

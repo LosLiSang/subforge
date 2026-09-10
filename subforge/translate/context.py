@@ -172,32 +172,56 @@ async def translate_all(
 
         semantic_attempts = 3
 
-        async def _request_batch(target_batch: list[SubtitleEntry]) -> tuple[str, list[str]]:
-            user_msg = _build_user_message(target_batch, prev_entries, next_entries)
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT.format(
-                    source_lang=config.source_lang,
-                    target_lang=config.target_lang,
-                )},
-                {"role": "user", "content": user_msg},
-            ]
+        async def _request_batch(
+            target_batch: list[SubtitleEntry],
+            allow_strip_context: bool = True,
+        ) -> tuple[str, list[str]]:
+            system_content = SYSTEM_PROMPT.format(
+                source_lang=config.source_lang,
+                target_lang=config.target_lang,
+            )
+            custom_prompt = getattr(config, "translation_prompt", "") or ""
+            if custom_prompt.strip():
+                system_content += f"\n\nAdditional instructions:\n{custom_prompt.strip()}"
+
             response = ""
             translations: list[str] = []
+            last_err: Exception | None = None
             for attempt in range(1, semantic_attempts + 1):
+                use_context = not (attempt > 1 and allow_strip_context)
+                curr_prev = prev_entries if use_context else []
+                curr_next = next_entries if use_context else []
+                user_msg = _build_user_message(target_batch, curr_prev, curr_next)
+                messages = [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": user_msg},
+                ]
                 if attempt == 1:
-                    response = await llm_translate_fn(messages, config)
+                    try:
+                        response = await llm_translate_fn(messages, config)
+                    except Exception as e:
+                        last_err = e
+                        response = ""
                 else:
                     wait = 2 ** (attempt - 2)
+                    context_hint = " (stripping context)" if not use_context and (prev_entries or next_entries) else ""
                     logger.warning(
-                        "Batch %d/%d returned incomplete translations; semantic retry %d/%d in %ds",
-                        batch_idx + 1, len(batches), attempt, semantic_attempts, wait,
+                        "Batch %d/%d failed or returned incomplete translations; semantic retry %d/%d%s in %ds",
+                        batch_idx + 1, len(batches), attempt, semantic_attempts, context_hint, wait,
                     )
                     await asyncio.sleep(wait)
                     async with semantic_retry_lock:
-                        response = await llm_translate_fn(messages, config)
+                        try:
+                            response = await llm_translate_fn(messages, config)
+                        except Exception as e:
+                            last_err = e
+                            response = ""
                 translations = _parse_translations(response, target_batch)
                 if response.strip() and all(t.strip() for t in translations):
+                    last_err = None
                     break
+            if last_err is not None and (not response.strip() or not all(t.strip() for t in translations)):
+                raise last_err
             return response, translations
 
         response, translations = await _request_batch(batch)

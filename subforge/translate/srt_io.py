@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import copy
 import re
 import threading
@@ -53,8 +55,10 @@ def write_srt(entries: list[SubtitleEntry], path: Path) -> None:
         start_str = _format_timestamp(entry.start)
         end_str = _format_timestamp(entry.end)
         lines.append(f"{start_str} --> {end_str}")
-        # 空文本条目写单个空格：纯空行会被 SRT 块解析吞掉，无法往返
-        lines.append(entry.text if entry.text.strip() else " ")
+        # 空文本条目写单个空格；清洗内部多余的双换行，防止打断 SRT 块分隔符
+        raw_text = entry.text.strip()
+        cleaned_text = re.sub(r"\n\s*\n+", "\n", raw_text) if raw_text else " "
+        lines.append(cleaned_text)
         lines.append("")  # blank line separator
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -80,15 +84,20 @@ def read_srt(path: Path) -> list[SubtitleEntry]:
         lines = block.split("\n")
         while lines and not lines[-1]:
             lines.pop()
-        if len(lines) < 3:
+        if len(lines) < 2:
             continue
-        index = int(lines[0])
-        timing = lines[1]
-        text = "\n".join(lines[2:])
-        start_str, end_str = timing.split(" --> ")
-        start = _parse_timestamp(start_str.strip())
-        end = _parse_timestamp(end_str.strip())
-        entries.append(SubtitleEntry(index=index, start=start, end=end, text=text))
+        try:
+            index = int(lines[0].strip())
+            timing = lines[1].strip()
+            start_str, end_str = timing.split(" --> ")
+            start = _parse_timestamp(start_str.strip())
+            end = _parse_timestamp(end_str.strip())
+            text = "\n".join(lines[2:])
+            entries.append(SubtitleEntry(index=index, start=start, end=end, text=text))
+        except (ValueError, IndexError):
+            if entries and block.strip():
+                entries[-1] = replace(entries[-1], text=f"{entries[-1].text}\n{block.strip()}")
+            continue
     with _srt_cache_lock:
         _srt_cache[key] = entries
     return copy.deepcopy(entries)

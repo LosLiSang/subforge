@@ -187,6 +187,8 @@ class LibraryStore:
         self._db = connection
         self._db.row_factory = sqlite3.Row
         self._db_lock = threading.RLock()
+        self._item_cache: dict[str, tuple[int, LibraryItem]] = {}
+        self._creators_cache: tuple[int, list[Creator]] | None = None
 
     @classmethod
     def initialize(cls, root: Path) -> "LibraryStore":
@@ -277,6 +279,7 @@ class LibraryStore:
                 payload_json TEXT,
                 result_json TEXT,
                 created_at TEXT,
+                started_at TEXT,
                 finished_at TEXT
             );
             CREATE TABLE IF NOT EXISTS selection_history (
@@ -298,6 +301,7 @@ class LibraryStore:
             "payload_json": "TEXT",
             "result_json": "TEXT",
             "created_at": "TEXT",
+            "started_at": "TEXT",
             "finished_at": "TEXT",
         }
         with self._db_lock:
@@ -360,6 +364,14 @@ class LibraryStore:
     def list_creators(self) -> list[Creator]:
         if not self._creators_path.exists():
             return []
+        try:
+            mtime_ns = self._creators_path.stat().st_mtime_ns
+        except OSError:
+            mtime_ns = 0
+        if getattr(self, "_creators_cache", None) is not None:
+            cached_mtime, cached_creators = self._creators_cache
+            if cached_mtime == mtime_ns:
+                return list(cached_creators)
         data = json.loads(self._creators_path.read_text(encoding="utf-8"))
         creators = [Creator(
             creator_id=str(entry["creator_id"]),
@@ -369,6 +381,8 @@ class LibraryStore:
         ) for entry in data.get("creators", [])]
         creators.sort(key=lambda creator: (creator.name.casefold(), creator.kind.value, creator.creator_id))
         creators.sort(key=lambda creator: creator.last_used_at or "", reverse=True)
+        if mtime_ns > 0:
+            self._creators_cache = (mtime_ns, list(creators))
         return creators
 
     def create_creator(self, name: str, kind: CreatorKind) -> Creator:
@@ -491,6 +505,7 @@ class LibraryStore:
         return item
 
     def _write_creators(self, creators: list[Creator]) -> None:
+        self._creators_cache = None
         _atomic_json(self._creators_path, {
             "creators": [
                 {
@@ -570,9 +585,18 @@ class LibraryStore:
         progress_callback: ProgressCallback | None = None,
     ) -> ImportResult:
         source = request.source.resolve()
-        self._validate_request(request, source)
+        self._validate_request(request, source, allow_video=True)
+        conversion_dir: Path | None = None
+        if source.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
+            ffmpeg = shutil.which("ffmpeg")
+            if ffmpeg is None:
+                raise ValueError("ffmpeg is required to import video files")
+            conversion_dir = Path(tempfile.mkdtemp(prefix="subforge-video-import-"))
+            converted = conversion_dir / f"{uuid4().hex}.m4a"
+            self._convert_video_to_m4a(source, converted)
+            source = converted
         import_id = uuid4().hex
-        archive_name = _safe_name(request.archive_name or source.name, source.name)
+        archive_name = _safe_name(request.archive_name or (request.source.stem + '.m4a' if request.source.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS else source.name), source.name)
         incoming = self.root / ".incoming" / import_id
         incoming_media = incoming / "media"
         incoming_media.mkdir(parents=True, exist_ok=False)
@@ -639,6 +663,10 @@ class LibraryStore:
         except Exception:
             # Keep interrupted imports inspectable; retry starts with a new import id.
             raise
+
+        finally:
+            if conversion_dir is not None:
+                shutil.rmtree(conversion_dir, ignore_errors=True)
 
     def scan_rj_folder(self, folder: Path) -> FolderScanResult:
         root = folder.resolve()
@@ -964,10 +992,10 @@ class LibraryStore:
         self._write_item(item_dir, item)
         self._index_item(item, item_dir / "metadata.json")
 
-    def _validate_request(self, request: ImportRequest, source: Path) -> None:
+    def _validate_request(self, request: ImportRequest, source: Path, *, allow_video: bool = False) -> None:
         if not source.is_file():
             raise ValueError("source must be an existing file")
-        if source.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS:
+        if source.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS and not (allow_video and source.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS):
             raise ValueError("source must be a supported audio file")
         if not request.title.strip():
             raise ValueError("title is required")
@@ -1045,6 +1073,15 @@ class LibraryStore:
         _atomic_json(item_dir / "metadata.json", data)
 
     def _read_item(self, metadata_path: Path) -> LibraryItem:
+        try:
+            mtime_ns = metadata_path.stat().st_mtime_ns
+        except OSError:
+            mtime_ns = 0
+        path_str = str(metadata_path)
+        if mtime_ns > 0 and hasattr(self, "_item_cache") and path_str in self._item_cache:
+            cached_mtime, cached_item = self._item_cache[path_str]
+            if cached_mtime == mtime_ns:
+                return cached_item
         data = json.loads(metadata_path.read_text(encoding="utf-8"))
         if int(data["schema_version"]) != ITEM_SCHEMA_VERSION:
             raise ValueError("unsupported item schema")
@@ -1069,6 +1106,9 @@ class LibraryStore:
             tracks=[Track(**track) for track in data.get("tracks", [])],
             directory=directory,
         )
+        if mtime_ns > 0 and hasattr(self, "_item_cache"):
+            self._item_cache[path_str] = (mtime_ns, item)
+        return item
 
     def _index_item(self, item: LibraryItem, metadata_path: Path) -> None:
         with self._db_lock, self._db:

@@ -392,3 +392,40 @@ class TestResumeHealsBlankCachedBatches:
         assert mock_translate.call_count >= 1
         assert result[0].text == "新1"
         assert result[1].text == "新2"
+
+    async def test_fallback_strips_context_on_failure(self, config):
+        """当带上下文请求失败（如内容安全审查拦截）时，重试应剥离上下文仅保留当前批次。"""
+        entries = make_entries(4)
+        config.batch_size = 2
+        config.context_size = 2
+
+        calls_messages = []
+
+        async def mock_translate(messages, cfg):
+            calls_messages.append(messages)
+            # 第一次调用（带有上下文）抛出错误（模拟安全审查拦截）
+            if len(calls_messages) == 1:
+                from subforge.translate.llm_client import LLMError
+                raise LLMError("Blocked by content policy")
+            # 第二次调用（剥离上下文）成功
+            return "[1] 译1\n[2] 译2"
+
+        result = await translate_all(entries[:2], config, mock_translate)
+        assert len(calls_messages) == 2
+        assert result[0].text == "译1"
+        assert result[1].text == "译2"
+
+    async def test_translation_prompt_included_in_system_prompt(self, config):
+        """配置中的 translation_prompt 必须追加到 system prompt 中。"""
+        config.translation_prompt = "请使用地道中文，敏感内容委婉化处理"
+        entries = make_entries(2)
+        calls_messages = []
+
+        async def mock_translate(messages, cfg):
+            calls_messages.append(messages)
+            return "[1] 译1\n[2] 译2"
+
+        await translate_all(entries, config, mock_translate)
+        assert len(calls_messages) == 1
+        system_content = calls_messages[0][0]["content"]
+        assert "请使用地道中文，敏感内容委婉化处理" in system_content

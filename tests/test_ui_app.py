@@ -2636,3 +2636,93 @@ def test_task_center_can_delete_terminal_tasks(tmp_path):
     # 待评审任务删除被拒（须先接受/放弃候选）
     response = client.post("/tasks/del-2/delete", headers=headers)
     assert response.status_code == 409
+
+
+def test_htmx_and_full_page_shell_architecture(tmp_path):
+    """HTMX 请求返回无外壳 partial；完整请求返回含 sidebar、player-bar(hx-preserve)与 vendor 库的完整外壳。"""
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+
+    full_doc = client.get("/downloads", headers={"sec-fetch-dest": "document"}).text
+    assert 'class="sidebar"' in full_doc
+    assert 'id="player-bar"' in full_doc
+    assert 'hx-preserve="true"' in full_doc
+    assert '/static/vendor/htmx.min.js' in full_doc
+    assert '/static/vendor/alpine.min.js' in full_doc
+    assert '<main id="main-content" class="frame-main"' in full_doc
+    assert 'hx-boost="true"' in full_doc
+    assert '任务中心' in full_doc
+
+    htmx_partial = client.get("/downloads", headers={"hx-request": "true"}).text
+    assert '<main id="main-content" class="frame-main"' in htmx_partial
+    assert '任务中心' in htmx_partial
+    assert 'class="sidebar"' not in htmx_partial
+    assert 'id="player-bar"' not in htmx_partial
+
+    # 3. 历史回退（HX-History-Restore-Request）：即使带有 hx-request，也必须返回完整外壳以恢复 DOM
+    restore_resp = client.get("/downloads", headers={"hx-request": "true", "hx-history-restore-request": "true"})
+    assert 'class="sidebar"' in restore_resp.text
+    assert 'id="player-bar"' in restore_resp.text
+    assert 'HX-History-Restore-Request' in restore_resp.headers.get("vary", "")
+    assert 'no-cache' in restore_resp.headers.get("cache-control", "")
+
+
+def test_task_center_pagination_and_tab_switching(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "page_test.m4a"
+    audio.write_bytes(b"audio")
+    store = LibraryStore.initialize(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="PageTaskWork", author="Author"
+    ))
+    with store._db_lock, store._db:
+        for i in range(1, 16):
+            store._db.execute(
+                """INSERT INTO tasks(task_id,track_id,status,stage,progress,config_snapshot,updated_at,kind,message)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (f"task-page-{i:02d}", imported.track_id, "completed", "complete", 1.0, "{}",
+                 f"2026-09-13T10:{i:02d}:00Z", "full_process", "完成"),
+            )
+    store.close()
+    client, headers = _authenticated_client(tmp_path, library=library)
+
+    # 1. 默认进入第 1 页（每页 10 条）
+    page1 = client.get("/downloads").text
+    assert "第 1 / 2 页 · 共 15 个任务" in page1
+    assert 'data-task-id="task-page-15"' in page1  # 最新一条在第 1 页
+    assert 'data-task-id="task-page-06"' in page1
+    assert 'data-task-id="task-page-05"' not in page1  # 超过 10 条的在第 2 页
+    assert "tab=subtitles" in page1
+    assert "下一页" in page1
+
+    # 2. 请求第 2 页
+    page2 = client.get("/downloads?page=2").text
+    assert "第 2 / 2 页 · 共 15 个任务" in page2
+    assert 'data-task-id="task-page-05"' in page2
+    assert 'data-task-id="task-page-01"' in page2
+    assert 'data-task-id="task-page-15"' not in page2
+    assert "上一页" in page2
+
+    # 3. 指定 limit=5
+    page_limit5 = client.get("/downloads?limit=5").text
+    assert "第 1 / 3 页 · 共 15 个任务" in page_limit5
+    assert 'data-task-id="task-page-15"' in page_limit5
+    assert 'data-task-id="task-page-11"' in page_limit5
+    assert 'data-task-id="task-page-10"' not in page_limit5
+
+    # 4. 指定 tab=downloads 激活下载面板
+    tab_downloads = client.get("/downloads?tab=downloads").text
+    assert ':class="{ \'active\': currentTab === \'downloads\' }"' in tab_downloads
+    assert 'class="tab-panel active"' in tab_downloads
+    assert '媒体下载' in tab_downloads
+
+
+def test_app_shell_sidebar_fixed_layout_css():
+    """验证全局 app.css 保证了左侧导航栏独立于主内容滚动，防止主题色跑到最下面。"""
+    from pathlib import Path
+    css = Path("subforge/ui/static/app.css").read_text(encoding="utf-8")
+    assert "html{height:100%;overflow:hidden}" in css
+    assert "body{display:flex;flex-direction:row;height:100%;min-height:0;overflow:hidden;box-sizing:border-box;padding-bottom:0}" in css
+    assert ".shell{display:flex;flex:1;min-height:0;height:100%;width:100%;overflow:hidden}" in css
+    assert ".sidebar{width:220px;height:100%;box-sizing:border-box;flex:none;display:flex;flex-direction:column;gap:18px;padding:16px 12px;background:#0e1420;border-right:1px solid var(--line);overflow-y:auto}" in css
+    assert "#content-frame,#main-content{flex:1;border:none;min-height:0;height:100%;overflow-y:auto;overflow-x:hidden;box-sizing:border-box;background:transparent}" in css

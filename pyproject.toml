@@ -17,6 +17,8 @@ dependencies = [
     "starlette>=0.46",
     "uvicorn>=0.34",
     "jinja2>=3.1",
+    "rich>=13.0",
+    "typer>=0.25.1",
 ]
 
 [project.urls]
@@ -43,6 +45,7 @@ packages = ["subforge"]
 artifacts = [
     "subforge/ui/templates/*.html",
     "subforge/ui/static/*",
+    "subforge/ui/static/vendor/*",
 ]
 
 [tool.pytest.ini_options]

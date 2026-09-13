@@ -8,6 +8,8 @@ subforge ui
 
 Library 是 SubForge 当前打开的本地归档根目录：文件系统资产与每个 Item 的 `metadata.json` 是事实来源，SQLite 仅作可删除重建的索引（见 [ADR-0002](adr/0002-library-filesystem-authority.md)）。一次只打开一个 Library。
 
+![SubForge 作品库首页](assets/images/readme/library.png)
+
 ## 导入
 
 - **单媒体导入**：选择音频或视频文件；音频复制进 Library，视频提取 M4A AAC 后校验入库
@@ -26,11 +28,15 @@ Library 是 SubForge 当前打开的本地归档根目录：文件系统资产�
 
 作品页可以一键处理未完成音轨、自定义处理（继续 / 重新翻译 / 从头处理）、重命名、软删除。
 
+![SubForge 作品详情页](assets/images/readme/detail.png)
+
 ## 播放器
 
 - 双语 / 仅原文 / 仅译文 / 关闭四种字幕模式
 - 全部字幕列表：勾选连续多条可直接发起[片段重处理](segment-reprocess.md)
 - 悬浮歌词、全局播放栏、自动连播下一 Track
+
+![SubForge 双语播放器](assets/images/readme/player.png)
 
 ## 任务中心
 

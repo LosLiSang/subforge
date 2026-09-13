@@ -6,18 +6,19 @@
   </div>
 </div>
 
+<div x-data="{ currentTab: 'models' }">
 <nav class="tab-bar" role="tablist" aria-label="设置分区">
-  <button type="button" class="tab active" data-tab="models" role="tab" aria-selected="true">模型</button>
-  <button type="button" class="tab" data-tab="network" role="tab" aria-selected="false">网络与密钥</button>
-  <button type="button" class="tab" data-tab="concurrency" role="tab" aria-selected="false">处理能力</button>
-  <button type="button" class="tab" data-tab="translation" role="tab" aria-selected="false">翻译</button>
-  <button type="button" class="tab" data-tab="processing" role="tab" aria-selected="false">默认处理</button>
-  <button type="button" class="tab" data-tab="audio-models" role="tab" aria-selected="false">音频模型</button>
+  <button type="button" class="tab active" :class="{ 'active': currentTab === 'models' }" @click="currentTab = 'models'" data-tab="models" role="tab" :aria-selected="currentTab === 'models'">模型</button>
+  <button type="button" class="tab" :class="{ 'active': currentTab === 'network' }" @click="currentTab = 'network'" data-tab="network" role="tab" :aria-selected="currentTab === 'network'">网络与密钥</button>
+  <button type="button" class="tab" :class="{ 'active': currentTab === 'concurrency' }" @click="currentTab = 'concurrency'" data-tab="concurrency" role="tab" :aria-selected="currentTab === 'concurrency'">处理能力</button>
+  <button type="button" class="tab" :class="{ 'active': currentTab === 'translation' }" @click="currentTab = 'translation'" data-tab="translation" role="tab" :aria-selected="currentTab === 'translation'">翻译</button>
+  <button type="button" class="tab" :class="{ 'active': currentTab === 'processing' }" @click="currentTab = 'processing'" data-tab="processing" role="tab" :aria-selected="currentTab === 'processing'">默认处理</button>
+  <button type="button" class="tab" :class="{ 'active': currentTab === 'audio-models' }" @click="currentTab = 'audio-models'" data-tab="audio-models" role="tab" :aria-selected="currentTab === 'audio-models'">音频模型</button>
 </nav>
 
 <form method="post" action="/settings" data-secure class="settings-dashboard">
 
-  <section id="settings-models" class="dash-section tab-panel active" data-tab-panel="models">
+  <section id="settings-models" class="dash-section tab-panel active" :class="{ 'active': currentTab === 'models' }" x-show="currentTab === 'models'" data-tab-panel="models">
     <div class="field-list">
       <div class="field">
         <div class="field-label">模型缓存/下载目录</div>
@@ -51,7 +52,7 @@
     </div>
   </section>
 
-  <section id="settings-network" class="dash-section tab-panel" data-tab-panel="network">
+  <section id="settings-network" class="dash-section tab-panel" :class="{ 'active': currentTab === 'network' }" x-show="currentTab === 'network'" data-tab-panel="network">
     <div class="field-list">
       <div class="field">
         <div class="field-label deepgram-key-label">Deepgram API Key <span class="badge {{ 'ok' if deepgram_key_configured else 'badge-none' }}" data-deepgram-status>{{ deepgram_key_masked if deepgram_key_configured else '未配置' }}</span>{% if deepgram_key_deletable %}<button type="button" class="key-delete-x" data-delete-deepgram aria-label="删除 Deepgram API Key">×</button>{% endif %}</div>
@@ -66,7 +67,7 @@
     </div>
   </section>
 
-  <section id="settings-concurrency" class="dash-section tab-panel" data-tab-panel="concurrency">
+  <section id="settings-concurrency" class="dash-section tab-panel" :class="{ 'active': currentTab === 'concurrency' }" x-show="currentTab === 'concurrency'" data-tab-panel="concurrency">
     <div class="field-list">
       <div class="field">
         <div class="field-label">同时加载 ASR 模型数</div>
@@ -86,7 +87,7 @@
     </div>
   </section>
 
-  <section id="settings-translation" class="dash-section tab-panel" data-tab-panel="translation">
+  <section id="settings-translation" class="dash-section tab-panel" :class="{ 'active': currentTab === 'translation' }" x-show="currentTab === 'translation'" data-tab-panel="translation">
     <div class="field-list">
       <div class="field">
         <div class="field-label">自定义翻译提示词</div>
@@ -96,7 +97,7 @@
     </div>
   </section>
 
-  <section id="settings-processing" class="dash-section tab-panel" data-tab-panel="processing">
+  <section id="settings-processing" class="dash-section tab-panel" :class="{ 'active': currentTab === 'processing' }" x-show="currentTab === 'processing'" data-tab-panel="processing">
     <div class="field-list">
       <div class="field">
         <div class="field-label">默认 ASR 引擎</div>
@@ -163,7 +164,7 @@
     <button class="primary">保存设置</button>
   </div>
 </form>
-  <section id="settings-audio-models" class="dash-section tab-panel" data-tab-panel="audio-models">
+  <section id="settings-audio-models" class="dash-section tab-panel" :class="{ 'active': currentTab === 'audio-models' }" x-show="currentTab === 'audio-models'" data-tab-panel="audio-models">
     <div class="section-heading"><div><h2>音频模型</h2><p>带「转写」能力的模型可被主流程与片段重处理选中；长音频按单次上限自动分片，再由合并模型做文本层校对。AI Pro / Antigravity 订阅不等于 API 配额。</p></div></div>
     {% if audio_profiles %}<div class="profile-list">
     {% for profile in audio_profiles %}
@@ -215,5 +216,6 @@
       <div class="dash-actions"><button type="submit" class="primary">保存音频模型配置</button></div>
     </form>
   </section>
+</div>
 
 {% endblock %}

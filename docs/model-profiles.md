@@ -2,6 +2,8 @@
 
 SubForge 用**一份统一的模型 Profile** 承担三类能力，靠能力标记区分，不再把 Gemini 单独归为一类：
 
+![SubForge 统一模型配置](assets/images/readme/model-profiles.png)
+
 | 能力 | 含义 |
 |------|------|
 | `transcribe` | 音频 → 文本，可作为 ASR 模型 |
@@ -19,7 +21,7 @@ SubForge 用**一份统一的模型 Profile** 承担三类能力，靠能力标�
 
 ??? example "适合当 ASR 的配置示例"
 
-    - 名称：`raspb`（内网网关）
+    - 名称：`GeminiAudio`（示例网关）
     - 协议：`openai_compatible`
     - 模型：`gemini-3.8-flash-high`
     - 能力：转写 + 翻译

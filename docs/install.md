@@ -11,7 +11,7 @@
 === "从源码运行"
 
     ```bash
-    git clone https://github.com/LosLiSang/subforge.git
+    git clone <repository-url>
     cd subforge
     uv sync
     uv run subforge --help
@@ -20,7 +20,9 @@
 === "安装为全局命令"
 
     ```bash
-    uv tool install git+https://github.com/LosLiSang/subforge.git
+    uv tool install .
+    # 或通过 git 仓库安装：
+    # uv tool install git+<repository-url>
     subforge --help
     ```
 
@@ -89,4 +91,3 @@ uv run mkdocs build --strict  # 构建到 site/（已 gitignore）
 
 推送到 `main` 且改动涉及 `docs/**`、`mkdocs.yml` 等时会自动构建部署
 （`.github/workflows/docs.yml`，GitHub Pages 部署源需选 **GitHub Actions**）。
-站点地址：<https://loslisang.github.io/subforge/>

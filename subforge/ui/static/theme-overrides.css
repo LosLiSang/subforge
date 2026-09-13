@@ -101,7 +101,7 @@ button.primary:hover,
 .transcript-row.active{background:var(--glass-accent-soft);border-color:var(--glass-accent)}
 .status-bar-track{background:var(--glass-accent-soft)}
 
-.appearance-controls{margin-top:auto;display:grid;gap:8px}
+.appearance-controls{margin-top:auto;display:grid;gap:8px;flex-shrink:0}
 .theme-toggle{width:100%;padding:8px 10px;font-size:.78rem;text-align:left;white-space:nowrap}
 .accent-picker{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;padding:7px;border:1px solid var(--glass-line-strong);border-radius:9px;background:var(--glass-panel)}
 .accent-picker button{width:100%;aspect-ratio:1;padding:0;border:2px solid transparent;border-radius:99px;background:var(--swatch);min-width:0;box-shadow:none}

@@ -178,7 +178,7 @@
     bar.innerHTML = `
       <div class="player-bar-row">
         <div class="player-bar-cover">${coverUrl ? `<img src="${coverUrl}" alt="" onerror="this.hidden=true">` : ''}</div>
-        <a class="player-bar-title" href="/tracks/${st.trackId}/play" target="content-frame" title="${safeTitle}">${safeTitle}</a>
+        <a class="player-bar-title" href="/tracks/${st.trackId}/play" title="${safeTitle}">${safeTitle}</a>
         <div class="player-bar-progress-wrap"><input type="range" class="player-bar-seek" data-role="seek" min="0" max="${st.duration || 0}" step="0.1" value="${st.currentTime || 0}" aria-label="播放进度"><span class="player-bar-time" data-role="time">${fmtT(st.currentTime)}</span></div>
         <button type="button" class="ghost small player-bar-toggle" data-role="toggle" aria-label="播放/暂停"><svg class="ic-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v13.72a1 1 0 0 0 1.52.86l11-6.86a1 1 0 0 0 0-1.72l-11-6.86A1 1 0 0 0 8 5.14z"/></svg><svg class="ic-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
         <label class="player-bar-volume" title="音量"><span aria-hidden="true">🔊</span><input type="range" data-role="volume" min="0" max="2" step="0.01" value="${volume}" aria-label="音量，最高 200%"><output data-role="volume-value">${Math.round(volume * 100)}%</output></label>

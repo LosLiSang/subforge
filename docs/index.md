@@ -6,6 +6,8 @@
 Audio / Video → ASR → Timeline Fix → LLM Translate → .srt
 ```
 
+![SubForge 作品库界面预览](assets/images/readme/library.png)
+
 SubForge 以 ASMR、低语和长音频的批量处理为核心场景。项目开源公开（MIT），但以个人使用为先。
 
 ---
@@ -29,7 +31,7 @@ SubForge 以 ASMR、低语和长音频的批量处理为核心场景。项目开
 ## 快速开始
 
 ```bash
-git clone https://github.com/LosLiSang/subforge.git
+git clone <repository-url>
 cd subforge
 uv sync
 uv run subforge --help

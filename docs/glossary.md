@@ -1,6 +1,6 @@
 # 术语表
 
-唯一事实来源是仓库根目录的 [`CONTEXT.md`](https://github.com/LosLiSang/subforge/blob/main/CONTEXT.md)，本页是文档用语的速查。**避免使用每条下的 _Avoid_ 项。**
+唯一事实来源是仓库根目录的 `CONTEXT.md`，本页是文档用语的速查。**避免使用每条下的 _Avoid_ 项。**
 
 ## 领域对象
 

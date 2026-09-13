@@ -187,15 +187,22 @@ class UiRuntime:
         session_id = request.cookies.get("subforge_session")
         if session_id:
             csrf = self.sessions.get(session_id)
-        # iframe 外壳：内页请求（iframe 加载）只渲染内容块，不渲染顶层外壳
-        is_frame = request.headers.get("sec-fetch-dest") == "iframe"
+        # 支持 HTMX 无刷新切换或传统 iframe/测试模拟。
+        # 注意：HX-History-Restore-Request（历史回退/前进且缓存未命中）必须返回完整外壳以恢复顶层 DOM
+        is_history_restore = request.headers.get("hx-history-restore-request") == "true"
+        is_htmx = (request.headers.get("hx-request") == "true") and not is_history_restore
+        is_frame = not is_history_restore and (is_htmx or (request.headers.get("sec-fetch-dest") == "iframe"))
         html = self.templates.get_template(name).render(
             request=request,
             csrf_token=csrf,
             is_frame=is_frame,
+            is_htmx=is_htmx,
             **context,
         )
-        return HTMLResponse(html)
+        response = HTMLResponse(html)
+        response.headers["Vary"] = "HX-Request, HX-History-Restore-Request, Sec-Fetch-Dest"
+        response.headers["Cache-Control"] = "no-cache, private"
+        return response
 
 
 def _make_segment_runner(deps: UiDependencies, runtime: "UiRuntime"):
@@ -1037,24 +1044,39 @@ def create_app(deps: UiDependencies) -> Starlette:
                 and import_task.get("auto_process_status") == "pending"
             ):
                 await runtime.ensure_auto_processing(import_task_id)
-        processing_tasks = []
+
+        active_tab = request.query_params.get("tab") or "subtitles"
+        if active_tab not in {"subtitles", "downloads", "models"}:
+            active_tab = "subtitles"
+
+        try:
+            requested_page = int(request.query_params.get("page", "1"))
+        except ValueError:
+            requested_page = 1
+        limit_param = request.query_params.get("limit") or request.query_params.get("page_size")
+        try:
+            page_size = max(1, min(100, int(limit_param))) if limit_param else 10
+        except ValueError:
+            page_size = 10
+
+        all_processing_tasks = []
         if library is not None and runtime.tasks is not None:
             queued_position = 0
-            for task in reversed(runtime.tasks.list_tasks(limit=200)):
+            for task in reversed(runtime.tasks.list_tasks(limit=1000)):
                 if task.status == "queued":
                     queued_position += 1
                 try:
                     item, track = library.get_track(task.track_id)
                 except KeyError:
                     continue
-                processing_tasks.append({
+                all_processing_tasks.append({
                     "task": task,
                     "item": item,
                     "track": track,
                     "queue_position": queued_position if task.status == "queued" else None,
                     "context": _task_display_context(library, deps, task),
                 })
-            processing_tasks.reverse()
+            all_processing_tasks.reverse()
             worker_summary = runtime.tasks.summary()
         else:
             worker_summary = {
@@ -1062,6 +1084,56 @@ def create_app(deps: UiDependencies) -> Starlette:
                 "remote_running": 0, "remote_capacity": deps.settings.get_remote_asr_concurrency(),
                 "queued": 0,
             }
+
+        all_import_tasks = list(reversed(list(runtime.imports.values())))
+
+        def build_task_pagination(items: list, tab_name: str):
+            total = len(items)
+            cur_page = requested_page if active_tab == tab_name else 1
+            p_count = max(1, (total + page_size - 1) // page_size)
+            cur_page = min(max(1, cur_page), p_count)
+            start = (cur_page - 1) * page_size
+            page_items = items[start : start + page_size]
+
+            def make_page_url(p: int) -> str:
+                params: list[tuple[str, str]] = [("tab", tab_name)]
+                if limit_param:
+                    params.append(("limit", str(page_size)))
+                if p > 1:
+                    params.append(("page", str(p)))
+                query = urlencode(params)
+                return f"/downloads?{query}"
+
+            visible = sorted({
+                1, p_count,
+                *range(max(1, cur_page - 2), min(p_count, cur_page + 2) + 1),
+            })
+            pag_items: list[dict | None] = []
+            prev_n = 0
+            for num in visible:
+                if prev_n and num - prev_n > 1:
+                    pag_items.append(None)
+                pag_items.append({
+                    "number": num,
+                    "url": make_page_url(num),
+                    "current": num == cur_page,
+                })
+                prev_n = num
+
+            return {
+                "items": page_items,
+                "total": total,
+                "current_page": cur_page,
+                "page_count": p_count,
+                "page_size": page_size,
+                "pagination_items": pag_items,
+                "previous_page_url": make_page_url(cur_page - 1) if cur_page > 1 else None,
+                "next_page_url": make_page_url(cur_page + 1) if cur_page < p_count else None,
+            }
+
+        subtitles_pag = build_task_pagination(all_processing_tasks, "subtitles")
+        downloads_pag = build_task_pagination(all_import_tasks, "downloads")
+
         models_dir = deps.settings.get_models_dir()
         model_names = ["tiny", "base", "small", "medium", "large-v3"]
         cached = cached_models(models_dir, model_names)
@@ -1081,9 +1153,12 @@ def create_app(deps: UiDependencies) -> Starlette:
             "downloads.html", request,
             models=models, models_dir=models_dir,
             proxy_url=deps.settings.get_proxy_url(),
-            processing_tasks=processing_tasks,
-            import_tasks=list(reversed(list(runtime.imports.values()))),
+            processing_tasks=subtitles_pag["items"],
+            subtitles_pagination=subtitles_pag,
+            import_tasks=downloads_pag["items"],
+            downloads_pagination=downloads_pag,
             worker_summary=worker_summary,
+            active_tab=active_tab,
         )
 
     async def about_page(request: Request) -> Response:

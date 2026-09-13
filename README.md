@@ -73,6 +73,19 @@ subforge ui
 - **双语播放器**：仅原文、仅译文、双语、关闭四种模式，支持悬浮歌词和全局播放栏；
 - **任务中心**：统一查看排队、进度、限流重试、取消、失败原因和候选结果。
 
+### 离线批处理 CLI (Typer + Rich)
+
+```bash
+subforge audio.mp3
+```
+
+- **免入库原地处理**：直接面向音频/视频文件或目录，在同级目录生成中日双语 SRT；
+- **Web Profile 复用**：支持 `--profile <name>` 直接复用 Web 端保存的模型、端点、Key 与提示词；
+- **仅重译模式**：`--mode retranslate` 保留已有日文字幕，仅重置并重新翻译中文字幕，换模型免跑 ASR；
+- **计划预检**：`--dry-run` 预览文件识别/翻译/跳过状态；
+- **Rich 多任务进度**：终端 Live 进度卡片，多任务并发清晰不跳行；
+- **环境诊断与概览**：`subforge check` 与 `subforge status` 一键体检系统与连通性。
+
 ### 字幕处理
 
 - **ASR 后端**：本地 faster-whisper，可选 Deepgram；UI 中的统一模型 Profile 还支持 Gemini 类音频模型；
@@ -130,28 +143,27 @@ subforge audio.mp3
 # ASMR / 耳语作品
 subforge audio.m4a --asmr
 
-# 使用已保存的模型 Profile
+# 直接复用 Web 端已保存的模型 Profile（免去手输 Key 和 URL）
 subforge audio.m4a --profile DeepSeek
 
-# 试运行：预检并输出处理计划
-subforge ./RJ01499022/ --dry-run
-
-# GPU 加速
-subforge audio.m4a --asmr --device auto --compute-type float16
-
-# 使用 Deepgram 云端 ASR
-subforge audio.m4a --asr-provider deepgram
-
-# 批量处理一个 RJ 作品目录
-subforge ./RJ01499022/ --asmr --device auto --concurrency 2
-
-# 忽略已有字幕与断点，从 ASR 阶段重新处理
-subforge audio.m4a --force
-
-# 仅重新翻译（保留已识别的日文字幕）
+# 仅重新翻译：保留耗时识别出的日文字幕，仅重写中文字幕
 subforge audio.m4a --mode retranslate --profile DeepSeek
 
+# 试运行（Dry-run）：预检目录并输出计划（全处理 / 仅翻译 / 断点续跑 / 跳过）
+subforge ./RJ01499022/ --dry-run
+
+# 原生音频模型 ASR（如调用已配置的 Gemini 或音频模型分片识别）
+subforge audio.m4a --asr-profile GeminiAudio
+
+# GPU 加速与多文件并发
+subforge audio.m4a --asmr --device auto --compute-type float16
+subforge ./RJ01499022/ --asmr --device auto --concurrency 2
+
+# 忽略已有字幕与断点状态，强制从 ASR 阶段重新处理
+subforge audio.m4a --force
+
 # 常用辅助命令：
+subforge status                   # 环境与服务运行状态概览
 subforge profiles list            # 查看已配置的模型 Profile 列表
 subforge models download large-v3 # 预下载 Whisper 模型
 subforge check                    # 环境依赖与 API 连通性体检
@@ -221,26 +233,38 @@ output_dir = ""                 # 空值表示输出到源文件目录
 ## CLI 速查
 
 ```text
-subforge INPUTS... [OPTIONS]
+subforge [OPTIONS] <AUDIO_OR_DIR>... | <COMMAND> [ARGS]...
 
-  --model TEXT
-  --asr-provider local|deepgram
-  --device cpu|cuda|auto
+命令：
+  ui                              启动本地 Library UI Web 工作台服务
+  status                          查看环境、模型、Profile 与断点运行状态
+  check (doctor)                  全面体检 Python、FFmpeg、CUDA 与 API 连通性
+  models                          查看与预下载本地 faster-whisper 模型
+  profiles                        查看已配置的模型 Profile 并测试连接
+  jobs                            查看或清理批处理断点恢复记录
+
+批处理核心选项：
+  -m, --model TEXT                Whisper 模型：tiny/base/small/medium/large-v3
+  --asr-provider local|deepgram|model
+  --asr-profile TEXT              使用指定模型 Profile 作为 ASR 识别引擎
+  --profile TEXT                  直接使用 Web 配置好的翻译模型 Profile
+  --mode continue|retranslate|force
+                                  continue（断点续跑）/ retranslate（仅重译）/ force（从头重做）
+  --retranslate-only              --mode retranslate 的快捷开关
+  --scene asmr|general            场景预设：asmr（低 VAD 阈值、响度归一化）/ general
+  --asmr                          --scene asmr 的快捷开关
+  --dry-run                       预检扫描目录并打印处理计划，不消耗 token
+  --force                         --mode force 的快捷开关
+  --device cpu|cuda|auto          计算设备
   --compute-type default|auto|float16|int8_float16|int8|float32
   --source-lang TEXT
   --target-lang TEXT
-  --asmr
-  --llm-api-key TEXT
-  --llm-base-url TEXT
-  --llm-model TEXT
-  --deepgram-api-key TEXT
-  --deepgram-model TEXT
-  --concurrency INTEGER RANGE   必须 >= 1
-  --output-dir PATH
-  --force
-  --config PATH
-  --log-level DEBUG|INFO|WARNING|ERROR
-  --version
+  --concurrency INTEGER RANGE     并行处理文件数（必须 >= 1）
+  --translate-workers INTEGER     并行翻译 Worker 数（必须 >= 1）
+  --prompt TEXT                   自定义翻译提示词规则
+  --output-dir PATH               字幕输出目录（默认与源文件同级）
+  -h, --help                      显示帮助信息并退出
+  -v, --version                   显示版本并退出
 ```
 
 ## 断点续跑
@@ -251,7 +275,8 @@ SubForge 默认启用断点续跑，状态文件保存在 `~/.subforge/jobs/`：
 2. 已存在有效的 `audio.ja.srt`：跳过 ASR，只执行翻译；
 3. 翻译中断：重跑时只提交未完成批次；
 4. 状态文件损坏或与当前输入不匹配：忽略该状态并安全地重新处理；
-5. `--force`：忽略已有 SRT 与断点状态，从 ASR 重新开始。
+5. `--mode retranslate`（`--retranslate-only`）：保留已有的 `audio.ja.srt`，清空翻译缓存并从头重新翻译 `audio.zh.srt`；
+6. `--force`：忽略已有 SRT 与断点状态，从 ASR 重新开始。
 
 ## 文档
 

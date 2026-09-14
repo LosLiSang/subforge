@@ -35,15 +35,27 @@ class FakeFilePicker:
 class WindowsFilePicker:
     """Use the standard Windows dialog without introducing a GUI runtime."""
 
-    def choose_audio(self) -> Path | None:
+    @staticmethod
+    def _create_root():
         import tkinter as tk
-        from tkinter import filedialog
 
         root = tk.Tk()
         root.withdraw()
-        root.attributes("-topmost", True)
+        try:
+            root.attributes("-topmost", True)
+            root.lift()
+            root.update()
+        except Exception:
+            pass
+        return root
+
+    def choose_audio(self) -> Path | None:
+        from tkinter import filedialog
+
+        root = self._create_root()
         try:
             selected = filedialog.askopenfilename(
+                parent=root,
                 title="选择媒体",
                 filetypes=[
                     ("Media", "*.mp3 *.wav *.m4a *.flac *.mp4 *.mkv *.webm *.mov *.avi *.m4v"),
@@ -57,14 +69,12 @@ class WindowsFilePicker:
         return Path(selected) if selected else None
 
     def choose_image(self) -> Path | None:
-        import tkinter as tk
         from tkinter import filedialog
 
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
+        root = self._create_root()
         try:
             selected = filedialog.askopenfilename(
+                parent=root,
                 title="选择封面图片",
                 filetypes=[
                     ("Images", "*.jpg *.jpeg *.png *.webp"),
@@ -76,27 +86,21 @@ class WindowsFilePicker:
         return Path(selected) if selected else None
 
     def choose_media_folder(self) -> Path | None:
-        import tkinter as tk
         from tkinter import filedialog
 
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
+        root = self._create_root()
         try:
-            selected = filedialog.askdirectory(title="选择 RJ 作品文件夹")
+            selected = filedialog.askdirectory(parent=root, title="选择 RJ 作品文件夹")
         finally:
             root.destroy()
         return Path(selected) if selected else None
 
     def choose_directory(self) -> Path | None:
-        import tkinter as tk
         from tkinter import filedialog
 
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
+        root = self._create_root()
         try:
-            selected = filedialog.askdirectory(title="选择 SubForge Library 目录")
+            selected = filedialog.askdirectory(parent=root, title="选择 SubForge Library 目录")
         finally:
             root.destroy()
         return Path(selected) if selected else None

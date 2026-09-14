@@ -1788,6 +1788,29 @@ def test_import_dialog_has_media_tabs_without_the_old_selector(tmp_path):
     assert 'id="pick-audio"' in page
     assert page.count('name="auto_process"') == 3
     assert page.count('name="auto_process" checked') == 3
+    assert 'placeholder="留空使用文件名"' in page
+
+
+def test_local_import_without_title_defaults_to_stem(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "secret-source" / "my_track.m4a"
+    audio.parent.mkdir()
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, audio=audio, library=library)
+
+    selected = client.post("/picker/audio", headers=headers).json()
+    assert "selection_id" in selected
+
+    response = client.post("/items/import", headers=headers, data={
+        "selection_id": selected["selection_id"],
+        "kind": "rj_work",
+        "rj_code": "RJ00000300",
+        "title": "",
+    }, follow_redirects=False)
+
+    assert response.status_code == 303
+    page = client.get("/")
+    assert "my_track" in page.text
 
 
 def test_rj_folder_preview_and_background_import(tmp_path):

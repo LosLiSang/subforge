@@ -630,7 +630,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         if error:
             return error
         # tkinter 对话框必须在主线程运行（Tcl 非线程安全）
-        selected = deps.picker.choose_directory()
+        try:
+            selected = deps.picker.choose_directory()
+        except Exception as exc:
+            return JSONResponse({"error": f"打开目录选择器失败: {exc}"}, status_code=500)
         if selected is None:
             return JSONResponse({"cancelled": True})
         selection_id = uuid4().hex
@@ -642,7 +645,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         if error:
             return error
         # tkinter 对话框必须在主线程运行（Tcl 非线程安全）
-        selected = deps.picker.choose_audio()
+        try:
+            selected = deps.picker.choose_audio()
+        except Exception as exc:
+            return JSONResponse({"error": f"打开文件选择器失败: {exc}"}, status_code=500)
         if selected is None:
             return JSONResponse({"cancelled": True})
         selection_id = uuid4().hex
@@ -653,7 +659,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         error = await _authorize_write(request, runtime)
         if error:
             return error
-        selected = deps.picker.choose_media_folder()
+        try:
+            selected = deps.picker.choose_media_folder()
+        except Exception as exc:
+            return JSONResponse({"error": f"打开文件夹选择器失败: {exc}"}, status_code=500)
         if selected is None:
             return JSONResponse({"cancelled": True})
         selection_id = uuid4().hex
@@ -664,7 +673,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         error = await _authorize_write(request, runtime)
         if error:
             return error
-        selected = deps.picker.choose_image()
+        try:
+            selected = deps.picker.choose_image()
+        except Exception as exc:
+            return JSONResponse({"error": f"打开图片选择器失败: {exc}"}, status_code=500)
         if selected is None:
             return JSONResponse({"cancelled": True})
         selection_id = uuid4().hex
@@ -689,12 +701,13 @@ def create_app(deps: UiDependencies) -> Starlette:
         runtime.pending_selections.add(selection_id)
         try:
             kind = ItemKind(form.get("kind", ""))
+            title = (form.get("title") or "").strip() or source.stem
             result = await asyncio.to_thread(
                 library.import_audio,
                 ImportRequest(
                     source=source,
                     kind=kind,
-                    title=form.get("title", source.stem),
+                    title=title,
                     rj_code=form.get("rj_code") or None,
                     author=form.get("author") or None,
                     creator_ids=tuple(_creator_ids_from_form(library, values, kind)),

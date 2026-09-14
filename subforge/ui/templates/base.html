@@ -4,7 +4,7 @@
 {{ self.content() }}
 </main>
 <script>window.SUBFORGE_CSRF={{ csrf_token|tojson }};</script>
-<script src="/static/app.js?v=5"></script>
+<script src="/static/app.js?v=6"></script>
 {{ self.scripts() }}
 {% else %}
 <!doctype html>
@@ -60,7 +60,7 @@
 </div>
 <div id="player-bar" hx-preserve="true" hidden></div>
 <script>window.SUBFORGE_CSRF={{ csrf_token|tojson }};</script>
-<script src="/static/app.js?v=5"></script>
+<script src="/static/app.js?v=6"></script>
 <script src="/static/global-player.js"></script>
 <script src="/static/float-lyrics.js"></script>
 {% block scripts %}{% endblock %}

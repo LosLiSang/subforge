@@ -12,7 +12,7 @@
         <button type="button" class="ghost" data-pick-import-file>选择音频或视频文件</button>
         <label>类型<select name="kind" id="kind" data-kind-select data-custom-select><option value="rj_work">RJ 作品</option><option value="stream_archive">直播归档</option></select></label>
         <label data-rj-field>RJ 号<input name="rj_code" placeholder="RJ01546796"></label>
-        <label>标题<input name="title" required></label>
+        <label>标题<input name="title" placeholder="留空使用文件名"></label>
         <label class="field-label">创作者</label>
         {{ picker('local-import-creators', creators, [], 'creator_ids', 'rj_work') }}
         <label class="check-field auto-process-field"><span><input type="checkbox" name="auto_process" {% if profiles %}checked{% else %}disabled{% endif %}> 导入后自动处理</span><small>{% if profiles %}使用最近一次处理配置；没有历史时使用默认配置。{% else %}请先添加翻译配置，当前只能导入媒体。{% endif %}</small></label>

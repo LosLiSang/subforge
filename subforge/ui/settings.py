@@ -211,3 +211,11 @@ class UiSettingsStore:
 
     def set_media_concurrency(self, value: int) -> None:
         self.set_asr_concurrency(value)
+
+    def get_fixed_token(self) -> str:
+        return os.environ.get("SUBFORGE_TOKEN") or str(self._load().get("fixed_token", ""))
+
+    def get_no_auth(self) -> bool:
+        if os.environ.get("SUBFORGE_NO_AUTH", "").lower() in {"1", "true", "yes"}:
+            return True
+        return bool(self._load().get("no_auth", False))

@@ -36,6 +36,7 @@ function renderNow(){
 }
 function wireAudio(){
   const render=()=>{
+    if(!document.getElementById('player'))return;
     if(document.getElementById('play-time'))document.getElementById('play-time').textContent=`${fmt(audio.currentTime)} / ${fmt(audio.duration||0)}`;
     setToggle(audio.paused);
     if(document.getElementById('play-seek')){const s=document.getElementById('play-seek');s.max=audio.duration||0;s.value=audio.currentTime||0;}
@@ -44,14 +45,25 @@ function wireAudio(){
   };
   player.on('timeupdate',render,'page');player.on('play',render,'page');
   player.on('pause',()=>{if(previewingSegment&&audio&&audio.currentTime>=previewEndTarget-0.15)stopSegmentPreview();},'page');
-  audio.addEventListener('loadedmetadata',render);
+  player.on('loadedmetadata',render,'page');
   audio.addEventListener('ended',()=>{
     stopSegmentPreview();
-    if(nextTrackId) window.location.href=`/tracks/${encodeURIComponent(nextTrackId)}/play`;
+    if(nextTrackId) {
+      const target=`/tracks/${encodeURIComponent(nextTrackId)}/play`;
+      if(window.htmx) {
+        window.htmx.ajax('GET', target, { target: '#main-content', select: '#main-content', swap: 'outerHTML', pushUrl: true });
+      } else {
+        window.location.href=target;
+      }
+    }
   });
   // 字幕/进度逐帧对齐 audio.currentTime；不依赖稀疏的 timeupdate 事件，
   // 否则浏览器 timeupdate 频率低/不规律时字幕会滞后并随播放时长漂移。
-  const loop=()=>{ if(!audio.paused) render(); requestAnimationFrame(loop); };
+  const loop=()=>{
+    if(!document.getElementById('player'))return;
+    if(!audio.paused) render();
+    requestAnimationFrame(loop);
+  };
   requestAnimationFrame(loop);
 }
 function updateSubs(){

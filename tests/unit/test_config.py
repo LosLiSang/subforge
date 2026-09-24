@@ -1,9 +1,17 @@
 import os
+import logging
 from pathlib import Path
 
 import pytest
 
-from subforge.config import Config, load_config, _ensure_default_config
+from subforge.config import (
+    Config,
+    load_config,
+    _ensure_default_config,
+    setup_logging,
+    _DEBUGFilter,
+    _ColorFormatter,
+)
 
 
 class TestEnsureDefaultConfig:
@@ -188,3 +196,87 @@ class TestConfigDataclass:
         assert config.deepgram_model == "nova-3"
         assert config.deepgram_keyterms == []
         assert config.force is False
+
+
+class TestSetupLogging:
+    def test_creates_log_file(self, tmp_path):
+        log_file = tmp_path / "test.log"
+        config = Config(log_file=str(log_file), log_level="DEBUG")
+        setup_logging(config)
+
+        logger = logging.getLogger("test_creates_file")
+        logger.info("hello")
+        assert log_file.exists()
+
+    def test_fallback_when_unwritable(self, tmp_path):
+        bad_path = tmp_path / "readonly_dir" / "sub.log"
+        readonly = tmp_path / "readonly_dir"
+        readonly.write_text("block")
+
+        config = Config(log_file=str(bad_path), log_level="INFO")
+        setup_logging(config)
+        root = logging.getLogger()
+        file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+        assert len(file_handlers) == 0
+
+    def test_debug_filter_rejects_debug(self):
+        f = _DEBUGFilter()
+        record = logging.LogRecord("test", logging.DEBUG, "", 0, "msg", (), None)
+        assert f.filter(record) is False
+
+    def test_debug_filter_allows_info(self):
+        f = _DEBUGFilter()
+        record = logging.LogRecord("test", logging.INFO, "", 0, "msg", (), None)
+        assert f.filter(record) is True
+
+    def test_color_formatter_wraps_each_level(self):
+        f = _ColorFormatter("%(message)s")
+        cases = {
+            logging.DEBUG:    "\x1b[37m",
+            logging.INFO:     "\x1b[34m",
+            logging.WARNING:  "\x1b[33m",
+            logging.ERROR:    "\x1b[31m",
+            logging.CRITICAL: "\x1b[1;31m",
+        }
+        for level, prefix in cases.items():
+            record = logging.LogRecord("t", level, "", 0, "msg", (), None)
+            out = f.format(record)
+            assert out.startswith(prefix), (level, out)
+            assert out.endswith("\x1b[0m"), (level, out)
+            assert "msg" in out
+
+    def test_file_output_has_no_ansi(self, tmp_path):
+        log_file = tmp_path / "color.log"
+        config = Config(log_file=str(log_file), log_level="DEBUG")
+        setup_logging(config)
+
+        logger = logging.getLogger("color_test")
+        logger.info("info-line")
+        logger.error("error-line")
+        logger.critical("critical-line")
+
+        root = logging.getLogger()
+        for h in list(root.handlers):
+            if isinstance(h, logging.FileHandler):
+                h.flush()
+                h.close()
+                root.removeHandler(h)
+
+        content = log_file.read_text(encoding="utf-8")
+        assert "\x1b[" not in content
+        assert "INFO" in content
+        assert "ERROR" in content
+        assert "CRITICAL" in content
+
+    def test_stream_uses_color_formatter_file_does_not(self, tmp_path):
+        log_file = tmp_path / "x.log"
+        config = Config(log_file=str(log_file), log_level="INFO")
+        setup_logging(config)
+
+        root = logging.getLogger()
+        stream_handlers = [h for h in root.handlers if type(h) is logging.StreamHandler]
+        file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+        assert len(stream_handlers) == 1
+        assert len(file_handlers) == 1
+        assert isinstance(stream_handlers[0].formatter, _ColorFormatter)
+        assert not isinstance(file_handlers[0].formatter, _ColorFormatter)

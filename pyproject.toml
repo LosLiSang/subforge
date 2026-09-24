@@ -52,6 +52,10 @@ artifacts = [
 testpaths = ["tests"]
 python_files = "test_*.py"
 asyncio_mode = "auto"
+markers = [
+    "unit: Unit tests",
+    "integration: Integration and end-to-end tests",
+]
 
 [dependency-groups]
 dev = [

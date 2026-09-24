@@ -1,4 +1,13 @@
 /* 外观：黑/白主题 + 有限强调色预设，主页面、iframe 与悬浮歌词共享选择。 */
+if (window.__subforgeAppInitialized) {
+  if (typeof window.SUBFORGE_CSRF !== 'undefined') {
+    for (const input of document.querySelectorAll('input[name="csrf_token"]')) {
+      input.value = window.SUBFORGE_CSRF || '';
+    }
+  }
+  if (window.SubForgeApp?.initWidgets) window.SubForgeApp.initWidgets(document);
+} else {
+window.__subforgeAppInitialized = true;
 (()=>{
   const themeKey='subforge.theme',accentKey='subforge.accent';
   const accents=new Set(['blue','cyan','green','violet','amber','rose']);
@@ -79,61 +88,249 @@
     }
   });
 })();
-for(const form of document.querySelectorAll('form[data-secure]')){form.addEventListener('submit',e=>{if(form.dataset.confirm&&!confirm(form.dataset.confirm)){e.preventDefault();return}let input=form.querySelector('input[name=csrf_token]');if(!input){input=document.createElement('input');input.type='hidden';input.name='csrf_token';form.append(input)}input.value=window.SUBFORGE_CSRF||'';});}
-const originalFetch=window.fetch;window.fetch=(input,init={})=>{init.headers=new Headers(init.headers||{});if(init.method&&init.method.toUpperCase()!=='GET'){init.headers.set('X-CSRF-Token',window.SUBFORGE_CSRF||'');}return originalFetch(input,init)};
-const picker=document.getElementById('pick-audio');if(picker)picker.addEventListener('click',async()=>{const dialog=document.getElementById('import-dialog');if(!dialog)return;dialog.showModal();});
-/* 导入弹窗：本地 tab 内点按钮才触发文件选择 */
-const pickImportFile=document.querySelector('[data-pick-import-file]');if(pickImportFile)pickImportFile.addEventListener('click',async()=>{const response=await fetch('/picker/audio',{method:'POST'});if(!response.ok)return;const data=await response.json();if(data.cancelled)return;document.getElementById('selection-id').value=data.selection_id;document.getElementById('selected-name').textContent=data.filename;});
-/* 导入 Dialog：本地文件 / 链接下载 / RJ 文件夹，无动画切换并分别保留输入。 */
-for(const tab of document.querySelectorAll('[data-import-tab]'))tab.addEventListener('click',()=>{const dialog=tab.closest('#import-dialog');for(const other of dialog.querySelectorAll('[data-import-tab]')){const active=other===tab;other.classList.toggle('active',active);other.setAttribute('aria-selected',active?'true':'false')}for(const panel of dialog.querySelectorAll('[data-import-panel]'))panel.hidden=panel.dataset.importPanel!==tab.dataset.importTab});
-/* 导入弹窗：类型切换控制 RJ 号字段显隐（仅 RJ 作品有 RJ 号） */
-function syncKindFields(){for(const sel of document.querySelectorAll('[data-kind-select]')){const scope=sel.closest('[data-import-panel], [data-work-edit-form]')||sel.closest('form');const rjField=scope?.querySelector('[data-rj-field]');if(rjField)rjField.style.display=sel.value==='rj_work'?'':'none';const creatorPicker=scope?.querySelector('[data-creator-picker]');if(creatorPicker){creatorPicker.dataset.contextKind=sel.value;creatorPicker.dispatchEvent(new CustomEvent('creator-context-change'));}}}
-for(const sel of document.querySelectorAll('[data-kind-select]')){sel.addEventListener('change',syncKindFields);}syncKindFields();
+/* 安全表单 CSRF 注入（使用捕获阶段委托，确保 HTMX 动态换页后的表单依然有效） */
+document.addEventListener('submit', e => {
+  const form = e.target.closest('form[data-secure]');
+  if (!form) return;
+  if (form.dataset.confirm && !confirm(form.dataset.confirm)) {
+    e.preventDefault();
+    return;
+  }
+  let input = form.querySelector('input[name=csrf_token]');
+  if (!input) {
+    input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'csrf_token';
+    form.append(input);
+  }
+  input.value = window.SUBFORGE_CSRF || '';
+}, true);
 
-/* 本地导入：fetch 提交，转换期间禁用按钮并在对话框内显示错误。 */
-const localImportForm = document.querySelector('[data-local-import-form]');
-if (localImportForm) {
-  localImportForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const error = localImportForm.querySelector('[data-local-import-error]');
-    const button = localImportForm.querySelector('[data-local-import-submit]');
-    error.hidden = true;
-    if (!localImportForm.elements.selection_id.value) {
-      error.textContent = '请先选择音频或视频文件';
-      error.hidden = false;
+const originalFetch = window.fetch;
+window.fetch = (input, init = {}) => {
+  init.headers = new Headers(init.headers || {});
+  if (init.method && init.method.toUpperCase() !== 'GET') {
+    init.headers.set('X-CSRF-Token', window.SUBFORGE_CSRF || '');
+  }
+  return originalFetch(input, init);
+};
+
+/* 导入弹窗：点击工具栏导入按钮打开弹窗（事件委托，确保 HTMX 换页后依然响应） */
+document.addEventListener('click', event => {
+  const picker = event.target.closest('#pick-audio');
+  if (!picker) return;
+  const dialog = document.getElementById('import-dialog');
+  if (!dialog) return;
+  syncKindFields();
+  dialog.showModal();
+});
+
+/* 导入弹窗：本地 tab 内点按钮触发文件选择并回填标题 */
+document.addEventListener('click', async event => {
+  const pickImportFile = event.target.closest('[data-pick-import-file]');
+  if (!pickImportFile) return;
+  const form = pickImportFile.closest('form') || document.querySelector('[data-local-import-form]');
+  const error = form?.querySelector('[data-local-import-error]');
+  if (error) error.hidden = true;
+  pickImportFile.disabled = true;
+  try {
+    const response = await fetch('/picker/audio', { method: 'POST' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (error) {
+        error.textContent = data.error || `打开文件选择器失败（HTTP ${response.status}）`;
+        error.hidden = false;
+      }
       return;
     }
+    if (data.cancelled) return;
+    const selInput = form?.querySelector('#selection-id') || document.getElementById('selection-id');
+    if (selInput) selInput.value = data.selection_id;
+    const nameEl = form?.querySelector('#selected-name') || document.getElementById('selected-name');
+    if (nameEl) nameEl.textContent = data.filename;
+    const titleInput = form?.querySelector('input[name="title"]');
+    if (titleInput && !titleInput.value.trim() && data.filename) {
+      titleInput.value = data.filename.replace(/\.[^/.]+$/, '');
+    }
+    if (error) error.hidden = true;
+  } catch (err) {
+    if (error) {
+      error.textContent = `打开文件选择器失败：${err.message}`;
+      error.hidden = false;
+    }
+  } finally {
+    pickImportFile.disabled = false;
+  }
+});
+
+/* 导入 Dialog：本地文件 / 链接下载 / RJ 文件夹，无动画切换并分别保留输入（事件委托） */
+document.addEventListener('click', event => {
+  const tab = event.target.closest('[data-import-tab]');
+  if (!tab) return;
+  const dialog = tab.closest('#import-dialog') || document.getElementById('import-dialog');
+  if (!dialog) return;
+  for (const other of dialog.querySelectorAll('[data-import-tab]')) {
+    const active = other === tab;
+    other.classList.toggle('active', active);
+    other.setAttribute('aria-selected', active ? 'true' : 'false');
+  }
+  for (const panel of dialog.querySelectorAll('[data-import-panel]')) {
+    panel.hidden = panel.dataset.importPanel !== tab.dataset.importTab;
+  }
+});
+
+/* 导入弹窗：类型切换控制 RJ 号字段显隐（仅 RJ 作品有 RJ 号） */
+function syncKindFields(root = document) {
+  for (const sel of root.querySelectorAll('[data-kind-select]')) {
+    const scope = sel.closest('[data-import-panel], [data-work-edit-form]') || sel.closest('form');
+    const rjField = scope?.querySelector('[data-rj-field]');
+    if (rjField) rjField.style.display = sel.value === 'rj_work' ? '' : 'none';
+    const authorField = scope?.querySelector('[data-author-field]');
+    if (authorField) authorField.style.display = sel.value === 'stream_archive' ? '' : 'none';
+    const creatorPicker = scope?.querySelector('[data-creator-picker]');
+    if (creatorPicker) {
+      creatorPicker.dataset.contextKind = sel.value;
+      creatorPicker.dispatchEvent(new CustomEvent('creator-context-change'));
+    }
+  }
+}
+document.addEventListener('change', event => {
+  if (event.target.matches('[data-kind-select]')) syncKindFields();
+});
+syncKindFields();
+
+/* URL 输入自动获取视频元数据（标题、创作者/UP主、封面） */
+let urlInfoTimer = null;
+let lastCheckedUrl = '';
+async function checkAndFetchVideoInfo(input) {
+  const url = input.value.trim();
+  if (!url) {
+    lastCheckedUrl = '';
+    return;
+  }
+  if (!/^https?:\/\//i.test(url) || url === lastCheckedUrl) return;
+  const form = input.closest('form');
+  if (!form) return;
+  lastCheckedUrl = url;
+  const statusEl = form.querySelector('[data-url-status]');
+  const titleInput = form.querySelector('[data-url-title]');
+  const authorInput = form.querySelector('[data-url-author]');
+  const picker = form.querySelector('[data-creator-picker]');
+  if (statusEl) {
+    statusEl.textContent = '正在获取视频信息…';
+    statusEl.hidden = false;
+  }
+  try {
+    const resp = await fetch(`/api/video-info?url=${encodeURIComponent(url)}`);
+    const data = await resp.json().catch(() => ({}));
+    if (data.ok) {
+      if (titleInput && (!titleInput.value.trim() || titleInput.dataset.autofilled)) {
+        titleInput.value = data.title || '';
+        titleInput.dataset.autofilled = 'true';
+      }
+      if (authorInput && (!authorInput.value.trim() || authorInput.dataset.autofilled)) {
+        authorInput.value = data.author || '';
+        authorInput.dataset.autofilled = 'true';
+      }
+      if (data.author && picker) {
+        const matchingOption = [...picker.querySelectorAll('[data-creator-option]')].find(
+          opt => normalizeCreatorName(opt.dataset.creatorName) === normalizeCreatorName(data.author)
+        );
+        if (matchingOption && picker._addCreator) {
+          picker._addCreator(creatorFromOption(matchingOption));
+        }
+      }
+      if (statusEl) {
+        const infoText = [data.title, data.author ? `UP主/作者: ${data.author}` : ''].filter(Boolean).join(' · ');
+        statusEl.textContent = `已获取：${infoText}`;
+        statusEl.hidden = false;
+      }
+    } else {
+      if (statusEl) {
+        statusEl.textContent = data.error ? `获取提示：${data.error}` : '';
+        statusEl.hidden = !data.error;
+      }
+    }
+  } catch {
+    if (statusEl) statusEl.hidden = true;
+  }
+}
+
+document.addEventListener('input', event => {
+  const input = event.target.closest('[data-url-input]');
+  if (input) {
+    clearTimeout(urlInfoTimer);
+    urlInfoTimer = setTimeout(() => checkAndFetchVideoInfo(input), 450);
+  }
+  if (event.target.matches('[data-url-title], [data-url-author]')) {
+    delete event.target.dataset.autofilled;
+  }
+});
+document.addEventListener('paste', event => {
+  const input = event.target.closest('[data-url-input]');
+  if (input) setTimeout(() => checkAndFetchVideoInfo(input), 50);
+});
+document.addEventListener('change', event => {
+  const input = event.target.closest('[data-url-input]');
+  if (input) checkAndFetchVideoInfo(input);
+});
+
+/* 本地导入：fetch 提交，转换期间禁用按钮并在对话框内显示错误（事件委托） */
+document.addEventListener('submit', async event => {
+  const localImportForm = event.target.closest('[data-local-import-form]');
+  if (!localImportForm) return;
+  event.preventDefault();
+  const error = localImportForm.querySelector('[data-local-import-error]');
+  const button = localImportForm.querySelector('[data-local-import-submit]');
+  if (error) error.hidden = true;
+  if (!localImportForm.elements.selection_id?.value) {
+    if (error) {
+      error.textContent = '请先选择音频或视频文件';
+      error.hidden = false;
+    }
+    return;
+  }
+  if (button) {
     button.disabled = true;
     button.textContent = '导入中…';
-    try {
-      const body = new URLSearchParams(new FormData(localImportForm)).toString();
-      const response = await fetch(localImportForm.action, {
-        method: 'POST',
-        body,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      });
-      if (response.ok) {
-        window.location.replace(response.url);
-        return;
-      }
-      const data = await response.json().catch(() => ({}));
+  }
+  try {
+    const formData = new FormData(localImportForm);
+    formData.append('csrf_token', window.SUBFORGE_CSRF || '');
+    const body = new URLSearchParams(formData).toString();
+    const response = await fetch(localImportForm.action, {
+      method: 'POST',
+      body,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    if (response.ok) {
+      window.location.replace(response.url);
+      return;
+    }
+    const data = await response.json().catch(() => ({}));
+    if (error) {
       error.textContent = data.error || `导入失败（HTTP ${response.status}）`;
       error.hidden = false;
-    } catch (err) {
+    }
+  } catch (err) {
+    if (error) {
       error.textContent = `导入失败：${err.message}`;
       error.hidden = false;
-    } finally {
+    }
+  } finally {
+    if (button) {
       button.disabled = false;
       button.textContent = '导入';
     }
-  });
-}
+  }
+});
 
 /* 可复用创作者 Tag 输入：点击显示全部、忽略大小写/空格的前缀匹配、逗号/Enter 添加。 */
-const normalizeCreatorName=value=>(value||'').toLocaleLowerCase().replace(/\s+/g,'');
+function normalizeCreatorName(value){return(value||'').toLocaleLowerCase().replace(/\s+/g,'');}
 function creatorTagElement(picker,creator){const tag=document.createElement('span');tag.className=`creator-tag creator-tag-${creator.kind}`;tag.dataset.selectedId=creator.creator_id;tag.textContent=creator.name;const remove=document.createElement('button');remove.type='button';remove.dataset.removeTag='';remove.setAttribute('aria-label',`移除 ${creator.name}`);remove.textContent='×';const hidden=document.createElement('input');hidden.type='hidden';hidden.name=picker.dataset.fieldName;hidden.value=creator.creator_id;tag.append(remove,hidden);return tag}
 function creatorFromOption(option){return{creator_id:option.dataset.creatorId,name:option.dataset.creatorName,kind:option.dataset.creatorKind}}
 function setupCreatorPicker(picker){const input=picker.querySelector('[data-creator-search]'),suggestions=picker.querySelector('[data-creator-suggestions]'),tags=picker.querySelector('[data-selected-tags]'),create=picker.querySelector('[data-create-from-picker]'),empty=picker.querySelector('[data-suggestion-empty]');if(!input||!suggestions)return;
+ if(picker.dataset.pickerInit)return;picker.dataset.pickerInit='true';
  const selected=()=>new Set([...picker.querySelectorAll('[data-selected-id]')].map(x=>x.dataset.selectedId));
  const allowed=option=>(!picker.dataset.excludeId||option.dataset.creatorId!==picker.dataset.excludeId)&&(!picker.dataset.allowedKind||option.dataset.creatorKind===picker.dataset.allowedKind)&&(picker.dataset.contextKind!=='stream_archive'||option.dataset.creatorKind==='voice_actor');
  const refresh=(open=true)=>{const q=normalizeCreatorName(input.value),chosen=selected();let visible=0;for(const option of picker.querySelectorAll('[data-creator-option]')){const show=allowed(option)&&!chosen.has(option.dataset.creatorId)&&normalizeCreatorName(option.dataset.creatorName).startsWith(q);option.hidden=!show;if(show)visible++}const canCreate=picker.dataset.allowCreate!=='false'&&!!input.value.trim()&&visible===0;if(create){create.hidden=!canCreate;create.querySelector('[data-create-name]').textContent=input.value.trim()}if(empty)empty.hidden=visible>0||canCreate;if(open){const firstOpen=suggestions.hidden;suggestions.hidden=false;const w=suggestions.ownerDocument.defaultView;let up=picker.dataset.sugUp==='1';if(firstOpen){const pr=picker.getBoundingClientRect();up=suggestions.getBoundingClientRect().bottom>w.innerHeight&&pr.top>w.innerHeight-pr.bottom;picker.dataset.sugUp=up?'1':'0'}suggestions.classList.toggle('creator-suggestions-up',up)}};
@@ -147,14 +344,258 @@ document.addEventListener('click',event=>{for(const picker of document.querySele
 function appendCreatorOption(creator){for(const picker of document.querySelectorAll('[data-creator-picker]')){const list=picker.querySelector('[data-creator-suggestions]');if(!list||picker.querySelector(`[data-creator-option][data-creator-id="${creator.creator_id}"]`))continue;const option=document.createElement('button');option.type='button';option.className='creator-suggestion';option.dataset.creatorOption='';option.dataset.creatorId=creator.creator_id;option.dataset.creatorName=creator.name;option.dataset.creatorKind=creator.kind;option.innerHTML=`<span class="creator-tag creator-tag-${creator.kind}"></span><small>${creator.kind==='circle'?'社团':'声优'}</small>`;option.querySelector('span').textContent=creator.name;list.insertBefore(option,list.querySelector('[data-create-from-picker]'))}}
 function openCreatorCreateDialog(picker,name){const dialog=document.querySelector('[data-creator-create-dialog]');if(!dialog)return;const form=dialog.querySelector('[data-creator-create-form]');form.reset();form.elements.picker_id.value=picker.dataset.pickerId;form.elements.name.value=name||'';const stream=picker.dataset.contextKind==='stream_archive';form.elements.kind.value=stream?'voice_actor':'voice_actor';for(const radio of form.elements.kind)radio.disabled=stream&&radio.value!=='voice_actor';dialog.querySelector('[data-dialog-error]').hidden=true;dialog.showModal();form.elements.name.focus()}
 for(const form of document.querySelectorAll('[data-creator-create-form]'))form.addEventListener('submit',async event=>{event.preventDefault();const dialog=form.closest('dialog'),error=dialog.querySelector('[data-dialog-error]');error.hidden=true;const body=new URLSearchParams(new FormData(form)).toString();const response=await fetch('/api/creators',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const data=await response.json().catch(()=>({}));if(!response.ok){error.textContent=data.error||`创建失败（HTTP ${response.status}）`;error.hidden=false;return}appendCreatorOption(data);document.querySelector(`[data-picker-id="${form.elements.picker_id.value}"]`)?._addCreator(data);dialog.close()});
-for(const button of document.querySelectorAll('[data-test-endpoint]'))button.addEventListener('click',async()=>{const output=button.closest('.profile-row-actions')?.querySelector('.check-result')||button.parentElement.querySelector('.check-result');if(!output)return;const label=button.querySelector('span'),originalLabel=label?.textContent;button.disabled=true;if(label)label.textContent='测试中';output.textContent='检查中…';try{const response=await fetch(button.dataset.testEndpoint,{method:'POST'});const data=await response.json().catch(()=>({ok:false,message:`HTTP ${response.status}`}));output.textContent=data.ok?`✅ ${data.message}`:`❌ ${data.message||data.ok}`;}catch(e){output.textContent=`❌ ${e.message||e}`;}finally{button.disabled=false;if(label)label.textContent=originalLabel;}});
-for(const button of document.querySelectorAll('[data-pick-directory]'))button.addEventListener('click',async()=>{const response=await fetch('/picker/directory',{method:'POST'});if(!response.ok)return;const data=await response.json();if(data.cancelled)return;const field=button.dataset.field,form=button.closest('form');form.elements[`${field}_selection`].value=data.selection_id;form.elements[field].value=data.name;});
-for(const button of document.querySelectorAll('[data-pick-cover]'))button.addEventListener('click',async()=>{const response=await fetch('/picker/image',{method:'POST'});if(!response.ok)return;const data=await response.json();if(data.cancelled)return;const form=button.closest('form');form.elements.selection_id.value=data.selection_id;form.querySelector('[data-cover-name]').textContent=data.filename;button.textContent='应用封面';button.type='submit';});
+document.addEventListener('click',async event=>{
+  const testBtn=event.target.closest('[data-test-endpoint]');
+  if(testBtn){
+    const output=testBtn.closest('.profile-row-actions')?.querySelector('.check-result')||testBtn.parentElement.querySelector('.check-result');
+    if(!output)return;
+    const label=testBtn.querySelector('span'),originalLabel=label?.textContent;
+    testBtn.disabled=true;
+    if(label)label.textContent='测试中';
+    output.textContent='检查中…';
+    try{
+      const response=await fetch(testBtn.dataset.testEndpoint,{method:'POST'});
+      const data=await response.json().catch(()=>({ok:false,message:`HTTP ${response.status}`}));
+      output.textContent=data.ok?`✅ ${data.message}`:`❌ ${data.message||data.ok}`;
+    }catch(e){
+      output.textContent=`❌ ${e.message||e}`;
+    }finally{
+      testBtn.disabled=false;
+      if(label)label.textContent=originalLabel;
+    }
+    return;
+  }
+  const dirBtn=event.target.closest('[data-pick-directory]');
+  if(dirBtn){
+    const field=dirBtn.dataset.field,form=dirBtn.closest('form');
+    if(!form)return;
+    dirBtn.disabled=true;
+    try{
+      const response=await fetch('/picker/directory',{method:'POST'});
+      const data=await response.json().catch(()=>({}));
+      if(data&&!data.cancelled){
+        if(form.elements[`${field}_selection`])form.elements[`${field}_selection`].value=data.selection_id;
+        if(form.elements[field])form.elements[field].value=data.name;
+      }
+    }finally{
+      dirBtn.disabled=false;
+    }
+    return;
+  }
+  const pickCoverBtn=event.target.closest('[data-pick-cover]');
+  if(pickCoverBtn){
+    const form=pickCoverBtn.closest('form');
+    pickCoverBtn.disabled=true;
+    try{
+      const response=await fetch('/picker/image',{method:'POST'});
+      const data=await response.json().catch(()=>({}));
+      if(data&&!data.cancelled&&form){
+        if(form.elements.selection_id)form.elements.selection_id.value=data.selection_id;
+        const nameEl=form.querySelector('[data-cover-name]');
+        if(nameEl)nameEl.textContent=data.filename;
+        pickCoverBtn.textContent='应用封面';
+        pickCoverBtn.type='submit';
+      }
+    }finally{
+      pickCoverBtn.disabled=false;
+    }
+    return;
+  }
+});
 const workEditDialog=document.getElementById('work-edit-dialog');
-function resetCreatorPicker(picker){clearCreatorPicker(picker);for(const id of (picker.dataset.initialIds||'').split(',').filter(Boolean)){const option=picker.querySelector(`[data-creator-option][data-creator-id="${id}"]`);if(option)picker._addCreator(creatorFromOption(option))}}
-document.addEventListener('click',event=>{const btn=event.target.closest('[data-open-work-edit]');if(!btn)return;const dialog=document.getElementById('work-edit-dialog');if(!dialog)return;const form=dialog.querySelector('[data-work-edit-form]');if(form){form.reset();resetCreatorPicker(form.querySelector('[data-creator-picker]'));const preview=form.querySelector('[data-work-cover-preview]');if(preview){preview.src=preview.dataset.originalSrc;preview.hidden=false}const filename=form.querySelector('[data-cover-filename]');if(filename)filename.textContent='当前封面';const err=form.querySelector('[data-work-edit-error]');if(err)err.hidden=true}syncKindFields();dialog.showModal()});
-document.querySelector('[data-pick-work-cover]')?.addEventListener('click',async event=>{const response=await fetch('/picker/image',{method:'POST'});const data=await response.json().catch(()=>({}));const form=event.target.closest('form'),error=form.querySelector('[data-work-edit-error]');if(!response.ok||data.cancelled){if(!data.cancelled){error.textContent=data.error||'无法打开图片选择器';error.hidden=false}return}form.elements.selection_id.value=data.selection_id;const preview=form.querySelector('[data-work-cover-preview]');preview.src=`/api/selections/${data.selection_id}/image`;preview.hidden=false;form.querySelector('[data-cover-filename]').textContent=data.filename});
-document.querySelector('[data-work-edit-form]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,error=form.querySelector('[data-work-edit-error]');error.hidden=true;const body=new URLSearchParams(new FormData(form)).toString();const response=await fetch(form.action,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'},body});const data=await response.json().catch(()=>({}));if(!response.ok){error.textContent=data.error||`保存失败（HTTP ${response.status}）`;error.hidden=false;return}location.reload()});
+function resetCreatorPicker(picker){
+  if(!picker)return;
+  setupCreatorPicker(picker);
+  clearCreatorPicker(picker);
+  for(const id of (picker.dataset.initialIds||'').split(',').filter(Boolean)){
+    const option=picker.querySelector(`[data-creator-option][data-creator-id="${id}"]`);
+    if(option&&typeof picker._addCreator==='function'){
+      picker._addCreator(creatorFromOption(option));
+    }
+  }
+}
+document.addEventListener('click',event=>{
+  const btn=event.target.closest('[data-open-work-edit]');
+  if(!btn)return;
+  const dialog=document.getElementById('work-edit-dialog');
+  if(!dialog)return;
+  try {
+    const form=dialog.querySelector('[data-work-edit-form]');
+    if(form){
+      form.reset();
+      const picker=form.querySelector('[data-creator-picker]');
+      if(picker)resetCreatorPicker(picker);
+      const preview=form.querySelector('[data-work-cover-preview]');
+      if(preview){
+        preview.src=preview.dataset.originalSrc;
+        preview.hidden=false;
+      }
+      const filename=form.querySelector('[data-cover-filename]');
+      if(filename)filename.textContent='当前封面';
+      const err=form.querySelector('[data-work-edit-error]');
+      if(err)err.hidden=true;
+    }
+    syncKindFields(dialog);
+  }catch(err){
+    console.error('Error preparing work edit dialog:',err);
+  }
+  try{
+    if(dialog.open)dialog.close();
+    dialog.showModal();
+  }catch(e){
+    dialog.setAttribute('open','');
+  }
+});
+/* 封面上传与本地文件选择 */
+document.addEventListener('click', event => {
+  const trigger = event.target.closest('[data-trigger-cover-file]');
+  if (trigger) {
+    const form = trigger.closest('form');
+    form?.querySelector('[data-work-cover-file]')?.click();
+    return;
+  }
+  const dropzone = event.target.closest('[data-work-cover-dropzone]');
+  if (dropzone && !event.target.closest('button')) {
+    const form = dropzone.closest('form');
+    form?.querySelector('[data-work-cover-file]')?.click();
+    return;
+  }
+});
+
+document.addEventListener('change', async event => {
+  const fileInput = event.target.closest('[data-work-cover-file]');
+  if (!fileInput || !fileInput.files?.length) return;
+  const file = fileInput.files[0];
+  const form = fileInput.closest('form');
+  if (!form) return;
+  const preview = form.querySelector('[data-work-cover-preview]');
+  const filenameEl = form.querySelector('[data-cover-filename]');
+  const errorEl = form.querySelector('[data-work-edit-error]');
+  if (errorEl) errorEl.hidden = true;
+
+  if (preview) {
+    preview.src = URL.createObjectURL(file);
+    preview.hidden = false;
+  }
+  if (filenameEl) filenameEl.textContent = `上传中: ${file.name}`;
+
+  try {
+    const resp = await fetch('/api/upload-image', {
+      method: 'POST',
+      body: file,
+      headers: {
+        'Content-Type': file.type || 'image/jpeg',
+        'X-Filename': encodeURIComponent(file.name),
+        'X-CSRF-Token': window.SUBFORGE_CSRF || '',
+      },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.selection_id) {
+      if (errorEl) {
+        errorEl.textContent = data.error || `上传图片失败（HTTP ${resp.status}）`;
+        errorEl.hidden = false;
+      }
+      return;
+    }
+    form.elements.selection_id.value = data.selection_id;
+    if (filenameEl) filenameEl.textContent = `已选择: ${data.filename}`;
+  } catch (err) {
+    if (errorEl) {
+      errorEl.textContent = `上传图片失败: ${err.message}`;
+      errorEl.hidden = false;
+    }
+  } finally {
+    fileInput.value = '';
+  }
+});
+
+document.addEventListener('dragover', event => {
+  if (event.target.closest('[data-work-cover-dropzone]')) {
+    event.preventDefault();
+  }
+});
+document.addEventListener('drop', event => {
+  const dropzone = event.target.closest('[data-work-cover-dropzone]');
+  if (!dropzone) return;
+  event.preventDefault();
+  const form = dropzone.closest('form');
+  const fileInput = form?.querySelector('[data-work-cover-file]');
+  if (event.dataTransfer?.files?.length && fileInput) {
+    fileInput.files = event.dataTransfer.files;
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+});
+
+document.addEventListener('click', async event => {
+  const btn = event.target.closest('[data-pick-work-cover]');
+  if (!btn) return;
+  const form = btn.closest('form');
+  const error = form?.querySelector('[data-work-edit-error]');
+  if (error) error.hidden = true;
+  btn.disabled = true;
+  try {
+    const response = await fetch('/picker/image', { method: 'POST' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.cancelled) {
+      if (!data.cancelled && error) {
+        error.textContent = data.error || '无法打开图片选择器';
+        error.hidden = false;
+      }
+      return;
+    }
+    form.elements.selection_id.value = data.selection_id;
+    const preview = form.querySelector('[data-work-cover-preview]');
+    if (preview) {
+      preview.src = `/api/selections/${data.selection_id}/image`;
+      preview.hidden = false;
+    }
+    if (form.querySelector('[data-cover-filename]')) {
+      form.querySelector('[data-cover-filename]').textContent = data.filename;
+    }
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.addEventListener('submit', async event => {
+  const form = event.target.closest('[data-work-edit-form]');
+  if (!form) return;
+  event.preventDefault();
+  const error = form.querySelector('[data-work-edit-error]');
+  if (error) error.hidden = true;
+  const saveBtn = form.querySelector('button:not(.ghost)');
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中…';
+  }
+  try {
+    const body = new URLSearchParams(new FormData(form)).toString();
+    const response = await fetch(form.action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+      body,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (error) {
+        error.textContent = data.error || `保存失败（HTTP ${response.status}）`;
+        error.hidden = false;
+      }
+      return;
+    }
+    location.reload();
+  } catch (err) {
+    if (error) {
+      error.textContent = `保存失败：${err.message}`;
+      error.hidden = false;
+    }
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '保存';
+    }
+  }
+});
 function showTaskMessage(row,message){let output=row.querySelector('.task-center-message');if(!output&&message){output=document.createElement('p');output.className='task-center-message';row.append(output)}if(!output)return;output.textContent=message||'';clearInterval(output._countdown);const match=(message||'').match(/(\d+)秒后重试/);if(!match)return;let seconds=Number(match[1]);output._countdown=setInterval(()=>{seconds=Math.max(0,seconds-1);output.textContent=message.replace(/\d+秒后重试/,`${seconds}秒后重试`);if(seconds===0)clearInterval(output._countdown)},1000)}
 function getTaskRows(){
  const rows=[...document.querySelectorAll('[data-task-id]')];
@@ -181,8 +622,9 @@ async function pollTaskRows(){
   if(reachedTerminal&&!document.querySelector('dialog[open]'))location.reload();
  }catch(_error){}finally{taskPollInFlight=false}
 }
+let taskPollTimer = null;
 function taskPollDelay(){const rows=getTaskRows();const fastStage=rows.some(row=>{const status=row.querySelector('.task-status')?.textContent.trim(),stage=row.querySelector('.task-stage')?.textContent.trim();return['queued','running'].includes(status)&&['model','asr'].includes(stage)});return fastStage?250:1000}
-async function scheduleTaskPoll(){await pollTaskRows();setTimeout(scheduleTaskPoll,taskPollDelay())}
+async function scheduleTaskPoll(){if(taskPollTimer)clearTimeout(taskPollTimer);await pollTaskRows();taskPollTimer=setTimeout(scheduleTaskPoll,taskPollDelay())}
 scheduleTaskPoll();document.addEventListener('visibilitychange',pollTaskRows);
 /* 片段重处理候选评审：从任务中心打开候选对比并接受/放弃 */
 let reviewTaskId='';
@@ -273,23 +715,199 @@ document.addEventListener('click',(event)=>{
  updateTabUrl(name);
 });
 /* 配置弹窗：新增/复制/编辑共用一个 dialog，浏览器端始终不接触已有 Key。 */
-for(const button of document.querySelectorAll('[data-open-dialog]')){button.addEventListener('click',()=>{const dialog=document.getElementById(button.dataset.openDialog);if(!dialog)return;const form=dialog.querySelector('form'),title=dialog.querySelector('[data-dialog-title]'),submit=dialog.querySelector('[data-dialog-submit]');form.reset();form.elements.profile_id.value='';form.elements.copy_from_profile_id.value='';form.elements.api_key.placeholder='可选';const raw=button.dataset.copyProfile||button.dataset.editProfile;if(raw){const p=JSON.parse(raw);form.elements.name.value=p.name||'';form.elements.base_url.value=p.base_url||'';form.elements.model.value=p.model||'';form.elements.protocol.value=p.protocol||'openai_compatible';form.elements.max_request_seconds.value=p.max_request_seconds??60;form.elements.temperature.value=p.temperature??0;form.elements.transcribe_prompt.value=p.transcribe_prompt||'';form.elements.bilingual_prompt.value=p.bilingual_prompt||'';form.elements.translate_prompt.value=p.translate_prompt||'';form.elements.merge_prompt.value=p.merge_prompt||'';for(const cap of ['transcribe','translate','merge']){const box=form.elements[`cap_${cap}`];if(box)box.checked=(p.capabilities||[]).includes(cap);}form.elements.api_key.value='';form.elements.proxy_url.value=p.proxy_url||'';form.elements.ca_bundle.value=p.ca_bundle||'';form.elements.verify_tls.checked=p.verify_tls!==false;if(button.dataset.copyProfile){form.elements.copy_from_profile_id.value=p.profile_id||'';form.elements.name.value=`${p.name||'未命名配置'} 副本`;form.elements.api_key.placeholder='留空复制原配置凭据';title.textContent='复制配置';submit.textContent='创建副本';}else{form.elements.profile_id.value=p.profile_id||'';form.elements.api_key.placeholder='留空保持不变';title.textContent='编辑配置';submit.textContent='保存';}}else{title.textContent='新增配置';submit.textContent='创建配置';}dialog.showModal();form.elements.name.focus();if(button.dataset.copyProfile)form.elements.name.select();});}
-for(const button of document.querySelectorAll('[data-close-dialog]'))button.addEventListener('click',()=>button.closest('dialog')?.close());
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-open-dialog]');
+  if (!button) return;
+  const dialog = document.getElementById(button.dataset.openDialog);
+  if (!dialog) return;
+  const form = dialog.querySelector('form'), title = dialog.querySelector('[data-dialog-title]'), submit = dialog.querySelector('[data-dialog-submit]');
+  if (!form) return;
+  form.reset();
+  form.elements.profile_id.value = '';
+  form.elements.copy_from_profile_id.value = '';
+  if (form.elements.api_key) form.elements.api_key.placeholder = '可选';
+  const raw = button.dataset.copyProfile || button.dataset.editProfile;
+  if (raw) {
+    const p = JSON.parse(raw);
+    if (form.elements.name) form.elements.name.value = p.name || '';
+    if (form.elements.base_url) form.elements.base_url.value = p.base_url || '';
+    if (form.elements.model) form.elements.model.value = p.model || '';
+    if (form.elements.protocol) form.elements.protocol.value = p.protocol || 'openai_compatible';
+    if (form.elements.max_request_seconds) form.elements.max_request_seconds.value = p.max_request_seconds ?? 60;
+    if (form.elements.temperature) form.elements.temperature.value = p.temperature ?? 0;
+    if (form.elements.transcribe_prompt) form.elements.transcribe_prompt.value = p.transcribe_prompt || '';
+    if (form.elements.bilingual_prompt) form.elements.bilingual_prompt.value = p.bilingual_prompt || '';
+    if (form.elements.translate_prompt) form.elements.translate_prompt.value = p.translate_prompt || '';
+    if (form.elements.merge_prompt) form.elements.merge_prompt.value = p.merge_prompt || '';
+    for (const cap of ['transcribe', 'translate', 'merge']) {
+      const box = form.elements[`cap_${cap}`];
+      if (box) box.checked = (p.capabilities || []).includes(cap);
+    }
+    if (form.elements.api_key) form.elements.api_key.value = '';
+    if (form.elements.proxy_url) form.elements.proxy_url.value = p.proxy_url || '';
+    if (form.elements.ca_bundle) form.elements.ca_bundle.value = p.ca_bundle || '';
+    if (form.elements.verify_tls) form.elements.verify_tls.checked = p.verify_tls !== false;
+    if (button.dataset.copyProfile) {
+      form.elements.copy_from_profile_id.value = p.profile_id || '';
+      form.elements.name.value = `${p.name || '未命名配置'} 副本`;
+      if (form.elements.api_key) form.elements.api_key.placeholder = '留空复制原配置凭据';
+      if (title) title.textContent = '复制配置';
+      if (submit) submit.textContent = '创建副本';
+    } else {
+      form.elements.profile_id.value = p.profile_id || '';
+      if (form.elements.api_key) form.elements.api_key.placeholder = '留空保持不变';
+      if (title) title.textContent = '编辑配置';
+      if (submit) submit.textContent = '保存';
+    }
+  } else {
+    if (title) title.textContent = '新增配置';
+    if (submit) submit.textContent = '创建配置';
+  }
+  dialog.showModal();
+  form.elements.name?.focus();
+  if (button.dataset.copyProfile) form.elements.name?.select();
+});
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-close-dialog]');
+  if (button) button.closest('dialog')?.close();
+});
 
 /* 创作者管理：分组搜索、行菜单，以及添加/修改/合并/删除 Dialog。 */
-for(const search of document.querySelectorAll('[data-creator-list-search]'))search.addEventListener('input',()=>{const q=normalizeCreatorName(search.value);for(const row of search.closest('[data-tab-panel]').querySelectorAll('[data-creator-row]'))row.hidden=!normalizeCreatorName(row.dataset.creatorName).startsWith(q)});
-for(const button of document.querySelectorAll('[data-creator-menu-button]'))button.addEventListener('click',event=>{event.stopPropagation();const menu=button.parentElement.querySelector('[data-creator-menu]');for(const other of document.querySelectorAll('[data-creator-menu]'))if(other!==menu)other.hidden=true;menu.hidden=!menu.hidden});
-document.addEventListener('click',()=>{for(const menu of document.querySelectorAll('[data-creator-menu]'))menu.hidden=true});
-const manageCreate=document.getElementById('creator-manage-create');document.querySelector('[data-open-creator-create]')?.addEventListener('click',()=>{const active=document.querySelector('.creator-tabs .tab.active')?.dataset.tab||'circle';manageCreate.querySelector(`input[name="kind"][value="${active}"]`).checked=true;manageCreate.showModal();manageCreate.querySelector('input[name="name"]').focus()});
-for(const button of document.querySelectorAll('[data-edit-creator]'))button.addEventListener('click',()=>{const dialog=document.getElementById('creator-edit-dialog'),form=dialog.querySelector('form');form.elements.creator_id.value=button.dataset.id;form.elements.name.value=button.dataset.name;dialog.querySelector('[data-edit-kind]').innerHTML=`<span class="creator-tag creator-tag-${button.dataset.kind}">${button.dataset.kind==='circle'?'社团':'声优'}</span>`;dialog.showModal();form.elements.name.focus()});
+document.addEventListener('input',event=>{
+  const search=event.target.closest('[data-creator-list-search]');
+  if(!search)return;
+  const q=normalizeCreatorName(search.value);
+  const panel=search.closest('[data-tab-panel]');
+  if(!panel)return;
+  for(const row of panel.querySelectorAll('[data-creator-row]'))row.hidden=!normalizeCreatorName(row.dataset.creatorName).startsWith(q);
+});
+document.addEventListener('click',event=>{
+  const menuBtn=event.target.closest('[data-creator-menu-button]');
+  if(menuBtn){
+    event.stopPropagation();
+    const menu=menuBtn.parentElement.querySelector('[data-creator-menu]');
+    for(const other of document.querySelectorAll('[data-creator-menu]'))if(other!==menu)other.hidden=true;
+    if(menu)menu.hidden=!menu.hidden;
+    return;
+  }
+  for(const menu of document.querySelectorAll('[data-creator-menu]'))menu.hidden=true;
+});
+document.addEventListener('click', event => {
+  const openCreator = event.target.closest('[data-open-creator-create]');
+  if (!openCreator) return;
+  const manageCreate = document.getElementById('creator-manage-create');
+  if (!manageCreate) return;
+  const active = document.querySelector('.creator-tabs .tab.active')?.dataset.tab || 'circle';
+  const kindInput = manageCreate.querySelector(`input[name="kind"][value="${active}"]`);
+  if (kindInput) kindInput.checked = true;
+  manageCreate.showModal();
+  manageCreate.querySelector('input[name="name"]')?.focus();
+});
 function clearCreatorPicker(picker){for(const tag of picker.querySelectorAll('[data-selected-id]'))tag.remove();const input=picker.querySelector('[data-creator-search]');if(input)input.value='';picker._refreshCreators?.(false)}
 function openMergeDialog(data){const dialog=document.getElementById('creator-merge-dialog'),form=dialog.querySelector('form'),picker=dialog.querySelector('[data-creator-picker]');form.elements.source_id.value=data.id;dialog.querySelector('[data-merge-source-name]').innerHTML=`<span class="creator-tag creator-tag-${data.kind}">${data.name}</span>`;dialog.querySelector('[data-merge-source-count]').textContent=`关联 ${data.count} 部作品`;clearCreatorPicker(picker);picker.dataset.allowedKind=data.kind;picker.dataset.excludeId=data.id;picker.dispatchEvent(new CustomEvent('creator-context-change'));dialog.showModal();picker.querySelector('[data-creator-search]').focus()}
-for(const button of document.querySelectorAll('[data-merge-creator]'))button.addEventListener('click',()=>openMergeDialog(button.dataset));
-for(const button of document.querySelectorAll('[data-delete-creator]'))button.addEventListener('click',()=>{const dialog=document.getElementById('creator-delete-dialog'),form=dialog.querySelector('form'),count=Number(button.dataset.count);form.elements.creator_id.value=button.dataset.id;dialog.dataset.sourceId=button.dataset.id;dialog.dataset.sourceName=button.dataset.name;dialog.dataset.sourceKind=button.dataset.kind;dialog.dataset.sourceCount=button.dataset.count;dialog.querySelector('[data-delete-title]').textContent=count?'无法删除创作者':'删除创作者';dialog.querySelector('[data-delete-message]').textContent=count?`“${button.dataset.name}”仍关联 ${count} 部作品，请先合并到同身份创作者。`:`确定删除“${button.dataset.name}”吗？`;dialog.querySelector('[data-confirm-delete]').hidden=count>0;dialog.querySelector('[data-delete-to-merge]').hidden=count===0;dialog.showModal()});
-document.querySelector('[data-delete-to-merge]')?.addEventListener('click',event=>{const dialog=event.target.closest('dialog');dialog.close();openMergeDialog({id:dialog.dataset.sourceId,name:dialog.dataset.sourceName,kind:dialog.dataset.sourceKind,count:dialog.dataset.sourceCount})});
-/* 删除配置：二次点击确认，3 秒后自动复位 */
-for(const button of document.querySelectorAll('[data-two-step]')){const confirmText='确认删除？';let armed=false,timer=null;button.addEventListener('click',e=>{if(!armed){e.preventDefault();armed=true;button.dataset.originalText=button.textContent;button.textContent=confirmText;button.classList.add('armed');timer=setTimeout(()=>{armed=false;button.textContent=button.dataset.originalText;button.classList.remove('armed')},3000);}else{clearTimeout(timer);}});}
-for(const button of document.querySelectorAll('[data-delete-deepgram]')){let armed=false,timer=null;button.addEventListener('click',async()=>{if(!armed){armed=true;button.textContent='确认';button.classList.add('armed');timer=setTimeout(()=>{armed=false;button.textContent='×';button.classList.remove('armed')},3000);return}clearTimeout(timer);const response=await fetch('/settings/deepgram/delete-key',{method:'POST'});if(!response.ok){armed=false;button.textContent='×';button.classList.remove('armed');return}const status=document.querySelector('[data-deepgram-status]');status.textContent='未配置';status.classList.remove('ok');button.remove()})}
+document.addEventListener('click',async event=>{
+  const editBtn=event.target.closest('[data-edit-creator]');
+  if(editBtn){
+    const dialog=document.getElementById('creator-edit-dialog'),form=dialog?.querySelector('form');
+    if(dialog&&form){
+      form.elements.creator_id.value=editBtn.dataset.id;
+      form.elements.name.value=editBtn.dataset.name;
+      const kindEl=dialog.querySelector('[data-edit-kind]');
+      if(kindEl)kindEl.innerHTML=`<span class="creator-tag creator-tag-${editBtn.dataset.kind}">${editBtn.dataset.kind==='circle'?'社团':'声优'}</span>`;
+      dialog.showModal();
+      form.elements.name.focus();
+    }
+    return;
+  }
+  const mergeBtn=event.target.closest('[data-merge-creator]');
+  if(mergeBtn){
+    openMergeDialog(mergeBtn.dataset);
+    return;
+  }
+  const delBtn=event.target.closest('[data-delete-creator]');
+  if(delBtn){
+    const dialog=document.getElementById('creator-delete-dialog'),form=dialog?.querySelector('form'),count=Number(delBtn.dataset.count);
+    if(dialog&&form){
+      form.elements.creator_id.value=delBtn.dataset.id;
+      dialog.dataset.sourceId=delBtn.dataset.id;
+      dialog.dataset.sourceName=delBtn.dataset.name;
+      dialog.dataset.sourceKind=delBtn.dataset.kind;
+      dialog.dataset.sourceCount=delBtn.dataset.count;
+      const titleEl=dialog.querySelector('[data-delete-title]');
+      if(titleEl)titleEl.textContent=count?'无法删除创作者':'删除创作者';
+      const msgEl=dialog.querySelector('[data-delete-message]');
+      if(msgEl)msgEl.textContent=count?`“${delBtn.dataset.name}”仍关联 ${count} 部作品，请先合并到同身份创作者。`:`确定删除“${delBtn.dataset.name}”吗？`;
+      const confirmBtn=dialog.querySelector('[data-confirm-delete]');
+      if(confirmBtn)confirmBtn.hidden=count>0;
+      const mergeActionBtn=dialog.querySelector('[data-delete-to-merge]');
+      if(mergeActionBtn)mergeActionBtn.hidden=count===0;
+      dialog.showModal();
+    }
+    return;
+  }
+  const toMerge=event.target.closest('[data-delete-to-merge]');
+  if(toMerge){
+    const dialog=toMerge.closest('dialog');
+    dialog?.close();
+    openMergeDialog({
+      id:dialog.dataset.sourceId,
+      name:dialog.dataset.sourceName,
+      kind:dialog.dataset.sourceKind,
+      count:dialog.dataset.sourceCount,
+    });
+    return;
+  }
+  const twoStepBtn=event.target.closest('[data-two-step]');
+  if(twoStepBtn){
+    if(!twoStepBtn._armed){
+      event.preventDefault();
+      twoStepBtn._armed=true;
+      twoStepBtn.dataset.originalText=twoStepBtn.textContent;
+      twoStepBtn.textContent='确认删除？';
+      twoStepBtn.classList.add('armed');
+      clearTimeout(twoStepBtn._timer);
+      twoStepBtn._timer=setTimeout(()=>{
+        twoStepBtn._armed=false;
+        twoStepBtn.textContent=twoStepBtn.dataset.originalText;
+        twoStepBtn.classList.remove('armed');
+      },3000);
+    }else{
+      clearTimeout(twoStepBtn._timer);
+      twoStepBtn._armed=false;
+    }
+    return;
+  }
+  const deepgramBtn=event.target.closest('[data-delete-deepgram]');
+  if(deepgramBtn){
+    if(!deepgramBtn._armed){
+      deepgramBtn._armed=true;
+      deepgramBtn.textContent='确认';
+      deepgramBtn.classList.add('armed');
+      clearTimeout(deepgramBtn._timer);
+      deepgramBtn._timer=setTimeout(()=>{
+        deepgramBtn._armed=false;
+        deepgramBtn.textContent='×';
+        deepgramBtn.classList.remove('armed');
+      },3000);
+      return;
+    }
+    clearTimeout(deepgramBtn._timer);
+    const response=await fetch('/settings/deepgram/delete-key',{method:'POST'});
+    if(!response.ok){
+      deepgramBtn._armed=false;
+      deepgramBtn.textContent='×';
+      deepgramBtn.classList.remove('armed');
+      return;
+    }
+    const status=document.querySelector('[data-deepgram-status]');
+    if(status){
+      status.textContent='未配置';
+      status.classList.remove('ok');
+    }
+    deepgramBtn.remove();
+    return;
+  }
+});
 
 /* 作品库搜索：服务端跨分页检索，输入停顿后刷新并回到第一页。 */
 const workSearch = document.getElementById('work-search');
@@ -400,7 +1018,13 @@ document.addEventListener('click',event=>{
   if(!row)return;
   if(event.target.closest('a,button,form,details,.track-menu,input,select,textarea,[data-task-id]'))return;
   event.stopPropagation();
-  if(row.dataset.trackPlayer)window.location.href=row.dataset.trackPlayer;
+  if(row.dataset.trackPlayer) {
+    if (window.htmx) {
+      window.htmx.ajax('GET', row.dataset.trackPlayer, { target: '#main-content', select: '#main-content', swap: 'outerHTML', pushUrl: true });
+    } else {
+      window.location.href=row.dataset.trackPlayer;
+    }
+  }
 });
 document.addEventListener('keydown',event=>{
   if(event.key!=='Enter'&&event.key!==' ')return;
@@ -410,7 +1034,11 @@ document.addEventListener('keydown',event=>{
   if(active&&active!==row&&row.contains(active))return;
   if(!row.dataset.trackPlayer)return;
   event.preventDefault();
-  window.location.href=row.dataset.trackPlayer;
+  if (window.htmx) {
+    window.htmx.ajax('GET', row.dataset.trackPlayer, { target: '#main-content', select: '#main-content', swap: 'outerHTML', pushUrl: true });
+  } else {
+    window.location.href=row.dataset.trackPlayer;
+  }
 });
 
 /* 就地播放：点击 data-play-track 时在底部条中开始播放（不跳转页面）。
@@ -432,56 +1060,226 @@ document.addEventListener('click',event=>{
   const topBar=window.top.document?.getElementById('player-bar')||document.getElementById('player-bar');
   if(topBar)topBar.hidden=false;
 });
-window.SubForgeApp=window.SubForgeApp||{};
-window.SubForgeApp.initWidgets=initTrackDurations;
+function initWidgets(root = document) {
+  initTrackDurations(root);
+  if (typeof enhanceSelects === 'function') enhanceSelects(root);
+  for (const picker of root.querySelectorAll('[data-creator-picker]')) setupCreatorPicker(picker);
+  syncKindFields(root);
+}
+window.SubForgeApp = window.SubForgeApp || {};
+window.SubForgeApp.initWidgets = initWidgets;
 
-/* URL 下载导入：fetch 提交，错误在对话框内友好显示（避免裸 JSON 页面） */
-const folderImportForm=document.querySelector('[data-folder-import-form]');
-const folderPreviewDialog=document.getElementById('folder-import-preview');
-document.querySelector('[data-pick-media-folder]')?.addEventListener('click',async()=>{const response=await fetch('/picker/media-folder',{method:'POST'});const data=await response.json().catch(()=>({}));const error=folderImportForm.querySelector('[data-folder-error]');if(!response.ok||data.cancelled){if(!data.cancelled){error.textContent=data.error||'无法打开文件夹选择器';error.hidden=false}return}folderImportForm.elements.selection_id.value=data.selection_id;folderImportForm.querySelector('[data-folder-name]').textContent=data.name;error.hidden=true});
-document.querySelector('[data-preview-folder-import]')?.addEventListener('click',async()=>{const error=folderImportForm.querySelector('[data-folder-error]');error.hidden=true;if(!folderImportForm.elements.selection_id.value){error.textContent='请先选择 RJ 文件夹';error.hidden=false;return}if(!folderImportForm.elements.rj_code.value.trim()){error.textContent='请填写 RJ 号';error.hidden=false;return}const body=new URLSearchParams({selection_id:folderImportForm.elements.selection_id.value}).toString();const response=await fetch('/api/import-folders/preview',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const data=await response.json().catch(()=>({}));if(!response.ok){error.textContent=data.error||'扫描文件夹失败';error.hidden=false;return}folderPreviewDialog.querySelector('[data-preview-audio]').textContent=data.audio_count;folderPreviewDialog.querySelector('[data-preview-video]').textContent=data.video_count;folderPreviewDialog.querySelector('[data-preview-skipped]').textContent=data.skipped_count;folderPreviewDialog.querySelector('[data-preview-folder]').textContent=`${data.folder} · 共 ${data.media_count} 个媒体文件`;const list=folderPreviewDialog.querySelector('[data-preview-files]');list.replaceChildren(...data.files.map(name=>{const li=document.createElement('li');li.textContent=name;return li}));folderPreviewDialog.showModal()});
-document.querySelector('[data-confirm-folder-import]')?.addEventListener('click',async event=>{const button=event.currentTarget;button.disabled=true;button.textContent='开始中…';const body=new URLSearchParams(new FormData(folderImportForm)).toString();const response=await fetch(folderImportForm.action,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const data=await response.json().catch(()=>({}));if(!response.ok){button.disabled=false;button.textContent='开始导入';folderPreviewDialog.close();const error=folderImportForm.querySelector('[data-folder-error]');error.textContent=data.error||'无法开始文件夹导入';error.hidden=false;return}folderPreviewDialog.close();document.getElementById('import-dialog')?.close();window.location.href='/downloads'});
-
-const urlImportForm = document.querySelector('[data-import-url-form]');
-if (urlImportForm) {
-  urlImportForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const errEl = urlImportForm.querySelector('[data-import-error]');
-    const btn = urlImportForm.querySelector('[data-import-submit]');
-    errEl.hidden = true;
-    const formData = new FormData(urlImportForm);
-    formData.append('csrf_token', window.SUBFORGE_CSRF || '');
-    // 服务端 _read_form 用 parse_qs 解析 urlencoded body（不支持 multipart）
-    const body = new URLSearchParams(formData).toString();
-    btn.disabled = true;
-    btn.textContent = '下载中…';
-    try {
-      const resp = await fetch(urlImportForm.action, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-      const data = await resp.json().catch(() => ({}));
-      if (resp.status === 202 && data.task_id) {
-        // 异步：轮询后台下载状态，完成后跳转到作品页
-        btn.textContent = '下载中…';
-        for (;;) {
-          await new Promise(r => setTimeout(r, 1500));
-          const st = await fetch(`/api/imports/${data.task_id}`).then(r => r.json()).catch(() => null);
-          if (!st) continue;
-          if (st.status === 'done' && st.item_id) { window.location.href = `/items/${st.item_id}`; return; }
-          if (st.status === 'error') { errEl.textContent = st.message || '下载失败'; errEl.hidden = false; break; }
-          btn.textContent = st.message || '下载中…';
+/* RJ 文件夹导入：选择文件夹（事件委托） */
+document.addEventListener('click', async event => {
+  const pickFolderBtn = event.target.closest('[data-pick-media-folder]');
+  if (!pickFolderBtn) return;
+  const form = pickFolderBtn.closest('form') || document.querySelector('[data-folder-import-form]');
+  const error = form?.querySelector('[data-folder-error]');
+  if (error) error.hidden = true;
+  pickFolderBtn.disabled = true;
+  try {
+    const response = await fetch('/picker/media-folder', { method: 'POST' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.cancelled) {
+      if (!data.cancelled && error) {
+        error.textContent = data.error || '无法打开文件夹选择器';
+        error.hidden = false;
+      }
+      return;
+    }
+    if (form) {
+      form.elements.selection_id.value = data.selection_id;
+      const folderName = form.querySelector('[data-folder-name]');
+      if (folderName) folderName.textContent = data.name;
+      const rjMatch = (data.name || '').match(/RJ\d{6,8}/i);
+      if (rjMatch) {
+        const rjInput = form.querySelector('input[name="rj_code"]');
+        if (rjInput && !rjInput.value.trim()) {
+          rjInput.value = rjMatch[0].toUpperCase();
         }
-      } else if (!resp.ok || data.error) {
+      }
+    }
+  } catch (err) {
+    if (error) {
+      error.textContent = `选择文件夹失败：${err.message}`;
+      error.hidden = false;
+    }
+  } finally {
+    pickFolderBtn.disabled = false;
+  }
+});
+
+/* RJ 文件夹导入：扫描并预览（事件委托） */
+document.addEventListener('click', async event => {
+  const previewBtn = event.target.closest('[data-preview-folder-import]');
+  if (!previewBtn) return;
+  const form = previewBtn.closest('form') || document.querySelector('[data-folder-import-form]');
+  const folderPreviewDialog = document.getElementById('folder-import-preview');
+  if (!form || !folderPreviewDialog) return;
+  const error = form.querySelector('[data-folder-error]');
+  if (error) error.hidden = true;
+  if (!form.elements.selection_id?.value) {
+    if (error) {
+      error.textContent = '请先选择 RJ 文件夹';
+      error.hidden = false;
+    }
+    return;
+  }
+  if (!form.elements.rj_code?.value.trim()) {
+    if (error) {
+      error.textContent = '请填写 RJ 号';
+      error.hidden = false;
+    }
+    return;
+  }
+  previewBtn.disabled = true;
+  try {
+    const body = new URLSearchParams({ selection_id: form.elements.selection_id.value }).toString();
+    const response = await fetch('/api/import-folders/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (error) {
+        error.textContent = data.error || '扫描文件夹失败';
+        error.hidden = false;
+      }
+      return;
+    }
+    folderPreviewDialog.querySelector('[data-preview-audio]').textContent = data.audio_count;
+    folderPreviewDialog.querySelector('[data-preview-video]').textContent = data.video_count;
+    folderPreviewDialog.querySelector('[data-preview-skipped]').textContent = data.skipped_count;
+    folderPreviewDialog.querySelector('[data-preview-folder]').textContent = `${data.folder} · 共 ${data.media_count} 个媒体文件`;
+    const list = folderPreviewDialog.querySelector('[data-preview-files]');
+    list.replaceChildren(...data.files.map(name => {
+      const li = document.createElement('li');
+      li.textContent = name;
+      return li;
+    }));
+    folderPreviewDialog.showModal();
+  } catch (err) {
+    if (error) {
+      error.textContent = `扫描文件夹失败：${err.message}`;
+      error.hidden = false;
+    }
+  } finally {
+    previewBtn.disabled = false;
+  }
+});
+
+/* RJ 文件夹导入：确认开始导入（事件委托） */
+document.addEventListener('click', async event => {
+  const confirmBtn = event.target.closest('[data-confirm-folder-import]');
+  if (!confirmBtn) return;
+  const form = document.querySelector('[data-folder-import-form]');
+  const folderPreviewDialog = document.getElementById('folder-import-preview');
+  if (!form) return;
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = '开始中…';
+  try {
+    const formData = new FormData(form);
+    formData.append('csrf_token', window.SUBFORGE_CSRF || '');
+    const body = new URLSearchParams(formData).toString();
+    const response = await fetch(form.action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = '开始导入';
+      folderPreviewDialog?.close();
+      const error = form.querySelector('[data-folder-error]');
+      if (error) {
+        error.textContent = data.error || '无法开始文件夹导入';
+        error.hidden = false;
+      }
+      return;
+    }
+    folderPreviewDialog?.close();
+    document.getElementById('import-dialog')?.close();
+    window.location.href = '/downloads';
+  } catch (err) {
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = '开始导入';
+    folderPreviewDialog?.close();
+    const error = form.querySelector('[data-folder-error]');
+    if (error) {
+      error.textContent = `启动导入失败：${err.message}`;
+      error.hidden = false;
+    }
+  }
+});
+
+/* URL 下载导入：fetch 提交，错误在对话框内友好显示（事件委托） */
+document.addEventListener('submit', async event => {
+  const urlImportForm = event.target.closest('[data-import-url-form]');
+  if (!urlImportForm) return;
+  event.preventDefault();
+  const errEl = urlImportForm.querySelector('[data-import-error]');
+  const btn = urlImportForm.querySelector('[data-import-submit]');
+  if (errEl) errEl.hidden = true;
+  const formData = new FormData(urlImportForm);
+  formData.append('csrf_token', window.SUBFORGE_CSRF || '');
+  const body = new URLSearchParams(formData).toString();
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '准备下载…';
+  }
+  try {
+    const resp = await fetch(urlImportForm.action, {
+      method: 'POST',
+      body,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.status === 202 && data.task_id) {
+      if (btn) btn.textContent = '下载中…';
+      let pollCount = 0;
+      for (;;) {
+        await new Promise(r => setTimeout(r, 1200));
+        pollCount++;
+        const st = await fetch(`/api/imports/${data.task_id}`).then(r => r.json()).catch(() => null);
+        if (!st) continue;
+        if (st.status === 'done' && st.item_id) {
+          window.location.href = `/items/${st.item_id}`;
+          return;
+        }
+        if (st.status === 'error') {
+          if (errEl) {
+            errEl.textContent = st.message || '下载失败';
+            errEl.hidden = false;
+          }
+          break;
+        }
+        if (btn) btn.textContent = st.message || '下载中…';
+        if (pollCount >= 5) {
+          document.getElementById('import-dialog')?.close();
+          window.location.href = '/downloads?tab=downloads';
+          return;
+        }
+      }
+    } else if (!resp.ok || data.error) {
+      if (errEl) {
         errEl.textContent = data.error || `下载失败（HTTP ${resp.status}），请稍后重试`;
         errEl.hidden = false;
       }
-    } catch (err) {
+    }
+  } catch (err) {
+    if (errEl) {
       errEl.textContent = `下载失败：${err.message}`;
       errEl.hidden = false;
-    } finally {
+    }
+  } finally {
+    if (btn) {
       btn.disabled = false;
       btn.textContent = '下载并导入';
     }
-  });
-}
+  }
+});
 
 /* ─── 自定义深色下拉：原生 <select> 的 popup 在真实浏览器无法用 option CSS 接管，改为自定义渲染 ─── */
 function enhanceSelects(root = document) {
@@ -565,16 +1363,22 @@ function enhanceSelects(root = document) {
 }
 enhanceSelects();
 /* 原生音频模型配置：公开字段回填，API Key 永不回填到浏览器。 */
-for(const button of document.querySelectorAll('[data-edit-gemini-profile]'))button.addEventListener('click',()=>{
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-edit-gemini-profile]');
+  if(!button)return;
   const form=document.getElementById('gemini-profile-form');if(!form)return;
-  const profile=JSON.parse(button.dataset.editGeminiProfile);
-  for(const name of ['profile_id','name','protocol','base_url','model','max_segment_seconds','temperature','bilingual_prompt','transcribe_prompt','proxy_url','ca_bundle']){
-    if(!form.elements[name])continue;
-    const source=name==='max_segment_seconds'?'max_request_seconds':name;
-    form.elements[name].value=profile[source]??'';
+  try{
+    const profile=JSON.parse(button.dataset.editGeminiProfile);
+    for(const name of ['profile_id','name','protocol','base_url','model','max_segment_seconds','temperature','bilingual_prompt','transcribe_prompt','proxy_url','ca_bundle']){
+      if(!form.elements[name])continue;
+      const source=name==='max_segment_seconds'?'max_request_seconds':name;
+      form.elements[name].value=profile[source]??'';
+    }
+    form.elements.api_key.value='';form.elements.verify_tls.checked=!!profile.verify_tls;
+    form.scrollIntoView({behavior:'smooth',block:'start'});form.elements.name.focus();
+  }catch(e){
+    console.error(e);
   }
-  form.elements.api_key.value='';form.elements.verify_tls.checked=!!profile.verify_tls;
-  form.scrollIntoView({behavior:'smooth',block:'start'});form.elements.name.focus();
 });
 
 /* 作品库：底部分页条支持动态配置每页条数（默认10条，可选12/14/20） */
@@ -592,3 +1396,5 @@ document.addEventListener('change', (e) => {
     window.location.assign(target);
   }
 });
+/* window.__subforgeAppInitialized block end */
+}

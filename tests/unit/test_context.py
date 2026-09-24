@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -429,3 +430,105 @@ class TestResumeHealsBlankCachedBatches:
         assert len(calls_messages) == 1
         system_content = calls_messages[0][0]["content"]
         assert "请使用地道中文，敏感内容委婉化处理" in system_content
+
+
+class TestTranslateAllConcurrency:
+    def _config(self, **kwargs):
+        defaults = {
+            "source_lang": "ja", "target_lang": "zh",
+            "batch_size": 10, "context_size": 5,
+            "translate_workers": 8,
+        }
+        defaults.update(kwargs)
+        return Config(**defaults)
+
+    def _entries(self, n: int) -> list[SubtitleEntry]:
+        return [
+            SubtitleEntry(index=i + 1, start=i * 2.0, end=i * 2.0 + 1.5, text=f"Entry {i + 1}")
+            for i in range(n)
+        ]
+
+    async def test_result_ordering(self):
+        """Translation results must be ordered by entry.index regardless of which batch finished first."""
+        config = self._config(batch_size=10, context_size=0)
+        entries = self._entries(25)  # 3 batches
+
+        mock_translate = AsyncMock()
+        mock_translate.side_effect = [
+            "\n".join(f"[{i}] tr-{i}" for i in range(1, 11)),
+            "\n".join(f"[{i}] tr-{i}" for i in range(11, 21)),
+            "\n".join(f"[{i}] tr-{i}" for i in range(21, 26)),
+        ]
+
+        result = await translate_all(entries, config, mock_translate)
+        assert len(result) == 25
+        for i, entry in enumerate(result):
+            assert entry.index == i + 1
+            assert entry.text == f"tr-{i + 1}"
+
+    async def test_serial_fallback(self):
+        """workers=1 should work identically to serial behavior."""
+        config = self._config(translate_workers=1)
+        entries = self._entries(25)
+
+        mock_translate = AsyncMock()
+        mock_translate.side_effect = [
+            "\n".join(f"[{i}] x{i}" for i in range(1, 11)),
+            "\n".join(f"[{i}] x{i}" for i in range(11, 21)),
+            "\n".join(f"[{i}] x{i}" for i in range(21, 26)),
+        ]
+
+        result = await translate_all(entries, config, mock_translate)
+        assert len(result) == 25
+        assert mock_translate.call_count == 3
+
+    async def test_progress_callback(self):
+        config = self._config(batch_size=10, context_size=0)
+        entries = self._entries(15)  # 2 batches
+
+        mock_translate = AsyncMock()
+        mock_translate.side_effect = [
+            "\n".join(f"[{i}] t{i}" for i in range(1, 11)),
+            "\n".join(f"[{i}] t{i}" for i in range(11, 16)),
+        ]
+
+        progress_calls: list[tuple[int, int]] = []
+        def _cb(done: int, total: int) -> None:
+            progress_calls.append((done, total))
+
+        result = await translate_all(entries, config, mock_translate, progress_callback=_cb)
+        assert len(result) == 15
+        total_batches = 2
+        assert len(progress_calls) == total_batches
+        assert progress_calls[-1] == (2, 2)
+
+
+class TestTranslationRequestLimiter:
+    async def test_translation_request_limiter_caps_concurrent_requests(self, tmp_path):
+        from subforge.translate.limiter import TranslationRequestLimiter
+        limiter = TranslationRequestLimiter(tmp_path / "slots", limit=2)
+        active = 0
+        peak = 0
+        entered = asyncio.Event()
+
+        async def request():
+            nonlocal active, peak
+            async with limiter.slot():
+                active += 1
+                peak = max(peak, active)
+                if peak == 2:
+                    entered.set()
+                await asyncio.sleep(0.03)
+                active -= 1
+
+        tasks = [asyncio.create_task(request()) for _ in range(6)]
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        await asyncio.gather(*tasks)
+
+        assert peak == 2
+
+    async def test_translation_request_limiter_can_be_disabled(self, tmp_path):
+        from subforge.translate.limiter import TranslationRequestLimiter
+        limiter = TranslationRequestLimiter(None, limit=0)
+        async with limiter.slot():
+            pass

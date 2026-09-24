@@ -13,6 +13,7 @@
         <label>类型<select name="kind" id="kind" data-kind-select data-custom-select><option value="rj_work">RJ 作品</option><option value="stream_archive">直播归档</option></select></label>
         <label data-rj-field>RJ 号<input name="rj_code" placeholder="RJ01546796"></label>
         <label>标题<input name="title" placeholder="留空使用文件名"></label>
+        <label data-author-field style="display:none">创作者<input name="author" placeholder="创作者名称"></label>
         <label class="field-label">创作者</label>
         {{ picker('local-import-creators', creators, [], 'creator_ids', 'rj_work') }}
         <label class="check-field auto-process-field"><span><input type="checkbox" name="auto_process" {% if profiles %}checked{% else %}disabled{% endif %}> 导入后自动处理</span><small>{% if profiles %}使用最近一次处理配置；没有历史时使用默认配置。{% else %}请先添加翻译配置，当前只能导入媒体。{% endif %}</small></label>
@@ -24,10 +25,12 @@
   <div class="import-panel" data-import-panel="url" hidden>
     <form method="post" action="/items/import-url" data-secure data-import-url-form>
       <div class="dialog-body field-list">
-        <label>视频链接<input name="url" required placeholder="https://www.youtube.com/watch?v=… 或 https://www.bilibili.com/video/…"></label>
+        <label>视频链接<input name="url" required placeholder="https://www.youtube.com/watch?v=… 或 https://www.bilibili.com/video/…" data-url-input autocomplete="off"></label>
+        <p class="dialog-note" data-url-status hidden style="margin-top:-6px;font-size:0.82rem;color:var(--accent);"></p>
         <label>类型<select name="kind" data-kind-select data-custom-select><option value="stream_archive">直播归档</option><option value="rj_work">RJ 作品</option></select></label>
-        <label data-rj-field>RJ 号<input name="rj_code" placeholder="RJ01546796"></label>
-        <label>标题<input name="title" placeholder="留空使用视频标题"></label>
+        <label data-rj-field style="display:none">RJ 号<input name="rj_code" placeholder="RJ01546796"></label>
+        <label>标题<input name="title" placeholder="留空使用视频标题" data-url-title></label>
+        <label data-author-field>创作者 / UP主<input name="author" placeholder="输入或自动获取 UP主 / 频道名" data-url-author></label>
         <label class="field-label">创作者</label>
         {{ picker('url-import-creators', creators, [], 'creator_ids', 'stream_archive') }}
         <label class="check-field auto-process-field"><span><input type="checkbox" name="auto_process" {% if profiles %}checked{% else %}disabled{% endif %}> 导入后自动处理</span><small>{% if profiles %}下载并导入完成后自动加入字幕处理队列。{% else %}请先添加翻译配置，当前只能导入媒体。{% endif %}</small></label>
@@ -67,7 +70,7 @@
 </dialog>
 {{ create_dialog() }}
 
-<section class="works-grid">{% for item in items %}<a class="work-card" href="/items/{{ item.item_id }}"><div class="work-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}"><img class="work-cover-img" src="/covers/{{ item.item_id }}" alt="" loading="lazy" decoding="async" onerror="this.remove()"><span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span>{% if item.tracks %}{% set total_mb = ((item_size_by_id.get(item.item_id, item.tracks|sum(attribute='size')) if item_size_by_id is defined else (item.tracks|sum(attribute='size'))) / 1048576)|round(1) %}<span class="work-size">{{ total_mb }} MB</span>{% endif %}</div><div class="work-body"><h2>{{ item.title }}</h2><div class="work-meta">{% if item.rj_code %}<span class="chip chip-rj">{{ item.rj_code }}</span>{% endif %}{% for creator_id in item.creator_ids %}{% set creator = creator_by_id.get(creator_id) %}{% if creator %}<span class="creator-tag creator-tag-{{ creator.kind.value }}">{{ creator.name }}</span>{% endif %}{% endfor %}</div>{% set first = item.tracks[0] if item.tracks else none %}{% if first %}<span class="status-badge status-{{ first.status }}">{{ first.status }}</span>{% else %}<span class="status-badge status-waiting">waiting</span>{% endif %}</div></a>{% else %}<p class="empty">{% if search_query %}没有匹配“{{ search_query }}”的作品。{% else %}Library 为空，先导入一个音频或视频。{% endif %}</p>{% endfor %}</section>
+<section class="works-grid">{% for item in items %}<a class="work-card" href="/items/{{ item.item_id }}"><div class="work-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}"><img class="work-cover-img" src="/covers/{{ item.item_id }}{% if item.updated_at %}?v={{ item.updated_at }}{% endif %}" alt="" loading="lazy" decoding="async" onerror="this.remove()"><span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span>{% if item.tracks %}{% set total_mb = ((item_size_by_id.get(item.item_id, item.tracks|sum(attribute='size')) if item_size_by_id is defined else (item.tracks|sum(attribute='size'))) / 1048576)|round(1) %}<span class="work-size">{{ total_mb }} MB</span>{% endif %}</div><div class="work-body"><h2>{{ item.title }}</h2><div class="work-meta">{% if item.rj_code %}<span class="chip chip-rj">{{ item.rj_code }}</span>{% endif %}{% for creator_id in item.creator_ids %}{% set creator = creator_by_id.get(creator_id) %}{% if creator %}<span class="creator-tag creator-tag-{{ creator.kind.value }}">{{ creator.name }}</span>{% endif %}{% endfor %}</div>{% set first = item.tracks[0] if item.tracks else none %}{% if first %}<span class="status-badge status-{{ first.status }}">{{ first.status }}</span>{% else %}<span class="status-badge status-waiting">waiting</span>{% endif %}</div></a>{% else %}<p class="empty">{% if search_query %}没有匹配“{{ search_query }}”的作品。{% else %}Library 为空，先导入一个音频或视频。{% endif %}</p>{% endfor %}</section>
 {% if total_items > 0 %}
 <nav class="library-pagination" aria-label="作品分页">
   <div class="pagination-info">

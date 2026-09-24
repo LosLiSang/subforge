@@ -9,6 +9,14 @@
   const read = () => { try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { return null; } };
   const write = (s) => localStorage.setItem(KEY, JSON.stringify(s));
   const fmtT = (t) => { if (t == null || !isFinite(t)) return '--:--'; const s = Math.max(0, Math.floor(t)), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60; const p = n => String(n).padStart(2, '0'); return h ? `${h}:${p(m)}:${p(sec)}` : `${m}:${p(sec)}`; };
+  const navigateTo = (url) => {
+    if (!url) return;
+    if (window.htmx) {
+      window.htmx.ajax('GET', url, { target: '#main-content', select: '#main-content', swap: 'outerHTML', pushUrl: true });
+    } else {
+      window.location.href = url;
+    }
+  };
   const syncBarHeight = () => {
     if (!bar.hidden && bar.getBoundingClientRect().height) {
       document.documentElement.style.setProperty('--player-bar-height', `${Math.ceil(bar.getBoundingClientRect().height)}px`);
@@ -27,7 +35,7 @@
     gainNode: null,
     /* 监听器按 tag 注册：同 tag 重复注册时替换而非追加。
      * 本单例跨 iframe 导航存活，无 tag 的 push 会让闭包（及其捕获的死文档）永久滞留。 */
-    _listeners: { timeupdate: new Map(), play: new Map(), pause: new Map(), loadedmetadata: new Map() },
+    _listeners: { timeupdate: new Map(), play: new Map(), pause: new Map(), loadedmetadata: new Map(), ended: new Map() },
     on(evt, fn, tag) { const m = this._listeners[evt]; if (m) m.set(tag || fn, fn); },
     off(evt, tag) { this._listeners[evt]?.delete(tag); },
     _emit(evt) { for (const fn of this._listeners[evt]?.values() || []) fn(this.audio); },
@@ -35,9 +43,9 @@
     get paused() { return this.audio ? this.audio.paused : true; },
     get duration() { return this.audio ? this.audio.duration || 0 : 0; },
     seek(t) { if (this.audio) this.audio.currentTime = t; },
-    get volume() { const value = read()?.volume; return Number.isFinite(value) ? Math.max(0, Math.min(2, value)) : 1; },
+    get volume() { const value = read()?.volume; return Number.isFinite(value) ? Math.max(0, Math.min(3, value)) : 1; },
     setVolume(value) {
-      const volume = Math.max(0, Math.min(2, Number(value) || 0));
+      const volume = Math.max(0, Math.min(3, Number(value) || 0));
       if (this.gainNode) this.gainNode.gain.value = volume;
       else if (this.audio) this.audio.volume = Math.min(1, volume);
       const st = read() || {};
@@ -100,7 +108,7 @@
       });
       this.audio.addEventListener('play', () => { const st = read(); if (st) { st.playing = true; write(st); } this._emit('play'); });
       this.audio.addEventListener('pause', () => { const st = read(); if (st) { st.playing = false; write(st); } this._emit('pause'); });
-      this.audio.addEventListener('ended', () => { const st = read(); if (st) { st.playing = false; write(st); } this._emit('pause'); });
+      this.audio.addEventListener('ended', () => { const st = read(); if (st) { st.playing = false; write(st); } this._emit('pause'); this._emit('ended'); });
       this.audio.addEventListener('loadedmetadata', () => { const st = read(); if (st && st.currentTime && isFinite(st.currentTime)) this.audio.currentTime = Math.min(st.currentTime, this.audio.duration || st.currentTime); this._emit('loadedmetadata'); });
       return this.audio;
     },
@@ -173,17 +181,17 @@
     bar.hidden = false;
     bar.className = 'player-bar';
     const safeTitle = (st.title || '播放中').replace(/"/g, '&quot;');
-    const volume = Number.isFinite(st.volume) ? Math.max(0, Math.min(2, st.volume)) : 1;
+    const volume = Number.isFinite(st.volume) ? Math.max(0, Math.min(3, st.volume)) : 1;
     const coverUrl = st.itemId ? `/covers/${st.itemId}` : '';
     bar.innerHTML = `
       <div class="player-bar-row">
-        <div class="player-bar-cover">${coverUrl ? `<img src="${coverUrl}" alt="" onerror="this.hidden=true">` : ''}</div>
+        <a class="player-bar-cover" href="/tracks/${st.trackId}/play" title="打开播放页">${coverUrl ? `<img src="${coverUrl}" alt="" onerror="this.hidden=true">` : ''}</a>
         <a class="player-bar-title" href="/tracks/${st.trackId}/play" title="${safeTitle}">${safeTitle}</a>
         <div class="player-bar-progress-wrap"><input type="range" class="player-bar-seek" data-role="seek" min="0" max="${st.duration || 0}" step="0.1" value="${st.currentTime || 0}" aria-label="播放进度"><span class="player-bar-time" data-role="time">${fmtT(st.currentTime)}</span></div>
         <button type="button" class="ghost small player-bar-toggle" data-role="toggle" aria-label="播放/暂停"><svg class="ic-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v13.72a1 1 0 0 0 1.52.86l11-6.86a1 1 0 0 0 0-1.72l-11-6.86A1 1 0 0 0 8 5.14z"/></svg><svg class="ic-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
-        <label class="player-bar-volume" title="音量"><span aria-hidden="true">🔊</span><input type="range" data-role="volume" min="0" max="2" step="0.01" value="${volume}" aria-label="音量，最高 200%"><output data-role="volume-value">${Math.round(volume * 100)}%</output></label>
+        <label class="player-bar-volume" title="音量"><span aria-hidden="true">🔊</span><input type="range" data-role="volume" min="0" max="3" step="0.01" value="${volume}" aria-label="音量，最高 300%"><output data-role="volume-value">${Math.round(volume * 100)}%</output></label>
         <button type="button" class="ghost small" data-role="float" aria-label="悬浮歌词" title="悬浮歌词">词</button>
-        <button type="button" class="ghost small" data-role="open" aria-label="打开播放页">⛶</button>
+        <button type="button" class="ghost small" data-role="open" aria-label="打开播放页" title="打开播放页">⛶</button>
       </div>
     `;
     const toggleBtn = bar.querySelector('[data-role="toggle"]');
@@ -198,12 +206,18 @@
       floatBtn.addEventListener('click', () => floatApi.toggle(st.trackId));
       floatApi.onChange(() => floatBtn.classList.toggle('active', floatApi.isActive()), 'bar');
     } else floatBtn.hidden = true;
-    // iframe 外壳：打开播放页 = iframe 内导航（顶层外壳保持不变）
-    bar.querySelector('[data-role="open"]').addEventListener('click', () => {
-      const frame = document.getElementById('content-frame');
-      if (frame) { frame.src = `/tracks/${st.trackId}/play`; }
-      else { window.location.href = `/tracks/${st.trackId}/play`; }
-    });
+    const openPlayPage = (e) => {
+      if (e) {
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        e.preventDefault();
+      }
+      const targetUrl = `/tracks/${st.trackId}/play`;
+      if (window.location.pathname === targetUrl) return;
+      navigateTo(targetUrl);
+    };
+    bar.querySelector('.player-bar-title')?.addEventListener('click', openPlayPage);
+    bar.querySelector('.player-bar-cover')?.addEventListener('click', openPlayPage);
+    bar.querySelector('[data-role="open"]')?.addEventListener('click', openPlayPage);
     seekInput.addEventListener('input', () => { player.seek(parseFloat(seekInput.value)); });
     volumeInput.addEventListener('input', () => { const value = player.setVolume(volumeInput.value); volumeValue.value = `${Math.round(value * 100)}%`; volumeValue.textContent = `${Math.round(value * 100)}%`; });
     const syncUI = () => {
@@ -220,6 +234,7 @@
     player.on('play', syncUI, 'bar');
     player.on('pause', syncUI, 'bar');
     player.on('loadedmetadata', syncUI, 'bar');
+    if (window.htmx) window.htmx.process(bar);
     syncUI();
     requestAnimationFrame(syncBarHeight);
   };

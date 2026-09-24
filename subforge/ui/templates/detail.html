@@ -2,7 +2,7 @@
 <a class="back-link" href="/">← 返回作品库</a>
 <section class="work-hero">
   <div class="work-hero-left">
-    <div class="work-hero-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}"><img class="work-cover-img" src="/covers/{{ item.item_id }}" alt="" loading="lazy" onerror="this.remove()"><span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span></div>
+    <div class="work-hero-cover {{ 'cover-rj' if item.kind.value == 'rj_work' else 'cover-stream' }}"><img class="work-cover-img" src="/covers/{{ item.item_id }}{% if item.updated_at %}?v={{ item.updated_at }}{% endif %}" alt="" loading="lazy" onerror="this.remove()"><span class="work-kind">{{ 'RJ' if item.kind.value == 'rj_work' else 'LIVE' }}</span></div>
   </div>
   <div class="work-hero-info">
     <h1>{{ item.title }}</h1>
@@ -29,7 +29,7 @@
 <dialog id="work-edit-dialog" class="work-edit-dialog"><form method="post" action="/items/{{ item.item_id }}/edit" data-secure data-work-edit-form>
   <header class="dialog-head"><h2>编辑作品</h2><button type="button" class="ghost small" data-close-dialog>✕</button></header>
   <div class="dialog-body">
-  <div class="work-edit-layout"><section class="work-edit-cover"><div class="work-edit-cover-preview"><img src="/covers/{{ item.item_id }}" data-original-src="/covers/{{ item.item_id }}" alt="当前封面" data-work-cover-preview onerror="this.hidden=true"><span>暂无封面</span></div><input type="hidden" name="selection_id"><button type="button" class="ghost" data-pick-work-cover>更换封面</button><small data-cover-filename>{{ item.cover_source or '当前封面' }}</small></section>
+  <div class="work-edit-layout"><section class="work-edit-cover"><div class="work-edit-cover-preview" data-work-cover-dropzone title="点击或拖拽图片更换封面" style="cursor:pointer;"><img src="/covers/{{ item.item_id }}{% if item.updated_at %}?v={{ item.updated_at }}{% endif %}" data-original-src="/covers/{{ item.item_id }}{% if item.updated_at %}?v={{ item.updated_at }}{% endif %}" alt="当前封面" data-work-cover-preview onerror="this.hidden=true"><span>暂无封面</span></div><input type="hidden" name="selection_id"><input type="file" accept="image/jpeg,image/png,image/webp" data-work-cover-file hidden><div style="display:flex;gap:6px;width:100%;margin-top:6px;"><button type="button" class="ghost" data-trigger-cover-file style="flex:1;">选择图片</button><button type="button" class="ghost small" data-pick-work-cover title="打开系统窗口选择">系统窗口</button></div><small data-cover-filename>{{ item.cover_source or '当前封面' }}</small></section>
   <section class="field-list work-edit-fields"><label>标题<input name="title" value="{{ item.title }}" required></label><label>类型<select name="kind" data-kind-select><option value="rj_work" {% if item.kind.value == 'rj_work' %}selected{% endif %}>RJ 作品</option><option value="stream_archive" {% if item.kind.value == 'stream_archive' %}selected{% endif %}>直播归档</option></select></label><label data-rj-field>RJ 号<input name="rj_code" value="{{ item.rj_code or '' }}" placeholder="RJ01546796"></label><label class="field-label">创作者</label>{{ picker('work-edit-creators', creators, item.creator_ids, 'creator_ids', item.kind.value) }}</section></div>
   <p class="import-error work-edit-error" data-work-edit-error hidden></p></div>
   <footer class="dialog-actions"><button type="button" class="ghost" data-close-dialog>取消</button><button>保存</button></footer>

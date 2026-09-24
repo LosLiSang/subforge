@@ -57,7 +57,7 @@ html,body{background:var(--glass-bg);color:var(--glass-text)}
 body{background-image:none}
 :root[data-theme="light"] body{background-image:radial-gradient(circle at 8% -10%,rgba(96,165,250,.12),transparent 34%),radial-gradient(circle at 92% 0%,rgba(196,181,253,.12),transparent 30%)}
 
-header,.sidebar,.player-bar{background:var(--glass-panel);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-color:var(--glass-line-strong)}
+header,.sidebar,.player-bar{background:var(--glass-panel);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-color:var(--glass-line-strong);will-change:transform}
 .sidebar{box-shadow:var(--glass-shadow)}
 .sidebar .brand,.stat-num,.creator-stat-row strong{color:var(--glass-text)}
 .side-nav a{color:var(--glass-dim)}

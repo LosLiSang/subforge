@@ -2,9 +2,8 @@
 <title>{{ self.title() }}</title>
 <main id="main-content" class="frame-main">
 {{ self.content() }}
-</main>
 <script>window.SUBFORGE_CSRF={{ csrf_token|tojson }};</script>
-<script src="/static/app.js?v=6"></script>
+</main>
 {{ self.scripts() }}
 {% else %}
 <!doctype html>
@@ -58,7 +57,7 @@
   </main>
   <div id="content-frame" style="display:none" aria-hidden="true"></div>
 </div>
-<div id="player-bar" hx-preserve="true" hidden></div>
+<div id="player-bar" hx-preserve="true" hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true" hidden></div>
 <script>window.SUBFORGE_CSRF={{ csrf_token|tojson }};</script>
 <script src="/static/app.js?v=6"></script>
 <script src="/static/global-player.js"></script>

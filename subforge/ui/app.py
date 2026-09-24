@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import httpx
 import hmac
 import io
 import json
 import logging
 import math
 import mimetypes
+import tempfile
 import struct
 import wave
 import secrets
 import shutil
+import subprocess
+import urllib.parse
+
+_system_which = shutil.which
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
@@ -38,7 +45,7 @@ from subforge.gemini_audio import (
     OpenAICompatibleAudioTransport,
     gemini_profile_from_mapping,
 )
-from subforge.library import CreatorKind, ImportRequest, ItemKind, LibraryStore
+from subforge.library import CreatorKind, ImportRequest, ImportResult, ItemKind, LibraryStore
 from subforge.models import SubtitleEntry
 from subforge.presets import ASMR_PRESET
 from subforge.segment_processing import (
@@ -70,13 +77,18 @@ class UiDependencies:
     allowed_hosts: set[str] = field(default_factory=lambda: {"127.0.0.1", "localhost"})
     media_concurrency: int = 1
     segment_processor_factory: Callable[[dict], SegmentProcessor] | None = None
+    is_fixed_token: bool = False
+    no_auth: bool = False
 
 
 class UiRuntime:
+    UPLOAD_MAX_BYTES = 20 * 1024 * 1024  # 20 MB
+
     def __init__(self, deps: UiDependencies) -> None:
         self.deps = deps
         self.sessions: dict[str, str] = {}
         self.selections: dict[str, Path] = {}
+        self.uploaded_selections: set[str] = set()
         self.pending_selections: set[str] = set()
         self.imports: dict[str, dict] = {}  # 后台 URL 下载导入任务状态
         self.download_procs: dict[str, "subprocess.Popen"] = {}  # task_id -> yt-dlp 子进程（用于取消）
@@ -491,7 +503,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         if token is not None:
             if not deps.startup_token or not hmac.compare_digest(token, deps.startup_token):
                 return Response("Invalid startup token", status_code=401)
-            deps.startup_token = ""
+            if not deps.is_fixed_token:
+                deps.startup_token = ""
             session_id = secrets.token_urlsafe(32)
             runtime.sessions[session_id] = secrets.token_urlsafe(32)
             response = RedirectResponse("/", status_code=303)
@@ -503,6 +516,20 @@ def create_app(deps: UiDependencies) -> Starlette:
                 secure=False,
             )
             return response
+        if deps.no_auth:
+            session_id = request.cookies.get("subforge_session")
+            if not session_id or session_id not in runtime.sessions:
+                session_id = secrets.token_urlsafe(32)
+                runtime.sessions[session_id] = secrets.token_urlsafe(32)
+                response = RedirectResponse("/", status_code=303)
+                response.set_cookie(
+                    "subforge_session",
+                    session_id,
+                    httponly=True,
+                    samesite="strict",
+                    secure=False,
+                )
+                return response
         if _session_csrf(request, runtime) is None:
             return Response("Authentication required", status_code=401)
         library = runtime.open_active_library()
@@ -683,6 +710,58 @@ def create_app(deps: UiDependencies) -> Starlette:
         runtime.selections[selection_id] = selected.resolve()
         return JSONResponse({"selection_id": selection_id, "filename": selected.name})
 
+    async def upload_image(request: Request) -> Response:
+        """接收浏览器直接上传的封面图片，暂存并返回 selection_id。"""
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        if request.headers.get("content-length"):
+            try:
+                declared = int(request.headers["content-length"])
+            except ValueError:
+                declared = 0
+            if declared > UiRuntime.UPLOAD_MAX_BYTES:
+                return JSONResponse({"error": "图片文件过大（最大 20 MB）"}, status_code=413)
+        content_type = request.headers.get("content-type", "").lower()
+        content = b""
+        filename = "cover.jpg"
+        if "multipart/form-data" in content_type:
+            try:
+                form = await request.form()
+                file = form.get("file") or form.get("image")
+                if file and hasattr(file, "read"):
+                    content = await file.read()
+                    filename = getattr(file, "filename", "cover.jpg") or "cover.jpg"
+            except Exception:
+                content = b""
+        if not content:
+            body = await request.body()
+            if len(body) > UiRuntime.UPLOAD_MAX_BYTES:
+                return JSONResponse({"error": "图片文件过大（最大 20 MB）"}, status_code=413)
+            content = body
+            raw_name = request.headers.get("x-filename") or request.query_params.get("filename", "cover.jpg")
+            filename = urllib.parse.unquote(raw_name)
+        if not content:
+            return JSONResponse({"error": "上传的文件为空"}, status_code=400)
+        suffix = Path(filename).suffix.lower()
+        if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+            if "png" in content_type:
+                suffix = ".png"
+            elif "webp" in content_type:
+                suffix = ".webp"
+            else:
+                suffix = ".jpg"
+        tmp_path = Path(tempfile.gettempdir()) / f"subforge_upload_{uuid4().hex}{suffix}"
+        tmp_path.write_bytes(content)
+        selection_id = uuid4().hex
+        runtime.selections[selection_id] = tmp_path
+        runtime.uploaded_selections.add(selection_id)
+        return JSONResponse({
+            "selection_id": selection_id,
+            "filename": filename,
+            "preview_url": f"/api/selections/{selection_id}/image",
+        })
+
     async def import_item(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
         if error:
@@ -719,6 +798,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             runtime.pending_selections.discard(selection_id)
         if runtime.selections.get(selection_id) is source:
             runtime.selections.pop(selection_id, None)
+            _cleanup_upload_selection(runtime, selection_id, source)
         if form.get("auto_process") == "on" and result.created and runtime.tasks is not None:
             snapshot = _automatic_processing_snapshot(deps)
             if snapshot is not None:
@@ -776,6 +856,18 @@ def create_app(deps: UiDependencies) -> Starlette:
             auto_snapshot=auto_snapshot,
         )
         return JSONResponse({"task_id": task_id, "status": "running"}, status_code=202)
+
+    async def video_info(request: Request) -> Response:
+        """获取视频 URL 的元数据（标题、创作者/UP主、封面、时长），用于前端导入自动补全。"""
+        url = request.query_params.get("url", "").strip()
+        if not url and request.method == "POST":
+            form = await _read_form(request)
+            url = form.get("url", "").strip()
+        if not url:
+            return JSONResponse({"ok": False, "error": "URL 不能为空"}, status_code=400)
+        proxy = deps.settings.get_proxy_url()
+        info = await asyncio.to_thread(_fetch_video_info, url, proxy=proxy)
+        return JSONResponse(info)
 
     async def preview_folder_import(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
@@ -997,6 +1089,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             )
             if selection_id and selected is not None:
                 runtime.selections.pop(selection_id, None)
+                _cleanup_upload_selection(runtime, selection_id, selected)
                 cover_path = covers_dir(library.root) / f"{item_id}.jpg"
                 previous_cover = cover_path.read_bytes() if cover_path.exists() else None
                 try:
@@ -1622,6 +1715,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         selected = runtime.selections.pop(form.get("selection_id", ""), None)
         if selected is None:
             return JSONResponse({"error": "Invalid or expired selection"}, status_code=400)
+        _cleanup_upload_selection(runtime, form.get("selection_id", ""), selected)
         item_id = request.path_params["item_id"]
         try:
             library.get_item(item_id)
@@ -1648,12 +1742,23 @@ def create_app(deps: UiDependencies) -> Starlette:
                 media_path = library.track_media_path(item.tracks[0].track_id)
             except KeyError:
                 media_path = None
-        cover_path = cover_for_item(library.root, item.item_id, media_path)
+        cover_path = await asyncio.to_thread(cover_for_item, library.root, item.item_id, media_path)
         if cover_path is not None and item.cover_source is None:
             library.set_cover_source(item.item_id, "embedded")
         if cover_path is None:
             return Response("Not found", status_code=404)
-        return FileResponse(cover_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=604800, immutable"})
+        stat = cover_path.stat()
+        etag = f'"{int(stat.st_mtime)}-{stat.st_size}"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304)
+        return FileResponse(
+            cover_path,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "public, max-age=3600, must-revalidate",
+                "ETag": etag,
+            },
+        )
 
     async def download_track_subtitle(request: Request) -> Response:
         library = runtime.open_active_library()
@@ -2151,9 +2256,12 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/picker/audio", choose_audio, methods=["POST"]),
         Route("/picker/media-folder", choose_media_folder, methods=["POST"]),
         Route("/picker/image", choose_image, methods=["POST"]),
+        Route("/api/upload-image", upload_image, methods=["POST"]),
         Route("/api/selections/{selection_id}/image", selected_image_preview),
         Route("/picker/directory", choose_directory, methods=["POST"]),
         Route("/items/import", import_item, methods=["POST"]),
+        Route("/api/video-info", video_info, methods=["GET", "POST"]),
+        Route("/api/url-info", video_info, methods=["GET", "POST"]),
         Route("/items/import-url", import_item_url, methods=["POST"]),
         Route("/api/import-folders/preview", preview_folder_import, methods=["POST"]),
         Route("/items/import-folder", import_folder, methods=["POST"]),
@@ -2216,7 +2324,23 @@ def create_app(deps: UiDependencies) -> Starlette:
     async def require_read_session(request: Request, call_next):
         public_path = request.url.path.startswith("/static/")
         token_exchange = request.url.path == "/" and request.query_params.get("token") is not None
-        if not public_path and not token_exchange and _session_csrf(request, runtime) is None:
+        no_auth_root = deps.no_auth and request.url.path == "/"
+        if not public_path and not token_exchange and not no_auth_root and _session_csrf(request, runtime) is None:
+            if deps.no_auth:
+                session_id = secrets.token_urlsafe(32)
+                runtime.sessions[session_id] = secrets.token_urlsafe(32)
+                cookies = dict(request.cookies)
+                cookies["subforge_session"] = session_id
+                request._cookies = cookies
+                response = await call_next(request)
+                response.set_cookie(
+                    "subforge_session",
+                    session_id,
+                    httponly=True,
+                    samesite="strict",
+                    secure=False,
+                )
+                return response
             return Response("Authentication required", status_code=401)
         return await call_next(request)
 
@@ -2340,6 +2464,17 @@ def _automatic_processing_snapshot(deps: UiDependencies) -> ProcessingSnapshot |
 def _session_csrf(request: Request, runtime: UiRuntime) -> str | None:
     session_id = request.cookies.get("subforge_session")
     return runtime.sessions.get(session_id) if session_id else None
+
+
+def _cleanup_upload_selection(runtime: UiRuntime, selection_id: str, source: Path) -> None:
+    """删除 upload_image 创建的临时文件（系统文件选择器选的文件不删）。"""
+    if selection_id not in runtime.uploaded_selections:
+        return
+    runtime.uploaded_selections.discard(selection_id)
+    try:
+        source.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 async def _authorize_write(request: Request, runtime: UiRuntime) -> Response | None:
@@ -2554,6 +2689,7 @@ async def _run_url_import(
                 creator_ids=creator_ids,
                 proxy=runtime.deps.settings.get_proxy_url(),
                 proc_cb=_register_proc,
+                status_cb=lambda msg: _set("running", msg),
                 cancelled=_is_cancelled,
             )
             if _is_cancelled():
@@ -2588,7 +2724,15 @@ def _spawn_and_wait(
     """用 Popen 运行子进程以便中途 kill（取消），超时时终止进程并抛出。"""
     import subprocess as _sp
 
-    proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+    proc = _sp.Popen(
+        cmd,
+        stdin=_sp.DEVNULL,
+        stdout=_sp.PIPE,
+        stderr=_sp.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     if proc_cb:
         proc_cb(proc)
     try:
@@ -2603,6 +2747,247 @@ def _spawn_and_wait(
     return _sp.CompletedProcess(cmd, proc.returncode, out, err)
 
 
+def _is_bilibili_url(url: str) -> bool:
+    low = url.lower()
+    return "bilibili.com" in low or "b23.tv" in low
+
+
+def _fetch_video_info(url: str, proxy: str = "") -> dict:
+    """从视频 URL 解析元数据（标题、创作者/UP主、封面、时长）。"""
+    url = url.strip()
+    if not url:
+        return {"ok": False, "error": "URL 不能为空"}
+    if _is_bilibili_url(url):
+        # 解析短链接 b23.tv
+        if "b23.tv" in url.lower():
+            try:
+                r = httpx.get(url, follow_redirects=False, timeout=8.0)
+                loc = r.headers.get("location")
+                if loc:
+                    url = loc
+            except Exception:
+                pass
+        bv_match = re.search(r"(BV[a-zA-Z0-9]{10})", url, re.I)
+        aid_match = re.search(r"av(\d+)", url, re.I)
+        if not bv_match and not aid_match:
+            return {"ok": False, "error": "未识别到有效的 Bilibili 视频号 (BV/av)"}
+        bvid = ("BV" + bv_match.group(1)[2:]) if bv_match else None
+        aid = aid_match.group(1) if aid_match else None
+        api_url = (
+            f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+            if bvid
+            else f"https://api.bilibili.com/x/web-interface/view?aid={aid}"
+        )
+        try:
+            with httpx.Client(trust_env=False, timeout=10.0) as client:
+                res = client.get(api_url, headers={"User-Agent": "Mozilla/5.0"})
+                data = res.json()
+                if data.get("code") == 0:
+                    v = data.get("data", {})
+                    cover_pic = v.get("pic", "")
+                    if cover_pic.startswith("//"):
+                        cover_pic = "https:" + cover_pic
+                    elif cover_pic.startswith("http://"):
+                        cover_pic = "https://" + cover_pic[7:]
+                    return {
+                        "ok": True,
+                        "title": v.get("title", ""),
+                        "author": v.get("owner", {}).get("name", ""),
+                        "cover_url": cover_pic,
+                        "duration": v.get("duration", 0),
+                        "url": url,
+                        "kind": "stream_archive",
+                    }
+                return {"ok": False, "error": data.get("message", "获取 Bilibili 视频信息失败")}
+        except Exception as exc:
+            return {"ok": False, "error": f"请求 Bilibili 接口失败: {exc}"}
+
+    # 其他站点通过 yt-dlp
+    ytdlp = shutil.which("yt-dlp")
+    if not ytdlp:
+        return {"ok": False, "error": "yt-dlp 未安装"}
+    ffmpeg_bin = _system_which("ffmpeg")
+    cmd = [
+        ytdlp, "--skip-download", "--dump-single-json", "--no-playlist",
+        "--no-warnings", "--socket-timeout", "15",
+    ]
+    if ffmpeg_bin:
+        cmd.extend(["--ffmpeg-location", ffmpeg_bin])
+    if proxy:
+        cmd.extend(["--proxy", proxy])
+    cmd.append(url)
+    try:
+        import subprocess as _sp
+        proc = _sp.run(
+            cmd,
+            stdin=_sp.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=25,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            lines = [l.strip() for l in proc.stdout.splitlines() if l.strip().startswith("{")]
+            if lines:
+                info = json.loads(lines[-1])
+                return {
+                    "ok": True,
+                    "title": info.get("title", ""),
+                    "author": info.get("uploader") or info.get("channel") or info.get("artist") or info.get("creator") or "",
+                    "cover_url": info.get("thumbnail", ""),
+                    "duration": info.get("duration", 0),
+                    "url": url,
+                    "kind": "stream_archive",
+                }
+        err_msg = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "无法解析视频信息"
+        return {"ok": False, "error": err_msg}
+    except Exception as exc:
+        return {"ok": False, "error": f"解析失败: {exc}"}
+
+
+def _download_bilibili_audio(
+    url: str,
+    tmp_dir: Path,
+    *,
+    status_cb: "Callable[[str], None]" | None = None,
+    cancelled: "Callable[[], bool]" | None = None,
+) -> tuple[Path, str, str, Path | None]:
+    """直接通过 Bilibili 官方 API 下载音轨及封面（绕过 yt-dlp 412 反爬风控）。"""
+    if "b23.tv" in url.lower():
+        try:
+            r = httpx.get(url, follow_redirects=False, timeout=8.0)
+            loc = r.headers.get("location")
+            if loc:
+                url = loc
+        except Exception:
+            pass
+
+    bv_match = re.search(r"(BV[a-zA-Z0-9]{10})", url, re.I)
+    aid_match = re.search(r"av(\d+)", url, re.I)
+    if not bv_match and not aid_match:
+        raise ValueError("未识别到有效的 Bilibili 视频号 (BV/av)")
+
+    bvid = ("BV" + bv_match.group(1)[2:]) if bv_match else None
+    aid = aid_match.group(1) if aid_match else None
+    api_url = (
+        f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+        if bvid
+        else f"https://api.bilibili.com/x/web-interface/view?aid={aid}"
+    )
+
+    if status_cb:
+        status_cb("正在获取 Bilibili 视频信息…")
+
+    with httpx.Client(trust_env=False, timeout=15.0) as client:
+        res = client.get(api_url, headers={"User-Agent": "Mozilla/5.0"})
+        data = res.json()
+        if data.get("code") != 0:
+            err = data.get("message", "未知错误")
+            raise ValueError(f"Bilibili API 错误: {err}")
+
+        view = data["data"]
+        bvid = view.get("bvid") or bvid or f"av{aid}"
+        cid = view.get("cid")
+        title = view.get("title", "")
+        author = view.get("owner", {}).get("name", "")
+        pic_url = view.get("pic", "")
+        if pic_url.startswith("//"):
+            pic_url = "https:" + pic_url
+        elif pic_url.startswith("http://"):
+            pic_url = "https://" + pic_url[7:]
+
+        p_match = re.search(r"[?&]p=(\d+)", url)
+        pages = view.get("pages", [])
+        if p_match and pages:
+            try:
+                p_idx = int(p_match.group(1)) - 1
+                if 0 <= p_idx < len(pages):
+                    cid = pages[p_idx].get("cid", cid)
+                    part_title = pages[p_idx].get("part", "")
+                    if part_title and part_title != title:
+                        title = f"{title} - {part_title}"
+            except (ValueError, IndexError):
+                pass
+
+        if cancelled and cancelled():
+            raise _DownloadCancelled()
+
+        if status_cb:
+            status_cb("正在解析 Bilibili 音频流…")
+
+        play_url = f"https://api.bilibili.com/x/player/wbi/playurl?bvid={bvid}&cid={cid}&fnval=16"
+        play_res = client.get(
+            play_url,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.bilibili.com"},
+        ).json()
+        dash = play_res.get("data", {}).get("dash")
+        audio_list = dash.get("audio", []) if dash else []
+        if not audio_list:
+            raise ValueError("Bilibili 视频未返回可用的 DASH 音频流")
+
+        # 按带宽降序取最高音质
+        audio_list.sort(key=lambda a: a.get("bandwidth", 0), reverse=True)
+        best_audio = audio_list[0]
+        audio_stream_url = best_audio.get("baseUrl") or best_audio.get("base_url")
+        backup_urls = best_audio.get("backupUrl") or best_audio.get("backup_url") or []
+        candidate_urls = [audio_stream_url] + [u for u in backup_urls if u]
+        media_path = tmp_dir / f"{bvid}.m4a"
+
+        if status_cb:
+            status_cb("正在下载音频…")
+
+        download_success = False
+        last_err = None
+        for stream_url in candidate_urls:
+            if not stream_url:
+                continue
+            try:
+                with client.stream(
+                    "GET",
+                    stream_url,
+                    headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.bilibili.com"},
+                ) as s:
+                    s.raise_for_status()
+                    total = int(s.headers.get("content-length") or 0)
+                    downloaded = 0
+                    last_reported = 0
+                    with media_path.open("wb") as f:
+                        for chunk in s.iter_bytes(chunk_size=65536):
+                            if cancelled and cancelled():
+                                raise _DownloadCancelled()
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total > 0 and status_cb and downloaded - last_reported >= 65536 * 16:
+                                last_reported = downloaded
+                                status_cb(f"正在下载音频 {int(downloaded * 100 / total)}%…")
+                download_success = True
+                break
+            except _DownloadCancelled:
+                raise
+            except Exception as exc:
+                last_err = exc
+                media_path.unlink(missing_ok=True)
+                continue
+        if not download_success:
+            raise ValueError(f"下载音频流失败: {last_err or '未知错误'}")
+
+        cover_path = tmp_dir / f"{bvid}.jpg"
+        if pic_url:
+            try:
+                pic_res = client.get(pic_url, headers={"User-Agent": "Mozilla/5.0"})
+                if pic_res.status_code == 200:
+                    cover_path.write_bytes(pic_res.content)
+                else:
+                    cover_path = None
+            except Exception:
+                cover_path = None
+        else:
+            cover_path = None
+
+    return media_path, title, author, cover_path
+
+
 def _download_and_import(
     library: LibraryStore,
     url: str,
@@ -2614,6 +2999,7 @@ def _download_and_import(
     creator_ids: tuple[str, ...] = (),
     proxy: str = "",
     proc_cb: "Callable[[object | None], None]" | None = None,
+    status_cb: "Callable[[str], None]" | None = None,
     cancelled: "Callable[[], bool]" | None = None,
 ) -> ImportResult:
     """Download audio from a YouTube/Bilibili URL via yt-dlp and import it.
@@ -2625,74 +3011,135 @@ def _download_and_import(
     import subprocess as _sp
     import tempfile as _tf
 
-    ytdlp = shutil.which("yt-dlp")
-    if ytdlp is None:
-        raise ValueError("yt-dlp 未安装：请先安装 yt-dlp 或 pip install yt-dlp")
     tmp_dir = Path(_tf.mkdtemp(prefix="subforge-dl-"))
     try:
-        # Bilibili 反爬：元数据 API 间歇性返回 412/403/405。模拟浏览器 UA + referer
-        # 提高通过率；关键点：Bilibili 常直接拒绝代理出口 IP（HTTP 412），所以
-        # 代理线路按站点决定尝试顺序，失败时切换另一线路宿底（见下方 attempts）。
-        base = [
-            ytdlp,
-            "--no-playlist",
-            "--extract-audio",
-            "--audio-format", "m4a",
-            "--audio-quality", "0",
-            "--write-thumbnail",
-            "--convert-thumbnails", "jpg",
-            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "--referer", "https://www.bilibili.com/",
-            "--add-header", "Origin:https://www.bilibili.com",
-            "--no-check-certificates",
-            "--socket-timeout", "45",
-            "--retries", "3",
-            "--fragment-retries", "3",
-            "-o", str(tmp_dir / "%(title)s.%(ext)s"),
-        ]
-        # 站点相关的代理顺序：Bilibili 直连通常更可靠（代理出口 IP 被反爬 412）；
-        # YouTube 等直连常被重置、依赖代理。故按站点决定先试哪条，失败切另一条宿底。
-        url_arg = [url]
-        if proxy:
-            proxy_cmd = base + ["--proxy", proxy]
-            direct_cmd = base
-            if "bilibili.com" in url.lower():
-                attempts = [direct_cmd, proxy_cmd]   # Bilibili：直连优先，代理宿底
-            else:
-                attempts = [proxy_cmd, direct_cmd]   # 其他站点：代理优先，直连宿底
-        else:
-            attempts = [base]
-        attempts = [c + url_arg for c in attempts]
+        media: Path | None = None
+        cover_file: Path | None = None
 
-        import time as _time
-        result = None
-        for attempt in attempts:
-            if cancelled and cancelled():
-                break
-            result = _spawn_and_wait(attempt, proc_cb, timeout=600)
-            if result.returncode == 0:
-                break
-            # 反爬间歇性（412/403/405）：短延时错开频控后重试同一线路
-            for _ in range(2):
+        if _is_bilibili_url(url):
+            try:
+                b_media, b_title, b_author, b_cover = _download_bilibili_audio(
+                    url, tmp_dir, status_cb=status_cb, cancelled=cancelled
+                )
+                media = b_media
+                if not title:
+                    title = b_title
+                if not author:
+                    author = b_author
+                cover_file = b_cover
+            except _DownloadCancelled:
+                raise
+            except Exception as b_exc:
+                logger.warning("Bilibili direct download failed, fallback to yt-dlp: %s", b_exc)
+
+        if media is None:
+            ytdlp = shutil.which("yt-dlp")
+            if ytdlp is None:
+                raise ValueError("yt-dlp 未安装：请先安装 yt-dlp 或 pip install yt-dlp")
+
+            if status_cb:
+                status_cb("正在通过 yt-dlp 下载…")
+
+            ffmpeg_bin = _system_which("ffmpeg")
+            base = [
+                ytdlp,
+                "--no-playlist",
+                "--extract-audio",
+                "--audio-format", "m4a",
+                "--audio-quality", "0",
+                "--write-thumbnail",
+                "--convert-thumbnails", "jpg",
+                "--write-info-json",
+                "--windows-filenames",
+                "--no-check-certificates",
+                "--socket-timeout", "30",
+                "--retries", "2",
+                "--fragment-retries", "2",
+                "-o", str(tmp_dir / "%(id)s.%(ext)s"),
+            ]
+            if ffmpeg_bin:
+                base.extend(["--ffmpeg-location", ffmpeg_bin])
+            if _is_bilibili_url(url):
+                base.extend([
+                    "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                    "--referer", "https://www.bilibili.com/",
+                    "--add-header", "Origin:https://www.bilibili.com",
+                ])
+
+            url_arg = [url]
+            if proxy:
+                proxy_cmd = base + ["--proxy", proxy]
+                direct_cmd = base
+                if _is_bilibili_url(url):
+                    attempts = [direct_cmd, proxy_cmd]
+                else:
+                    attempts = [proxy_cmd, direct_cmd]
+            else:
+                attempts = [base]
+            attempts = [c + url_arg for c in attempts]
+
+            import time as _time
+            result = None
+            for attempt in attempts:
                 if cancelled and cancelled():
                     break
-                _time.sleep(2)
-                result = _spawn_and_wait(attempt, proc_cb, timeout=600)
+                result = _spawn_and_wait(attempt, proc_cb, timeout=180)
                 if result.returncode == 0:
                     break
-            if result and result.returncode == 0:
-                break
-        # 用户已取消：不再覆盖为错误
-        if cancelled and cancelled():
-            raise _DownloadCancelled()
-        if result is None or result.returncode != 0:
-            raise ValueError(f"yt-dlp 下载失败：{(result.stderr.strip()[-300:] if result else '') or '未知错误'}")
-        logger.info("yt-dlp downloaded files: %s", [p.name for p in tmp_dir.iterdir()])
-        audio_files = [p for p in tmp_dir.iterdir() if p.is_file() and p.suffix.lower() in {".m4a", ".mp3", ".opus", ".wav", ".flac"}]
-        if not audio_files:
-            raise ValueError("yt-dlp 未提取到音频文件")
-        media = audio_files[0]
+                for _ in range(2):
+                    if cancelled and cancelled():
+                        break
+                    _time.sleep(2)
+                    result = _spawn_and_wait(attempt, proc_cb, timeout=180)
+                    if result.returncode == 0:
+                        break
+                if result and result.returncode == 0:
+                    break
+
+            if cancelled and cancelled():
+                raise _DownloadCancelled()
+            if result is None or result.returncode != 0:
+                err_detail = (result.stderr.strip()[-300:] if result else "") or "未知错误"
+                raise ValueError(f"yt-dlp 下载失败：{err_detail}")
+
+            info_files = [p for p in tmp_dir.iterdir() if p.is_file() and p.suffix.lower() == ".json"]
+            if info_files:
+                try:
+                    info_data = json.loads(info_files[0].read_text(encoding="utf-8"))
+                    if not title:
+                        title = info_data.get("title")
+                    if not author:
+                        author = (
+                            info_data.get("uploader")
+                            or info_data.get("channel")
+                            or info_data.get("artist")
+                            or info_data.get("creator")
+                        )
+                except Exception:
+                    pass
+
+            audio_files = [
+                p for p in tmp_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in {".m4a", ".mp3", ".opus", ".wav", ".flac"}
+            ]
+            if not audio_files:
+                raise ValueError("yt-dlp 未提取到音频文件")
+            media = audio_files[0]
+
+            thumbs = [
+                p for p in tmp_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+            ]
+            if thumbs:
+                cover_file = thumbs[0]
+
+        if status_cb:
+            status_cb("正在写入作品库…")
+
         fallback_title = title or media.stem
+        if not author and not creator_ids and kind == ItemKind.STREAM_ARCHIVE:
+            author = "网络导入"
+
         result = library.import_audio(ImportRequest(
             source=media,
             kind=kind,
@@ -2702,17 +3149,19 @@ def _download_and_import(
             creator_ids=creator_ids,
             source_url=url,
         ))
-        # 抓取到的封面 → 库封面缓存（.subforge/covers/{item_id}.jpg）
-        # 无论新建还是去重复用：目标封面不存在就写入
-        thumbs = [p for p in tmp_dir.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}]
-        if thumbs:
-            from subforge.ui.covers import covers_dir
-            covers_dir(library.root).mkdir(parents=True, exist_ok=True)
-            dst = covers_dir(library.root) / f"{result.item_id}.jpg"
-            if not dst.exists():
+        if cover_file and cover_file.exists():
+            try:
+                from subforge.ui.covers import replace_cover
+                replace_cover(library.root, result.item_id, cover_file)
+                library.set_cover_source(result.item_id, "source_download")
+            except Exception:
                 try:
-                    shutil.copy(thumbs[0], dst)
-                    library.set_cover_source(result.item_id, "source_download")
+                    from subforge.ui.covers import covers_dir
+                    covers_dir(library.root).mkdir(parents=True, exist_ok=True)
+                    dst = covers_dir(library.root) / f"{result.item_id}.jpg"
+                    if not dst.exists():
+                        shutil.copy(cover_file, dst)
+                        library.set_cover_source(result.item_id, "source_download")
                 except OSError:
                     pass
         return result
@@ -2723,7 +3172,10 @@ def _download_and_import(
 def _resolve_selected_path(runtime: UiRuntime, form: dict[str, str], field: str) -> Path | None:
     selection_id = form.get(f"{field}_selection", "")
     if selection_id:
-        return runtime.selections.pop(selection_id, None)
+        selected = runtime.selections.pop(selection_id, None)
+        if selected is not None:
+            _cleanup_upload_selection(runtime, selection_id, selected)
+        return selected
     value = form.get(field, "").strip()
     return Path(value) if value else None
 

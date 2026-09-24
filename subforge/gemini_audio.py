@@ -11,7 +11,7 @@ import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import quote
 from uuid import uuid4
 

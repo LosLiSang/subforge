@@ -1,4 +1,9 @@
 import asyncio
+import io
+import json
+
+from subforge.events import EventType, make_event
+from subforge.worker import jsonl_sink
 
 from subforge.library import ImportRequest, ItemKind, LibraryStore
 from subforge.models import SubtitleEntry
@@ -105,3 +110,16 @@ async def test_worker_crash_stderr_is_persisted_to_library_subforge_dir(tmp_path
     path.write_text("Fatal Python error: Stack overflow", encoding="utf-8", errors="replace")
     assert path == tmp_path / ".subforge" / "logs" / "worker-j-stderr.log"
     assert "Fatal Python error" in path.read_text(encoding="utf-8")
+
+
+def test_jsonl_sink_serializes_safe_processing_event():
+    stream = io.StringIO()
+    sink = jsonl_sink(stream)
+
+    sink(make_event(EventType.ASR_PROGRESS, "job-1", stage="asr", progress=0.5))
+
+    data = json.loads(stream.getvalue())
+    assert data["type"] == "asr_progress"
+    assert data["job_id"] == "job-1"
+    assert data["progress"] == 0.5
+    assert "api_key" not in data

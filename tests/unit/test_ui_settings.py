@@ -173,3 +173,27 @@ def test_default_processing_snapshot_roundtrip(tmp_path):
     store.set_default_processing_snapshot(snapshot)
     loaded = UiSettingsStore(tmp_path / "ui.json").get_default_processing_snapshot()
     assert loaded == snapshot
+
+
+def test_fixed_token_and_no_auth_settings(tmp_path, monkeypatch):
+    store = UiSettingsStore(tmp_path / "ui.json")
+    assert store.get_fixed_token() == ""
+    assert store.get_no_auth() is False
+
+    # Test environment variable overrides
+    monkeypatch.setenv("SUBFORGE_TOKEN", "secret123")
+    assert store.get_fixed_token() == "secret123"
+
+    monkeypatch.setenv("SUBFORGE_NO_AUTH", "1")
+    assert store.get_no_auth() is True
+
+    monkeypatch.setenv("SUBFORGE_NO_AUTH", "true")
+    assert store.get_no_auth() is True
+
+    monkeypatch.delenv("SUBFORGE_TOKEN")
+    monkeypatch.delenv("SUBFORGE_NO_AUTH")
+
+    # Test file-based fallback
+    (tmp_path / "ui.json").write_text('{"fixed_token": "stored-token", "no_auth": true}', encoding="utf-8")
+    assert store.get_fixed_token() == "stored-token"
+    assert store.get_no_auth() is True

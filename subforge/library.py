@@ -1091,7 +1091,7 @@ class LibraryStore:
         if not creator_ids and author and str(author).strip():
             creator = self._find_or_create_creator(str(author), CreatorKind.VOICE_ACTOR)
             creator_ids = [creator.creator_id]
-        return LibraryItem(
+        item = LibraryItem(
             schema_version=int(data["schema_version"]),
             item_id=str(data["item_id"]),
             kind=ItemKind(data["kind"]),

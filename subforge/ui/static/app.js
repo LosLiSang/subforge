@@ -1,4 +1,13 @@
 /* 外观：黑/白主题 + 有限强调色预设，主页面、iframe 与悬浮歌词共享选择。 */
+if (window.__subforgeAppInitialized) {
+  if (typeof window.SUBFORGE_CSRF !== 'undefined') {
+    for (const input of document.querySelectorAll('input[name="csrf_token"]')) {
+      input.value = window.SUBFORGE_CSRF || '';
+    }
+  }
+  if (window.SubForgeApp?.initWidgets) window.SubForgeApp.initWidgets(document);
+} else {
+window.__subforgeAppInitialized = true;
 (()=>{
   const themeKey='subforge.theme',accentKey='subforge.accent';
   const accents=new Set(['blue','cyan','green','violet','amber','rose']);
@@ -176,6 +185,8 @@ function syncKindFields(root = document) {
     const scope = sel.closest('[data-import-panel], [data-work-edit-form]') || sel.closest('form');
     const rjField = scope?.querySelector('[data-rj-field]');
     if (rjField) rjField.style.display = sel.value === 'rj_work' ? '' : 'none';
+    const authorField = scope?.querySelector('[data-author-field]');
+    if (authorField) authorField.style.display = sel.value === 'stream_archive' ? '' : 'none';
     const creatorPicker = scope?.querySelector('[data-creator-picker]');
     if (creatorPicker) {
       creatorPicker.dataset.contextKind = sel.value;
@@ -187,6 +198,82 @@ document.addEventListener('change', event => {
   if (event.target.matches('[data-kind-select]')) syncKindFields();
 });
 syncKindFields();
+
+/* URL 输入自动获取视频元数据（标题、创作者/UP主、封面） */
+let urlInfoTimer = null;
+let lastCheckedUrl = '';
+async function checkAndFetchVideoInfo(input) {
+  const url = input.value.trim();
+  if (!url) {
+    lastCheckedUrl = '';
+    return;
+  }
+  if (!/^https?:\/\//i.test(url) || url === lastCheckedUrl) return;
+  const form = input.closest('form');
+  if (!form) return;
+  lastCheckedUrl = url;
+  const statusEl = form.querySelector('[data-url-status]');
+  const titleInput = form.querySelector('[data-url-title]');
+  const authorInput = form.querySelector('[data-url-author]');
+  const picker = form.querySelector('[data-creator-picker]');
+  if (statusEl) {
+    statusEl.textContent = '正在获取视频信息…';
+    statusEl.hidden = false;
+  }
+  try {
+    const resp = await fetch(`/api/video-info?url=${encodeURIComponent(url)}`);
+    const data = await resp.json().catch(() => ({}));
+    if (data.ok) {
+      if (titleInput && (!titleInput.value.trim() || titleInput.dataset.autofilled)) {
+        titleInput.value = data.title || '';
+        titleInput.dataset.autofilled = 'true';
+      }
+      if (authorInput && (!authorInput.value.trim() || authorInput.dataset.autofilled)) {
+        authorInput.value = data.author || '';
+        authorInput.dataset.autofilled = 'true';
+      }
+      if (data.author && picker) {
+        const matchingOption = [...picker.querySelectorAll('[data-creator-option]')].find(
+          opt => normalizeCreatorName(opt.dataset.creatorName) === normalizeCreatorName(data.author)
+        );
+        if (matchingOption && picker._addCreator) {
+          picker._addCreator(creatorFromOption(matchingOption));
+        }
+      }
+      if (statusEl) {
+        const infoText = [data.title, data.author ? `UP主/作者: ${data.author}` : ''].filter(Boolean).join(' · ');
+        statusEl.textContent = `已获取：${infoText}`;
+        statusEl.hidden = false;
+      }
+    } else {
+      if (statusEl) {
+        statusEl.textContent = data.error ? `获取提示：${data.error}` : '';
+        statusEl.hidden = !data.error;
+      }
+    }
+  } catch {
+    if (statusEl) statusEl.hidden = true;
+  }
+}
+
+document.addEventListener('input', event => {
+  const input = event.target.closest('[data-url-input]');
+  if (input) {
+    clearTimeout(urlInfoTimer);
+    urlInfoTimer = setTimeout(() => checkAndFetchVideoInfo(input), 450);
+  }
+  if (event.target.matches('[data-url-title], [data-url-author]')) {
+    delete event.target.dataset.autofilled;
+  }
+});
+document.addEventListener('paste', event => {
+  const input = event.target.closest('[data-url-input]');
+  if (input) setTimeout(() => checkAndFetchVideoInfo(input), 50);
+});
+document.addEventListener('change', event => {
+  const input = event.target.closest('[data-url-input]');
+  if (input) checkAndFetchVideoInfo(input);
+});
 
 /* 本地导入：fetch 提交，转换期间禁用按钮并在对话框内显示错误（事件委托） */
 document.addEventListener('submit', async event => {
@@ -239,7 +326,7 @@ document.addEventListener('submit', async event => {
 });
 
 /* 可复用创作者 Tag 输入：点击显示全部、忽略大小写/空格的前缀匹配、逗号/Enter 添加。 */
-const normalizeCreatorName=value=>(value||'').toLocaleLowerCase().replace(/\s+/g,'');
+function normalizeCreatorName(value){return(value||'').toLocaleLowerCase().replace(/\s+/g,'');}
 function creatorTagElement(picker,creator){const tag=document.createElement('span');tag.className=`creator-tag creator-tag-${creator.kind}`;tag.dataset.selectedId=creator.creator_id;tag.textContent=creator.name;const remove=document.createElement('button');remove.type='button';remove.dataset.removeTag='';remove.setAttribute('aria-label',`移除 ${creator.name}`);remove.textContent='×';const hidden=document.createElement('input');hidden.type='hidden';hidden.name=picker.dataset.fieldName;hidden.value=creator.creator_id;tag.append(remove,hidden);return tag}
 function creatorFromOption(option){return{creator_id:option.dataset.creatorId,name:option.dataset.creatorName,kind:option.dataset.creatorKind}}
 function setupCreatorPicker(picker){const input=picker.querySelector('[data-creator-search]'),suggestions=picker.querySelector('[data-creator-suggestions]'),tags=picker.querySelector('[data-selected-tags]'),create=picker.querySelector('[data-create-from-picker]'),empty=picker.querySelector('[data-suggestion-empty]');if(!input||!suggestions)return;
@@ -257,14 +344,258 @@ document.addEventListener('click',event=>{for(const picker of document.querySele
 function appendCreatorOption(creator){for(const picker of document.querySelectorAll('[data-creator-picker]')){const list=picker.querySelector('[data-creator-suggestions]');if(!list||picker.querySelector(`[data-creator-option][data-creator-id="${creator.creator_id}"]`))continue;const option=document.createElement('button');option.type='button';option.className='creator-suggestion';option.dataset.creatorOption='';option.dataset.creatorId=creator.creator_id;option.dataset.creatorName=creator.name;option.dataset.creatorKind=creator.kind;option.innerHTML=`<span class="creator-tag creator-tag-${creator.kind}"></span><small>${creator.kind==='circle'?'社团':'声优'}</small>`;option.querySelector('span').textContent=creator.name;list.insertBefore(option,list.querySelector('[data-create-from-picker]'))}}
 function openCreatorCreateDialog(picker,name){const dialog=document.querySelector('[data-creator-create-dialog]');if(!dialog)return;const form=dialog.querySelector('[data-creator-create-form]');form.reset();form.elements.picker_id.value=picker.dataset.pickerId;form.elements.name.value=name||'';const stream=picker.dataset.contextKind==='stream_archive';form.elements.kind.value=stream?'voice_actor':'voice_actor';for(const radio of form.elements.kind)radio.disabled=stream&&radio.value!=='voice_actor';dialog.querySelector('[data-dialog-error]').hidden=true;dialog.showModal();form.elements.name.focus()}
 for(const form of document.querySelectorAll('[data-creator-create-form]'))form.addEventListener('submit',async event=>{event.preventDefault();const dialog=form.closest('dialog'),error=dialog.querySelector('[data-dialog-error]');error.hidden=true;const body=new URLSearchParams(new FormData(form)).toString();const response=await fetch('/api/creators',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const data=await response.json().catch(()=>({}));if(!response.ok){error.textContent=data.error||`创建失败（HTTP ${response.status}）`;error.hidden=false;return}appendCreatorOption(data);document.querySelector(`[data-picker-id="${form.elements.picker_id.value}"]`)?._addCreator(data);dialog.close()});
-for(const button of document.querySelectorAll('[data-test-endpoint]'))button.addEventListener('click',async()=>{const output=button.closest('.profile-row-actions')?.querySelector('.check-result')||button.parentElement.querySelector('.check-result');if(!output)return;const label=button.querySelector('span'),originalLabel=label?.textContent;button.disabled=true;if(label)label.textContent='测试中';output.textContent='检查中…';try{const response=await fetch(button.dataset.testEndpoint,{method:'POST'});const data=await response.json().catch(()=>({ok:false,message:`HTTP ${response.status}`}));output.textContent=data.ok?`✅ ${data.message}`:`❌ ${data.message||data.ok}`;}catch(e){output.textContent=`❌ ${e.message||e}`;}finally{button.disabled=false;if(label)label.textContent=originalLabel;}});
-for(const button of document.querySelectorAll('[data-pick-directory]'))button.addEventListener('click',async()=>{const response=await fetch('/picker/directory',{method:'POST'});if(!response.ok)return;const data=await response.json();if(data.cancelled)return;const field=button.dataset.field,form=button.closest('form');form.elements[`${field}_selection`].value=data.selection_id;form.elements[field].value=data.name;});
-for(const button of document.querySelectorAll('[data-pick-cover]'))button.addEventListener('click',async()=>{const response=await fetch('/picker/image',{method:'POST'});if(!response.ok)return;const data=await response.json();if(data.cancelled)return;const form=button.closest('form');form.elements.selection_id.value=data.selection_id;form.querySelector('[data-cover-name]').textContent=data.filename;button.textContent='应用封面';button.type='submit';});
+document.addEventListener('click',async event=>{
+  const testBtn=event.target.closest('[data-test-endpoint]');
+  if(testBtn){
+    const output=testBtn.closest('.profile-row-actions')?.querySelector('.check-result')||testBtn.parentElement.querySelector('.check-result');
+    if(!output)return;
+    const label=testBtn.querySelector('span'),originalLabel=label?.textContent;
+    testBtn.disabled=true;
+    if(label)label.textContent='测试中';
+    output.textContent='检查中…';
+    try{
+      const response=await fetch(testBtn.dataset.testEndpoint,{method:'POST'});
+      const data=await response.json().catch(()=>({ok:false,message:`HTTP ${response.status}`}));
+      output.textContent=data.ok?`✅ ${data.message}`:`❌ ${data.message||data.ok}`;
+    }catch(e){
+      output.textContent=`❌ ${e.message||e}`;
+    }finally{
+      testBtn.disabled=false;
+      if(label)label.textContent=originalLabel;
+    }
+    return;
+  }
+  const dirBtn=event.target.closest('[data-pick-directory]');
+  if(dirBtn){
+    const field=dirBtn.dataset.field,form=dirBtn.closest('form');
+    if(!form)return;
+    dirBtn.disabled=true;
+    try{
+      const response=await fetch('/picker/directory',{method:'POST'});
+      const data=await response.json().catch(()=>({}));
+      if(data&&!data.cancelled){
+        if(form.elements[`${field}_selection`])form.elements[`${field}_selection`].value=data.selection_id;
+        if(form.elements[field])form.elements[field].value=data.name;
+      }
+    }finally{
+      dirBtn.disabled=false;
+    }
+    return;
+  }
+  const pickCoverBtn=event.target.closest('[data-pick-cover]');
+  if(pickCoverBtn){
+    const form=pickCoverBtn.closest('form');
+    pickCoverBtn.disabled=true;
+    try{
+      const response=await fetch('/picker/image',{method:'POST'});
+      const data=await response.json().catch(()=>({}));
+      if(data&&!data.cancelled&&form){
+        if(form.elements.selection_id)form.elements.selection_id.value=data.selection_id;
+        const nameEl=form.querySelector('[data-cover-name]');
+        if(nameEl)nameEl.textContent=data.filename;
+        pickCoverBtn.textContent='应用封面';
+        pickCoverBtn.type='submit';
+      }
+    }finally{
+      pickCoverBtn.disabled=false;
+    }
+    return;
+  }
+});
 const workEditDialog=document.getElementById('work-edit-dialog');
-function resetCreatorPicker(picker){clearCreatorPicker(picker);for(const id of (picker.dataset.initialIds||'').split(',').filter(Boolean)){const option=picker.querySelector(`[data-creator-option][data-creator-id="${id}"]`);if(option)picker._addCreator(creatorFromOption(option))}}
-document.addEventListener('click',event=>{const btn=event.target.closest('[data-open-work-edit]');if(!btn)return;const dialog=document.getElementById('work-edit-dialog');if(!dialog)return;const form=dialog.querySelector('[data-work-edit-form]');if(form){form.reset();resetCreatorPicker(form.querySelector('[data-creator-picker]'));const preview=form.querySelector('[data-work-cover-preview]');if(preview){preview.src=preview.dataset.originalSrc;preview.hidden=false}const filename=form.querySelector('[data-cover-filename]');if(filename)filename.textContent='当前封面';const err=form.querySelector('[data-work-edit-error]');if(err)err.hidden=true}syncKindFields();dialog.showModal()});
-document.querySelector('[data-pick-work-cover]')?.addEventListener('click',async event=>{const response=await fetch('/picker/image',{method:'POST'});const data=await response.json().catch(()=>({}));const form=event.target.closest('form'),error=form.querySelector('[data-work-edit-error]');if(!response.ok||data.cancelled){if(!data.cancelled){error.textContent=data.error||'无法打开图片选择器';error.hidden=false}return}form.elements.selection_id.value=data.selection_id;const preview=form.querySelector('[data-work-cover-preview]');preview.src=`/api/selections/${data.selection_id}/image`;preview.hidden=false;form.querySelector('[data-cover-filename]').textContent=data.filename});
-document.querySelector('[data-work-edit-form]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,error=form.querySelector('[data-work-edit-error]');error.hidden=true;const body=new URLSearchParams(new FormData(form)).toString();const response=await fetch(form.action,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json'},body});const data=await response.json().catch(()=>({}));if(!response.ok){error.textContent=data.error||`保存失败（HTTP ${response.status}）`;error.hidden=false;return}location.reload()});
+function resetCreatorPicker(picker){
+  if(!picker)return;
+  setupCreatorPicker(picker);
+  clearCreatorPicker(picker);
+  for(const id of (picker.dataset.initialIds||'').split(',').filter(Boolean)){
+    const option=picker.querySelector(`[data-creator-option][data-creator-id="${id}"]`);
+    if(option&&typeof picker._addCreator==='function'){
+      picker._addCreator(creatorFromOption(option));
+    }
+  }
+}
+document.addEventListener('click',event=>{
+  const btn=event.target.closest('[data-open-work-edit]');
+  if(!btn)return;
+  const dialog=document.getElementById('work-edit-dialog');
+  if(!dialog)return;
+  try {
+    const form=dialog.querySelector('[data-work-edit-form]');
+    if(form){
+      form.reset();
+      const picker=form.querySelector('[data-creator-picker]');
+      if(picker)resetCreatorPicker(picker);
+      const preview=form.querySelector('[data-work-cover-preview]');
+      if(preview){
+        preview.src=preview.dataset.originalSrc;
+        preview.hidden=false;
+      }
+      const filename=form.querySelector('[data-cover-filename]');
+      if(filename)filename.textContent='当前封面';
+      const err=form.querySelector('[data-work-edit-error]');
+      if(err)err.hidden=true;
+    }
+    syncKindFields(dialog);
+  }catch(err){
+    console.error('Error preparing work edit dialog:',err);
+  }
+  try{
+    if(dialog.open)dialog.close();
+    dialog.showModal();
+  }catch(e){
+    dialog.setAttribute('open','');
+  }
+});
+/* 封面上传与本地文件选择 */
+document.addEventListener('click', event => {
+  const trigger = event.target.closest('[data-trigger-cover-file]');
+  if (trigger) {
+    const form = trigger.closest('form');
+    form?.querySelector('[data-work-cover-file]')?.click();
+    return;
+  }
+  const dropzone = event.target.closest('[data-work-cover-dropzone]');
+  if (dropzone && !event.target.closest('button')) {
+    const form = dropzone.closest('form');
+    form?.querySelector('[data-work-cover-file]')?.click();
+    return;
+  }
+});
+
+document.addEventListener('change', async event => {
+  const fileInput = event.target.closest('[data-work-cover-file]');
+  if (!fileInput || !fileInput.files?.length) return;
+  const file = fileInput.files[0];
+  const form = fileInput.closest('form');
+  if (!form) return;
+  const preview = form.querySelector('[data-work-cover-preview]');
+  const filenameEl = form.querySelector('[data-cover-filename]');
+  const errorEl = form.querySelector('[data-work-edit-error]');
+  if (errorEl) errorEl.hidden = true;
+
+  if (preview) {
+    preview.src = URL.createObjectURL(file);
+    preview.hidden = false;
+  }
+  if (filenameEl) filenameEl.textContent = `上传中: ${file.name}`;
+
+  try {
+    const resp = await fetch('/api/upload-image', {
+      method: 'POST',
+      body: file,
+      headers: {
+        'Content-Type': file.type || 'image/jpeg',
+        'X-Filename': encodeURIComponent(file.name),
+        'X-CSRF-Token': window.SUBFORGE_CSRF || '',
+      },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.selection_id) {
+      if (errorEl) {
+        errorEl.textContent = data.error || `上传图片失败（HTTP ${resp.status}）`;
+        errorEl.hidden = false;
+      }
+      return;
+    }
+    form.elements.selection_id.value = data.selection_id;
+    if (filenameEl) filenameEl.textContent = `已选择: ${data.filename}`;
+  } catch (err) {
+    if (errorEl) {
+      errorEl.textContent = `上传图片失败: ${err.message}`;
+      errorEl.hidden = false;
+    }
+  } finally {
+    fileInput.value = '';
+  }
+});
+
+document.addEventListener('dragover', event => {
+  if (event.target.closest('[data-work-cover-dropzone]')) {
+    event.preventDefault();
+  }
+});
+document.addEventListener('drop', event => {
+  const dropzone = event.target.closest('[data-work-cover-dropzone]');
+  if (!dropzone) return;
+  event.preventDefault();
+  const form = dropzone.closest('form');
+  const fileInput = form?.querySelector('[data-work-cover-file]');
+  if (event.dataTransfer?.files?.length && fileInput) {
+    fileInput.files = event.dataTransfer.files;
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+});
+
+document.addEventListener('click', async event => {
+  const btn = event.target.closest('[data-pick-work-cover]');
+  if (!btn) return;
+  const form = btn.closest('form');
+  const error = form?.querySelector('[data-work-edit-error]');
+  if (error) error.hidden = true;
+  btn.disabled = true;
+  try {
+    const response = await fetch('/picker/image', { method: 'POST' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.cancelled) {
+      if (!data.cancelled && error) {
+        error.textContent = data.error || '无法打开图片选择器';
+        error.hidden = false;
+      }
+      return;
+    }
+    form.elements.selection_id.value = data.selection_id;
+    const preview = form.querySelector('[data-work-cover-preview]');
+    if (preview) {
+      preview.src = `/api/selections/${data.selection_id}/image`;
+      preview.hidden = false;
+    }
+    if (form.querySelector('[data-cover-filename]')) {
+      form.querySelector('[data-cover-filename]').textContent = data.filename;
+    }
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.addEventListener('submit', async event => {
+  const form = event.target.closest('[data-work-edit-form]');
+  if (!form) return;
+  event.preventDefault();
+  const error = form.querySelector('[data-work-edit-error]');
+  if (error) error.hidden = true;
+  const saveBtn = form.querySelector('button:not(.ghost)');
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中…';
+  }
+  try {
+    const body = new URLSearchParams(new FormData(form)).toString();
+    const response = await fetch(form.action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+      body,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (error) {
+        error.textContent = data.error || `保存失败（HTTP ${response.status}）`;
+        error.hidden = false;
+      }
+      return;
+    }
+    location.reload();
+  } catch (err) {
+    if (error) {
+      error.textContent = `保存失败：${err.message}`;
+      error.hidden = false;
+    }
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '保存';
+    }
+  }
+});
 function showTaskMessage(row,message){let output=row.querySelector('.task-center-message');if(!output&&message){output=document.createElement('p');output.className='task-center-message';row.append(output)}if(!output)return;output.textContent=message||'';clearInterval(output._countdown);const match=(message||'').match(/(\d+)秒后重试/);if(!match)return;let seconds=Number(match[1]);output._countdown=setInterval(()=>{seconds=Math.max(0,seconds-1);output.textContent=message.replace(/\d+秒后重试/,`${seconds}秒后重试`);if(seconds===0)clearInterval(output._countdown)},1000)}
 function getTaskRows(){
  const rows=[...document.querySelectorAll('[data-task-id]')];
@@ -291,8 +622,9 @@ async function pollTaskRows(){
   if(reachedTerminal&&!document.querySelector('dialog[open]'))location.reload();
  }catch(_error){}finally{taskPollInFlight=false}
 }
+let taskPollTimer = null;
 function taskPollDelay(){const rows=getTaskRows();const fastStage=rows.some(row=>{const status=row.querySelector('.task-status')?.textContent.trim(),stage=row.querySelector('.task-stage')?.textContent.trim();return['queued','running'].includes(status)&&['model','asr'].includes(stage)});return fastStage?250:1000}
-async function scheduleTaskPoll(){await pollTaskRows();setTimeout(scheduleTaskPoll,taskPollDelay())}
+async function scheduleTaskPoll(){if(taskPollTimer)clearTimeout(taskPollTimer);await pollTaskRows();taskPollTimer=setTimeout(scheduleTaskPoll,taskPollDelay())}
 scheduleTaskPoll();document.addEventListener('visibilitychange',pollTaskRows);
 /* 片段重处理候选评审：从任务中心打开候选对比并接受/放弃 */
 let reviewTaskId='';
@@ -441,9 +773,25 @@ document.addEventListener('click', event => {
 });
 
 /* 创作者管理：分组搜索、行菜单，以及添加/修改/合并/删除 Dialog。 */
-for(const search of document.querySelectorAll('[data-creator-list-search]'))search.addEventListener('input',()=>{const q=normalizeCreatorName(search.value);for(const row of search.closest('[data-tab-panel]').querySelectorAll('[data-creator-row]'))row.hidden=!normalizeCreatorName(row.dataset.creatorName).startsWith(q)});
-for(const button of document.querySelectorAll('[data-creator-menu-button]'))button.addEventListener('click',event=>{event.stopPropagation();const menu=button.parentElement.querySelector('[data-creator-menu]');for(const other of document.querySelectorAll('[data-creator-menu]'))if(other!==menu)other.hidden=true;menu.hidden=!menu.hidden});
-document.addEventListener('click',()=>{for(const menu of document.querySelectorAll('[data-creator-menu]'))menu.hidden=true});
+document.addEventListener('input',event=>{
+  const search=event.target.closest('[data-creator-list-search]');
+  if(!search)return;
+  const q=normalizeCreatorName(search.value);
+  const panel=search.closest('[data-tab-panel]');
+  if(!panel)return;
+  for(const row of panel.querySelectorAll('[data-creator-row]'))row.hidden=!normalizeCreatorName(row.dataset.creatorName).startsWith(q);
+});
+document.addEventListener('click',event=>{
+  const menuBtn=event.target.closest('[data-creator-menu-button]');
+  if(menuBtn){
+    event.stopPropagation();
+    const menu=menuBtn.parentElement.querySelector('[data-creator-menu]');
+    for(const other of document.querySelectorAll('[data-creator-menu]'))if(other!==menu)other.hidden=true;
+    if(menu)menu.hidden=!menu.hidden;
+    return;
+  }
+  for(const menu of document.querySelectorAll('[data-creator-menu]'))menu.hidden=true;
+});
 document.addEventListener('click', event => {
   const openCreator = event.target.closest('[data-open-creator-create]');
   if (!openCreator) return;
@@ -455,15 +803,111 @@ document.addEventListener('click', event => {
   manageCreate.showModal();
   manageCreate.querySelector('input[name="name"]')?.focus();
 });
-for(const button of document.querySelectorAll('[data-edit-creator]'))button.addEventListener('click',()=>{const dialog=document.getElementById('creator-edit-dialog'),form=dialog.querySelector('form');form.elements.creator_id.value=button.dataset.id;form.elements.name.value=button.dataset.name;dialog.querySelector('[data-edit-kind]').innerHTML=`<span class="creator-tag creator-tag-${button.dataset.kind}">${button.dataset.kind==='circle'?'社团':'声优'}</span>`;dialog.showModal();form.elements.name.focus()});
 function clearCreatorPicker(picker){for(const tag of picker.querySelectorAll('[data-selected-id]'))tag.remove();const input=picker.querySelector('[data-creator-search]');if(input)input.value='';picker._refreshCreators?.(false)}
 function openMergeDialog(data){const dialog=document.getElementById('creator-merge-dialog'),form=dialog.querySelector('form'),picker=dialog.querySelector('[data-creator-picker]');form.elements.source_id.value=data.id;dialog.querySelector('[data-merge-source-name]').innerHTML=`<span class="creator-tag creator-tag-${data.kind}">${data.name}</span>`;dialog.querySelector('[data-merge-source-count]').textContent=`关联 ${data.count} 部作品`;clearCreatorPicker(picker);picker.dataset.allowedKind=data.kind;picker.dataset.excludeId=data.id;picker.dispatchEvent(new CustomEvent('creator-context-change'));dialog.showModal();picker.querySelector('[data-creator-search]').focus()}
-for(const button of document.querySelectorAll('[data-merge-creator]'))button.addEventListener('click',()=>openMergeDialog(button.dataset));
-for(const button of document.querySelectorAll('[data-delete-creator]'))button.addEventListener('click',()=>{const dialog=document.getElementById('creator-delete-dialog'),form=dialog.querySelector('form'),count=Number(button.dataset.count);form.elements.creator_id.value=button.dataset.id;dialog.dataset.sourceId=button.dataset.id;dialog.dataset.sourceName=button.dataset.name;dialog.dataset.sourceKind=button.dataset.kind;dialog.dataset.sourceCount=button.dataset.count;dialog.querySelector('[data-delete-title]').textContent=count?'无法删除创作者':'删除创作者';dialog.querySelector('[data-delete-message]').textContent=count?`“${button.dataset.name}”仍关联 ${count} 部作品，请先合并到同身份创作者。`:`确定删除“${button.dataset.name}”吗？`;dialog.querySelector('[data-confirm-delete]').hidden=count>0;dialog.querySelector('[data-delete-to-merge]').hidden=count===0;dialog.showModal()});
-document.querySelector('[data-delete-to-merge]')?.addEventListener('click',event=>{const dialog=event.target.closest('dialog');dialog.close();openMergeDialog({id:dialog.dataset.sourceId,name:dialog.dataset.sourceName,kind:dialog.dataset.sourceKind,count:dialog.dataset.sourceCount})});
-/* 删除配置：二次点击确认，3 秒后自动复位 */
-for(const button of document.querySelectorAll('[data-two-step]')){const confirmText='确认删除？';let armed=false,timer=null;button.addEventListener('click',e=>{if(!armed){e.preventDefault();armed=true;button.dataset.originalText=button.textContent;button.textContent=confirmText;button.classList.add('armed');timer=setTimeout(()=>{armed=false;button.textContent=button.dataset.originalText;button.classList.remove('armed')},3000);}else{clearTimeout(timer);}});}
-for(const button of document.querySelectorAll('[data-delete-deepgram]')){let armed=false,timer=null;button.addEventListener('click',async()=>{if(!armed){armed=true;button.textContent='确认';button.classList.add('armed');timer=setTimeout(()=>{armed=false;button.textContent='×';button.classList.remove('armed')},3000);return}clearTimeout(timer);const response=await fetch('/settings/deepgram/delete-key',{method:'POST'});if(!response.ok){armed=false;button.textContent='×';button.classList.remove('armed');return}const status=document.querySelector('[data-deepgram-status]');status.textContent='未配置';status.classList.remove('ok');button.remove()})}
+document.addEventListener('click',async event=>{
+  const editBtn=event.target.closest('[data-edit-creator]');
+  if(editBtn){
+    const dialog=document.getElementById('creator-edit-dialog'),form=dialog?.querySelector('form');
+    if(dialog&&form){
+      form.elements.creator_id.value=editBtn.dataset.id;
+      form.elements.name.value=editBtn.dataset.name;
+      const kindEl=dialog.querySelector('[data-edit-kind]');
+      if(kindEl)kindEl.innerHTML=`<span class="creator-tag creator-tag-${editBtn.dataset.kind}">${editBtn.dataset.kind==='circle'?'社团':'声优'}</span>`;
+      dialog.showModal();
+      form.elements.name.focus();
+    }
+    return;
+  }
+  const mergeBtn=event.target.closest('[data-merge-creator]');
+  if(mergeBtn){
+    openMergeDialog(mergeBtn.dataset);
+    return;
+  }
+  const delBtn=event.target.closest('[data-delete-creator]');
+  if(delBtn){
+    const dialog=document.getElementById('creator-delete-dialog'),form=dialog?.querySelector('form'),count=Number(delBtn.dataset.count);
+    if(dialog&&form){
+      form.elements.creator_id.value=delBtn.dataset.id;
+      dialog.dataset.sourceId=delBtn.dataset.id;
+      dialog.dataset.sourceName=delBtn.dataset.name;
+      dialog.dataset.sourceKind=delBtn.dataset.kind;
+      dialog.dataset.sourceCount=delBtn.dataset.count;
+      const titleEl=dialog.querySelector('[data-delete-title]');
+      if(titleEl)titleEl.textContent=count?'无法删除创作者':'删除创作者';
+      const msgEl=dialog.querySelector('[data-delete-message]');
+      if(msgEl)msgEl.textContent=count?`“${delBtn.dataset.name}”仍关联 ${count} 部作品，请先合并到同身份创作者。`:`确定删除“${delBtn.dataset.name}”吗？`;
+      const confirmBtn=dialog.querySelector('[data-confirm-delete]');
+      if(confirmBtn)confirmBtn.hidden=count>0;
+      const mergeActionBtn=dialog.querySelector('[data-delete-to-merge]');
+      if(mergeActionBtn)mergeActionBtn.hidden=count===0;
+      dialog.showModal();
+    }
+    return;
+  }
+  const toMerge=event.target.closest('[data-delete-to-merge]');
+  if(toMerge){
+    const dialog=toMerge.closest('dialog');
+    dialog?.close();
+    openMergeDialog({
+      id:dialog.dataset.sourceId,
+      name:dialog.dataset.sourceName,
+      kind:dialog.dataset.sourceKind,
+      count:dialog.dataset.sourceCount,
+    });
+    return;
+  }
+  const twoStepBtn=event.target.closest('[data-two-step]');
+  if(twoStepBtn){
+    if(!twoStepBtn._armed){
+      event.preventDefault();
+      twoStepBtn._armed=true;
+      twoStepBtn.dataset.originalText=twoStepBtn.textContent;
+      twoStepBtn.textContent='确认删除？';
+      twoStepBtn.classList.add('armed');
+      clearTimeout(twoStepBtn._timer);
+      twoStepBtn._timer=setTimeout(()=>{
+        twoStepBtn._armed=false;
+        twoStepBtn.textContent=twoStepBtn.dataset.originalText;
+        twoStepBtn.classList.remove('armed');
+      },3000);
+    }else{
+      clearTimeout(twoStepBtn._timer);
+      twoStepBtn._armed=false;
+    }
+    return;
+  }
+  const deepgramBtn=event.target.closest('[data-delete-deepgram]');
+  if(deepgramBtn){
+    if(!deepgramBtn._armed){
+      deepgramBtn._armed=true;
+      deepgramBtn.textContent='确认';
+      deepgramBtn.classList.add('armed');
+      clearTimeout(deepgramBtn._timer);
+      deepgramBtn._timer=setTimeout(()=>{
+        deepgramBtn._armed=false;
+        deepgramBtn.textContent='×';
+        deepgramBtn.classList.remove('armed');
+      },3000);
+      return;
+    }
+    clearTimeout(deepgramBtn._timer);
+    const response=await fetch('/settings/deepgram/delete-key',{method:'POST'});
+    if(!response.ok){
+      deepgramBtn._armed=false;
+      deepgramBtn.textContent='×';
+      deepgramBtn.classList.remove('armed');
+      return;
+    }
+    const status=document.querySelector('[data-deepgram-status]');
+    if(status){
+      status.textContent='未配置';
+      status.classList.remove('ok');
+    }
+    deepgramBtn.remove();
+    return;
+  }
+});
 
 /* 作品库搜索：服务端跨分页检索，输入停顿后刷新并回到第一页。 */
 const workSearch = document.getElementById('work-search');
@@ -574,7 +1018,13 @@ document.addEventListener('click',event=>{
   if(!row)return;
   if(event.target.closest('a,button,form,details,.track-menu,input,select,textarea,[data-task-id]'))return;
   event.stopPropagation();
-  if(row.dataset.trackPlayer)window.location.href=row.dataset.trackPlayer;
+  if(row.dataset.trackPlayer) {
+    if (window.htmx) {
+      window.htmx.ajax('GET', row.dataset.trackPlayer, { target: '#main-content', select: '#main-content', swap: 'outerHTML', pushUrl: true });
+    } else {
+      window.location.href=row.dataset.trackPlayer;
+    }
+  }
 });
 document.addEventListener('keydown',event=>{
   if(event.key!=='Enter'&&event.key!==' ')return;
@@ -584,7 +1034,11 @@ document.addEventListener('keydown',event=>{
   if(active&&active!==row&&row.contains(active))return;
   if(!row.dataset.trackPlayer)return;
   event.preventDefault();
-  window.location.href=row.dataset.trackPlayer;
+  if (window.htmx) {
+    window.htmx.ajax('GET', row.dataset.trackPlayer, { target: '#main-content', select: '#main-content', swap: 'outerHTML', pushUrl: true });
+  } else {
+    window.location.href=row.dataset.trackPlayer;
+  }
 });
 
 /* 就地播放：点击 data-play-track 时在底部条中开始播放（不跳转页面）。
@@ -773,7 +1227,7 @@ document.addEventListener('submit', async event => {
   const body = new URLSearchParams(formData).toString();
   if (btn) {
     btn.disabled = true;
-    btn.textContent = '下载中…';
+    btn.textContent = '准备下载…';
   }
   try {
     const resp = await fetch(urlImportForm.action, {
@@ -784,8 +1238,10 @@ document.addEventListener('submit', async event => {
     const data = await resp.json().catch(() => ({}));
     if (resp.status === 202 && data.task_id) {
       if (btn) btn.textContent = '下载中…';
+      let pollCount = 0;
       for (;;) {
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 1200));
+        pollCount++;
         const st = await fetch(`/api/imports/${data.task_id}`).then(r => r.json()).catch(() => null);
         if (!st) continue;
         if (st.status === 'done' && st.item_id) {
@@ -800,6 +1256,11 @@ document.addEventListener('submit', async event => {
           break;
         }
         if (btn) btn.textContent = st.message || '下载中…';
+        if (pollCount >= 5) {
+          document.getElementById('import-dialog')?.close();
+          window.location.href = '/downloads?tab=downloads';
+          return;
+        }
       }
     } else if (!resp.ok || data.error) {
       if (errEl) {
@@ -902,16 +1363,22 @@ function enhanceSelects(root = document) {
 }
 enhanceSelects();
 /* 原生音频模型配置：公开字段回填，API Key 永不回填到浏览器。 */
-for(const button of document.querySelectorAll('[data-edit-gemini-profile]'))button.addEventListener('click',()=>{
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-edit-gemini-profile]');
+  if(!button)return;
   const form=document.getElementById('gemini-profile-form');if(!form)return;
-  const profile=JSON.parse(button.dataset.editGeminiProfile);
-  for(const name of ['profile_id','name','protocol','base_url','model','max_segment_seconds','temperature','bilingual_prompt','transcribe_prompt','proxy_url','ca_bundle']){
-    if(!form.elements[name])continue;
-    const source=name==='max_segment_seconds'?'max_request_seconds':name;
-    form.elements[name].value=profile[source]??'';
+  try{
+    const profile=JSON.parse(button.dataset.editGeminiProfile);
+    for(const name of ['profile_id','name','protocol','base_url','model','max_segment_seconds','temperature','bilingual_prompt','transcribe_prompt','proxy_url','ca_bundle']){
+      if(!form.elements[name])continue;
+      const source=name==='max_segment_seconds'?'max_request_seconds':name;
+      form.elements[name].value=profile[source]??'';
+    }
+    form.elements.api_key.value='';form.elements.verify_tls.checked=!!profile.verify_tls;
+    form.scrollIntoView({behavior:'smooth',block:'start'});form.elements.name.focus();
+  }catch(e){
+    console.error(e);
   }
-  form.elements.api_key.value='';form.elements.verify_tls.checked=!!profile.verify_tls;
-  form.scrollIntoView({behavior:'smooth',block:'start'});form.elements.name.focus();
 });
 
 /* 作品库：底部分页条支持动态配置每页条数（默认10条，可选12/14/20） */
@@ -929,3 +1396,5 @@ document.addEventListener('change', (e) => {
     window.location.assign(target);
   }
 });
+/* window.__subforgeAppInitialized block end */
+}

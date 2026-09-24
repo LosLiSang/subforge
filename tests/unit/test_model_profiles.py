@@ -3,10 +3,17 @@ from __future__ import annotations
 import json
 
 from subforge.ui.model_profiles import ModelProfileStore
+from subforge.ui.profiles import mask_secret
 
 
 def _write(path, profiles):
     path.write_text(json.dumps({"schema_version": 1, "profiles": profiles}), encoding="utf-8")
+
+
+def test_mask_secret_shows_only_safe_edges():
+    assert mask_secret("sk-1234567890abcdef") == "sk-1•••••••••••cdef"
+    assert mask_secret("short") == "已配置"
+    assert mask_secret("") == "未配置"
 
 
 def test_save_and_resolve_with_capabilities(tmp_path):

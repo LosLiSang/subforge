@@ -200,6 +200,14 @@ def test_react_fastapi_full_e2e(tmp_path):
     assert settings_res.status_code == 200
     assert settings_res.json()["has_fixed_token"] is True
 
+    # Test downloads/history API endpoint
+    history_res = client.get("/api/downloads/history")
+    assert history_res.status_code == 200
+    history_data = history_res.json()
+    assert "subtitle_tasks" in history_data
+    assert "download_tasks" in history_data
+    artifact_records["history_api_verified"] = True
+
     # 10. Generate verifiable artifact
     artifacts_dir = REPO_ROOT / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)

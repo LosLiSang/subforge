@@ -1,4 +1,3 @@
-import React from 'react'
 import { Outlet } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { GlobalPlayerBar } from './GlobalPlayerBar'
@@ -9,13 +8,15 @@ export function Shell() {
   const { currentTrack } = usePlayer()
 
   return (
-    <div className={`app-shell ${currentTrack ? 'has-player-bar' : ''}`}>
+    <>
+      <div className={`shell ${currentTrack ? 'has-player' : ''}`}>
       <Sidebar />
-      <main id="main-content" className="main-content">
+        <main id="main-content" className="frame-main">
         <Outlet />
       </main>
+      </div>
       <GlobalPlayerBar />
       <FloatLyrics />
-    </div>
+    </>
   )
 }

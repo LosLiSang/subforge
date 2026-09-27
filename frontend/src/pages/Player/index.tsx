@@ -19,11 +19,12 @@ import { api } from '../../api/client'
 import type { Track, Item, SubtitlesData, SubtitleEntry } from '../../types'
 import { usePlayer } from '../../context/PlayerContext'
 
-function formatSeconds(sec: number): string {
-  if (!sec || isNaN(sec)) return '00:00.0'
-  const m = Math.floor(sec / 60)
-  const s = (sec % 60).toFixed(1)
-  return `${m.toString().padStart(2, '0')}:${parseFloat(s) < 10 ? '0' : ''}${s}`
+function fmtTime(sec: number): string {
+  if (!sec || isNaN(sec)) return '00:00'
+  const total = Math.floor(sec)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
 }
 
 export function PlayerPage() {
@@ -34,11 +35,9 @@ export function PlayerPage() {
     isPlaying,
     currentTime,
     duration,
-    volume,
     playTrack,
     togglePlay,
     seek,
-    setVolume,
     activeSubtitleIndex,
     subtitles,
     loadSubtitles,
@@ -51,10 +50,6 @@ export function PlayerPage() {
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [editText, setEditText] = useState('')
   const [editTargetText, setEditTargetText] = useState('')
-
-  // History / Snapshots
-  const [snapshots, setSnapshots] = useState<string[]>([])
-  const [historyOpen, setHistoryOpen] = useState(false)
 
   // Segment Reprocess
   const [reprocessModalOpen, setReprocessModalOpen] = useState(false)
@@ -149,17 +144,6 @@ export function PlayerPage() {
     }
   }
 
-  const handleRestoreSnapshot = async (snapshot: string) => {
-    if (!trackId || !confirm(`确认回滚至快照 ${snapshot} 吗？`)) return
-    try {
-      await api.post(`/api/tracks/${trackId}/subtitles/restore/${snapshot}`)
-      setHistoryOpen(false)
-      loadSubtitles(trackId)
-    } catch (err: any) {
-      alert('恢复快照失败: ' + err.message)
-    }
-  }
-
   const handleOpenReprocess = async (start: number, end: number) => {
     setReprocessStart(start)
     setReprocessEnd(end)
@@ -195,185 +179,228 @@ export function PlayerPage() {
   const sourceEntries = subtitles?.source || []
   const targetEntries = subtitles?.target || []
   const maxLen = Math.max(sourceEntries.length, targetEntries.length)
+  const currentSourceLine = activeSubtitleIndex >= 0 ? sourceEntries[activeSubtitleIndex]?.text : null
+  const currentTargetLine = activeSubtitleIndex >= 0 ? targetEntries[activeSubtitleIndex]?.text : null
 
   return (
-    <div className="player-fullscreen-page">
-      {/* Top Navbar */}
-      <div className="player-top-nav">
-        <Link
-          to={item ? `/items/${item.item_id}` : '/'}
-          className="text-fg-dim hover:text-white flex items-center gap-1.5 text-sm"
-        >
-          <ArrowLeft size={16} /> 返回作品详情
-        </Link>
+    <>
+      <Link className="back-link" to={item ? `/items/${item.item_id}` : '/'}>
+        ← 返回作品
+      </Link>
 
-        <div className="flex-1 text-center min-w-0 px-4">
-          <h2 className="text-base font-semibold text-white truncate">
-            {track?.title || currentTrack?.title || '正在播放'}
-          </h2>
-          <div className="text-xs text-fg-dim">{item?.title || currentItem?.title}</div>
+      <section className="player">
+        <div className="work-hero">
+          <div className={`work-hero-cover ${item?.kind === 'rj_work' ? 'cover-rj' : 'cover-stream'}`}>
+            <img
+              className="work-cover-img"
+              src={item?.cover_url}
+              alt=""
+              onError={(e) => ((e.target as HTMLElement).style.display = 'none')}
+            />
+            <span className="work-kind">{item?.kind === 'rj_work' ? 'RJ' : 'LIVE'}</span>
+          </div>
+          <div className="work-hero-info">
+            <h1>{track?.title || currentTrack?.title}</h1>
+            <div className="work-meta">
+              {item?.rj_code && <span className="chip chip-rj">{item.rj_code}</span>}
+              <span className="chip chip-tracks">{item?.title || '正在播放'}</span>
+            </div>
+          </div>
         </div>
 
-        {/* Subtitle mode controls */}
-        <div className="flex items-center gap-2">
-          <div className="flex rounded bg-panel-2 border border-line p-0.5 text-xs">
-            <button
-              type="button"
-              onClick={() => setMode('bilingual')}
-              className={`px-2 py-1 rounded ${mode === 'bilingual' ? 'bg-accent text-white font-medium' : 'text-fg-dim'}`}
-            >
-              双语对照
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('zh')}
-              className={`px-2 py-1 rounded ${mode === 'zh' ? 'bg-accent text-white font-medium' : 'text-fg-dim'}`}
-            >
-              仅中文
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('jp')}
-              className={`px-2 py-1 rounded ${mode === 'jp' ? 'bg-accent text-white font-medium' : 'text-fg-dim'}`}
-            >
-              仅日文
-            </button>
-          </div>
-
+        <div className="player-controls">
           <button
             type="button"
-            onClick={() => setEditMode(!editMode)}
-            className={`btn btn-secondary btn-sm flex items-center gap-1 ${editMode ? 'text-accent border-accent' : ''}`}
-            title="开启/退出字幕校对与编辑模式"
+            className="play-btn"
+            onClick={togglePlay}
+            aria-label="播放/暂停"
           >
-            <Edit3 size={14} />
-            {editMode ? '完成校对' : '字幕校对'}
+            {isPlaying ? (
+              <svg className="ic-pause" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="5" width="4" height="14" rx="1" />
+                <rect x="14" y="5" width="4" height="14" rx="1" />
+              </svg>
+            ) : (
+              <svg className="ic-play" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5.14v13.72a1 1 0 0 0 1.52.86l11-6.86a1 1 0 0 0 0-1.72l-11-6.86A1 1 0 0 0 8 5.14z" />
+              </svg>
+            )}
+          </button>
+          <input
+            type="range"
+            id="play-seek"
+            min={0}
+            max={duration || 0}
+            step={0.1}
+            value={currentTime || 0}
+            onChange={(e) => seek(parseFloat(e.target.value))}
+            aria-label="进度"
+          />
+          <span className="player-controls-time">
+            {fmtTime(currentTime)} / {fmtTime(duration)}
+          </span>
+        </div>
+
+        <div className="subtitle-mode" role="group" aria-label="字幕模式">
+          <span className="subtitle-label">字幕模式</span>
+          <button
+            type="button"
+            className={mode === 'bilingual' ? 'active' : ''}
+            onClick={() => setMode('bilingual')}
+          >
+            双语
+          </button>
+          <button
+            type="button"
+            className={mode === 'jp' ? 'active' : ''}
+            onClick={() => setMode('jp')}
+          >
+            仅原文
+          </button>
+          <button
+            type="button"
+            className={mode === 'zh' ? 'active' : ''}
+            onClick={() => setMode('zh')}
+          >
+            仅译文
+          </button>
+          <span className="subtitle-mode-divider" aria-hidden="true" />
+          <button
+            type="button"
+            className={`ghost small ${editMode ? 'active' : ''}`}
+            onClick={() => setEditMode(!editMode)}
+          >
+            {editMode ? '完成校对' : '✏️ 校对模式'}
           </button>
         </div>
-      </div>
 
-      {/* Main Subtitles Surface */}
-      <div className="player-subtitles-viewport" ref={subtitleContainerRef}>
-        {maxLen === 0 ? (
-          <div className="text-center py-28 space-y-3">
-            <Languages size={40} className="mx-auto text-fg-faint" />
-            <p className="text-fg-dim text-sm">该音轨暂无字幕</p>
-            <p className="text-fg-faint text-xs">可返回作品详情页发起 ASR 语音识别与翻译流水线</p>
-          </div>
-        ) : (
-          <div className="subtitles-list">
-            {Array.from({ length: maxLen }).map((_, idx) => {
-              const src = sourceEntries[idx]
-              const tgt = targetEntries[idx]
-              const isActive = idx === activeSubtitleIndex
-              const isEditing = editMode && editingIndex === idx
-              const startTime = tgt ? tgt.start : src ? src.start : 0
-              const endTime = tgt ? tgt.end : src ? src.end : 0
+        <div className="subtitles">
+          {mode !== 'zh' && (
+            <div data-subtitle-panel="source">
+              <small>日文原文</small>
+              <p>{currentSourceLine || '—'}</p>
+            </div>
+          )}
+          {mode !== 'jp' && (
+            <div data-subtitle-panel="target">
+              <small>中文翻译</small>
+              <p>{currentTargetLine || '—'}</p>
+            </div>
+          )}
+        </div>
 
-              return (
-                <div
-                  key={idx}
-                  ref={isActive ? activeLineRef : null}
-                  onClick={() => {
-                    if (!editMode) seek(startTime)
-                  }}
-                  className={`subtitle-row ${isActive ? 'active' : ''} ${isEditing ? 'editing' : ''}`}
-                >
-                  {/* Timestamp & Index */}
-                  <div className="subtitle-time-col">
-                    <span className="font-mono text-xs text-fg-faint">
-                      {formatSeconds(startTime)}
-                    </span>
-                    {editMode && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleOpenReprocess(startTime, endTime)
-                        }}
-                        className="reprocess-chip"
-                        title="重跑该片段"
-                      >
-                        <Sparkles size={11} /> 重跑
-                      </button>
-                    )}
-                  </div>
+        <div style={{ marginTop: 24 }} ref={subtitleContainerRef}>
+          <h3 className="dash-h2" style={{ marginBottom: 12 }}>
+            全部字幕对齐表 ({maxLen})
+          </h3>
 
-                  {/* Text display / editing */}
-                  <div className="subtitle-content-col">
-                    {isEditing ? (
-                      <div className="space-y-2 w-full py-1">
-                        {mode !== 'zh' && (
-                          <input
-                            type="text"
-                            value={editText}
-                            onChange={(e) => setEditText(e.target.value)}
-                            className="input-text text-sm py-1 font-sans"
-                            placeholder="日文原文"
-                          />
+          {maxLen === 0 ? (
+            <div className="empty" style={{ padding: '40px 0', textAlign: 'center' }}>
+              <p>该音轨暂无字幕数据</p>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: 6 }}>
+              {Array.from({ length: maxLen }).map((_, idx) => {
+                const src = sourceEntries[idx]
+                const tgt = targetEntries[idx]
+                const isActive = idx === activeSubtitleIndex
+                const isEditing = editMode && editingIndex === idx
+                const startTime = tgt ? tgt.start : src ? src.start : 0
+                const endTime = tgt ? tgt.end : src ? src.end : 0
+
+                return (
+                  <div
+                    key={idx}
+                    ref={isActive ? activeLineRef : null}
+                    onClick={() => {
+                      if (!editMode) seek(startTime)
+                    }}
+                    className={`transcript-row ${isActive ? 'active' : ''}`}
+                    style={{ cursor: 'pointer', padding: '10px 14px' }}
+                  >
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', width: '100%' }}>
+                      <span className="transcript-time" style={{ fontFamily: 'var(--font-mono)', fontSize: '.84rem' }}>
+                        {fmtTime(startTime)}
+                      </span>
+
+                      <div style={{ flex: 1, minWidth: 0, display: 'grid', gap: 4 }}>
+                        {isEditing ? (
+                          <div style={{ display: 'grid', gap: 6 }}>
+                            {mode !== 'zh' && (
+                              <input
+                                type="text"
+                                value={editText}
+                                onChange={(e) => setEditText(e.target.value)}
+                                placeholder="日文原文"
+                              />
+                            )}
+                            {mode !== 'jp' && (
+                              <input
+                                type="text"
+                                value={editTargetText}
+                                onChange={(e) => setEditTargetText(e.target.value)}
+                                placeholder="中文译文"
+                              />
+                            )}
+                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+                              <button type="button" className="ghost small" onClick={() => setEditingIndex(null)}>
+                                取消
+                              </button>
+                              <button type="button" className="small" onClick={() => handleEditSave(idx)}>
+                                保存
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            {mode !== 'zh' && src && (
+                              <div style={{ fontSize: '.9rem', color: 'var(--glass-dim)' }}>
+                                {src.text}
+                              </div>
+                            )}
+                            {mode !== 'jp' && tgt && (
+                              <div style={{ fontSize: '.95rem', color: 'var(--glass-text)', fontWeight: 500 }}>
+                                {tgt.text}
+                              </div>
+                            )}
+                          </>
                         )}
-                        {mode !== 'jp' && (
-                          <input
-                            type="text"
-                            value={editTargetText}
-                            onChange={(e) => setEditTargetText(e.target.value)}
-                            className="input-text text-sm py-1 font-sans text-accent"
-                            placeholder="中文译文"
-                          />
-                        )}
-                        <div className="flex gap-2 justify-end">
+                      </div>
+
+                      {editMode && !isEditing && (
+                        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                           <button
                             type="button"
-                            onClick={() => setEditingIndex(null)}
-                            className="btn btn-secondary btn-sm"
+                            className="ghost small"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setEditingIndex(idx)
+                              setEditText(src?.text || '')
+                              setEditTargetText(tgt?.text || '')
+                            }}
                           >
-                            取消
+                            编辑
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleEditSave(idx)}
-                            className="btn btn-primary btn-sm flex items-center gap-1"
+                            className="ghost small"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleOpenReprocess(startTime, endTime)
+                            }}
                           >
-                            <Check size={14} /> 保存
+                            重跑
                           </button>
                         </div>
-                      </div>
-                    ) : (
-                      <div className="space-y-1">
-                        {mode !== 'zh' && src && (
-                          <p className="subtitle-jp-line">{src.text}</p>
-                        )}
-                        {mode !== 'jp' && tgt && (
-                          <p className="subtitle-zh-line">{tgt.text}</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Row edit button */}
-                  {editMode && !isEditing && (
-                    <div className="subtitle-action-col">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setEditingIndex(idx)
-                          setEditText(src?.text || '')
-                          setEditTargetText(tgt?.text || '')
-                        }}
-                        className="p-1 text-fg-dim hover:text-white"
-                        title="编辑该行"
-                      >
-                        <Edit3 size={15} />
-                      </button>
+                      )}
                     </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Segment Reprocess Modal */}
       {reprocessModalOpen && (
@@ -468,6 +495,6 @@ export function PlayerPage() {
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }

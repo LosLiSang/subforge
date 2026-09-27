@@ -1,21 +1,8 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import {
-  Play,
-  Edit,
-  Trash2,
-  Sparkles,
-  Download,
-  ArrowLeft,
-  Clock,
-  ExternalLink,
-  Layers,
-  Image as ImageIcon,
-  Check,
-  X,
-} from 'lucide-react'
+import { ArrowLeft, X, Sparkles } from 'lucide-react'
 import { api } from '../../api/client'
-import type { ItemDetailData, Track } from '../../types'
+import type { ItemDetailData } from '../../types'
 import { usePlayer } from '../../context/PlayerContext'
 
 export function ItemDetailPage() {
@@ -195,278 +182,195 @@ export function ItemDetailPage() {
     : null
 
   return (
-    <div className="page-container space-y-8">
-      {/* Navigation breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-fg-dim">
-        <Link to="/" className="hover:text-white flex items-center gap-1">
-          <ArrowLeft size={14} /> 作品库
-        </Link>
-        <span>/</span>
-        <span className="text-fg truncate max-w-md">{item.title}</span>
-      </div>
+    <>
+      <Link className="back-link" to="/">← 返回作品库</Link>
 
-      {/* Item Hero Overview */}
-      <div className="item-detail-hero">
-        <div className="item-hero-cover-wrapper group">
-          <img
-            src={item.cover_url}
-            alt={item.title}
-            className="item-hero-cover"
-            onError={(e) => {
-              ;(e.target as HTMLElement).style.opacity = '0.3'
-            }}
-          />
-          <button
-            type="button"
-            onClick={handleReplaceCover}
-            className="cover-replace-overlay"
-            title="更换封面图片"
-          >
-            <ImageIcon size={20} />
-            <span>更换封面</span>
-          </button>
+      <section className="work-hero">
+        <div className="work-hero-left">
+          <div className={`work-hero-cover ${item.kind === 'rj_work' ? 'cover-rj' : 'cover-stream'}`}>
+            <img
+              className="work-cover-img"
+              src={item.cover_url}
+              alt=""
+              loading="lazy"
+              onError={(e) => ((e.target as HTMLElement).style.display = 'none')}
+            />
+            <span className="work-kind">{item.kind === 'rj_work' ? 'RJ' : 'LIVE'}</span>
+          </div>
         </div>
 
-        <div className="item-hero-info">
-          <div className="flex items-center gap-2 flex-wrap">
+        <div className="work-hero-info">
+          <h1>{item.title}</h1>
+          <div className="work-meta">
             {item.rj_code && (
-              <span className="badge badge-accent text-sm font-mono">{item.rj_code}</span>
-            )}
-            {dlsiteUrl && (
               <a
-                href={dlsiteUrl}
+                className="chip chip-rj"
+                href={dlsiteUrl || '#'}
                 target="_blank"
                 rel="noreferrer"
-                className="text-xs text-accent hover:underline flex items-center gap-1"
               >
-                DLsite <ExternalLink size={12} />
+                {item.rj_code}
               </a>
             )}
-          </div>
-
-          <h1 className="text-2xl font-bold tracking-tight text-white">{item.title}</h1>
-          {item.original_title && (
-            <div className="text-sm text-fg-dim font-mono">{item.original_title}</div>
-          )}
-
-          {/* Creators */}
-          <div className="flex flex-wrap items-center gap-2 text-sm pt-1">
-            <span className="text-fg-faint">创作者:</span>
-            {item.creators && item.creators.length > 0 ? (
+            {item.creators &&
               item.creators.map((c) => (
-                <span key={c.creator_id} className="creator-pill">
+                <span key={c.creator_id} className={`creator-tag creator-tag-${c.kind}`}>
                   {c.name}
-                  <span className="text-xs text-fg-faint ml-1">
-                    ({c.kind === 'voice_actor' ? '声优' : '社团'})
-                  </span>
-                </span>
-              ))
-            ) : (
-              <span className="text-fg-dim">暂无</span>
-            )}
-          </div>
-
-          {/* Tags */}
-          {item.tags && item.tags.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 pt-1">
-              {item.tags.map((t) => (
-                <span key={t} className="tag-chip">
-                  {t}
                 </span>
               ))}
-            </div>
-          )}
-
-          {/* Stats metrics */}
-          <div className="flex items-center gap-6 text-sm text-fg-dim pt-2 border-t border-line">
-            <span className="flex items-center gap-1.5">
-              <Layers size={16} /> 共 {tracks.length} 音轨
-            </span>
-            <span className="flex items-center gap-1.5">
-              <Clock size={16} /> 总时长: {overview.total_duration_label}
-            </span>
-            <span>已完成字幕: {overview.playable_count}</span>
+            <span className="chip chip-tracks">{tracks.length} 音轨</span>
           </div>
 
-          {/* Action buttons */}
-          <div className="flex flex-wrap items-center gap-3 pt-3">
-            {overview.first_playable_track_id && (
+          <div className="status-summary">
+            <h3 className="dash-h2">音轨状态</h3>
+            <div className="status-bars">
+              <div className="status-bar-row sc-playable">
+                <span className="status-label"><span className="status-dot"></span>已完成字幕</span>
+                <div className="status-bar-track">
+                  <div
+                    className="status-bar-fill"
+                    style={{ width: `${tracks.length ? (overview.playable_count / tracks.length) * 100 : 0}%` }}
+                  />
+                </div>
+                <span className="status-count">{overview.playable_count}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="work-hero-actions">
+          {overview.first_playable_track_id && (
+            <button
+              type="button"
+              className="small work-action-button work-action-primary work-action-play"
+              onClick={() => {
+                const track = tracks.find((t) => t.track_id === overview.first_playable_track_id)
+                if (track) playTrack(item, track)
+              }}
+            >
+              ▶ 开始播放
+            </button>
+          )}
+          <button
+            type="button"
+            className="small work-action-button work-action-settings"
+            onClick={() => {
+              setProcessTrackId(null)
+              setProcessScope('incomplete')
+              setProcessModalOpen(true)
+            }}
+          >
+            处理未完成音轨
+          </button>
+          <button
+            type="button"
+            className="small work-action-button work-edit-button work-action-edit"
+            onClick={handleOpenEdit}
+          >
+            编辑作品
+          </button>
+          <button
+            type="button"
+            className="small work-action-button"
+            onClick={handleReplaceCover}
+          >
+            更换封面
+          </button>
+          <button
+            type="button"
+            className="small work-action-button danger"
+            onClick={handleDeleteItem}
+          >
+            删除作品
+          </button>
+        </div>
+      </section>
+
+      <section className="item-overview work-overview-below">
+        <h2 className="dash-h2">概览</h2>
+        <div className="stats-grid">
+          <div className="stat-card">
+            <span className="stat-num">{overview.track_count}</span>
+            <span className="stat-label">音轨</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-num">{overview.total_duration_label}</span>
+            <span className="stat-label">总时长</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-num">{(overview.total_size / 1048576).toFixed(1)} MB</span>
+            <span className="stat-label">总大小</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-num">{overview.playable_count}</span>
+            <span className="stat-label">可播放</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-num">{overview.processing_count}</span>
+            <span className="stat-label">处理中</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-num small">{overview.failed_count}</span>
+            <span className="stat-label">失败</span>
+          </div>
+        </div>
+      </section>
+
+      <section style={{ marginTop: 24 }}>
+        <h2 className="dash-h2" style={{ marginBottom: 12 }}>音轨列表 ({tracks.length})</h2>
+        <div className="tracks-list" style={{ display: 'grid', gap: 8 }}>
+          {tracks.map((track) => (
+            <article key={track.track_id} className="track-row" data-track-id={track.track_id}>
+              <span className={`status-badge status-${track.status}`}>{track.status}</span>
+              <span className="track-duration">{track.duration_label}</span>
+              <span className="track-size">{(track.size / 1048576).toFixed(1)} MB</span>
+              <span className="track-subs">
+                {track.has_source_sub ? <span className="chip sub-ok">源语 ✓</span> : <span className="chip sub-none">源语 –</span>}
+                {track.has_target_sub ? <span className="chip sub-ok">译 ✓</span> : <span className="chip sub-none">译 –</span>}
+              </span>
+              <span style={{ flex: 1, minWidth: 0, fontWeight: 600 }} className="truncate">
+                {track.title}
+              </span>
               <button
                 type="button"
-                onClick={() => {
-                  const track = tracks.find((t) => t.track_id === overview.first_playable_track_id)
-                  if (track) playTrack(item, track)
-                }}
-                className="btn btn-primary flex items-center gap-2"
+                className="menu-action"
+                onClick={() => playTrack(item, track)}
               >
-                <Play size={18} />
-                播放第一轨
+                ▶ 就地播放
               </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => {
-                setProcessTrackId(null)
-                setProcessScope('incomplete')
-                setProcessModalOpen(true)
-              }}
-              className="btn btn-secondary flex items-center gap-2"
-            >
-              <Sparkles size={16} className="text-accent" />
-              生成字幕任务
-            </button>
-
-            <button
-              type="button"
-              onClick={handleOpenEdit}
-              className="btn btn-secondary flex items-center gap-1.5"
-            >
-              <Edit size={16} />
-              编辑信息
-            </button>
-
-            <button
-              type="button"
-              onClick={handleDeleteItem}
-              className="btn btn-danger flex items-center gap-1.5 ml-auto"
-            >
-              <Trash2 size={16} />
-              删除作品
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Tracks List Table */}
-      <div className="bg-panel rounded-xl border border-line overflow-hidden">
-        <div className="p-4 border-b border-line flex justify-between items-center">
-          <h2 className="text-base font-semibold">音轨列表 ({tracks.length})</h2>
-        </div>
-
-        <div className="divide-y divide-line">
-          {tracks.map((track, idx) => (
-            <div
-              key={track.track_id}
-              className="p-3.5 hover:bg-panel-2 transition flex items-center justify-between gap-4 group"
-            >
-              <div className="flex items-center gap-3 flex-1 min-w-0">
-                <span className="text-sm font-mono text-fg-faint w-6 text-right flex-none">
-                  {idx + 1}
-                </span>
-
-                {renamingTrackId === track.track_id ? (
-                  <div className="flex items-center gap-2 flex-1">
-                    <input
-                      type="text"
-                      value={newTrackTitle}
-                      onChange={(e) => setNewTrackTitle(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleSaveTrackRename(track.track_id)
-                        if (e.key === 'Escape') setRenamingTrackId(null)
-                      }}
-                      autoFocus
-                      className="input-text text-sm py-1"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => handleSaveTrackRename(track.track_id)}
-                      className="p-1 hover:text-green-400"
-                    >
-                      <Check size={16} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRenamingTrackId(null)}
-                      className="p-1 hover:text-red-400"
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm truncate text-white">
-                        {track.title}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRenamingTrackId(track.track_id)
-                          setNewTrackTitle(track.title)
-                        }}
-                        className="opacity-0 group-hover:opacity-100 p-0.5 text-fg-dim hover:text-white"
-                        title="重命名"
-                      >
-                        <Edit size={12} />
-                      </button>
-                    </div>
-                    <div className="text-xs text-fg-dim flex items-center gap-3 mt-0.5">
-                      <span>{track.duration_label}</span>
-                      {track.has_target_sub && track.has_source_sub && (
-                        <span className="text-green-400">双语字幕就绪</span>
-                      )}
-                      {track.has_target_sub && !track.has_source_sub && (
-                        <span className="text-blue-400">仅中文字幕</span>
-                      )}
-                      {track.has_source_sub && !track.has_target_sub && (
-                        <span className="text-yellow-400">仅日文字幕</span>
-                      )}
-                      {!track.has_source_sub && !track.has_target_sub && (
-                        <span className="text-fg-faint">未生成字幕</span>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2 flex-none">
-                {track.has_media && (
-                  <button
-                    type="button"
-                    onClick={() => playTrack(item, track)}
-                    className="btn btn-secondary btn-sm flex items-center gap-1.5"
-                  >
-                    <Play size={14} /> 播放
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProcessTrackId(track.track_id)
-                    setProcessModalOpen(true)
-                  }}
-                  className="btn btn-secondary btn-sm flex items-center gap-1"
-                  title="为该音轨生成或重跑字幕"
+              <Link to={`/tracks/${track.track_id}/play`} className="menu-action">
+                打开播放页
+              </Link>
+              <button
+                type="button"
+                className="menu-action"
+                onClick={() => {
+                  setProcessTrackId(track.track_id)
+                  setProcessModalOpen(true)
+                }}
+              >
+                处理…
+              </button>
+              {track.has_target_sub && (
+                <a
+                  href={`/api/tracks/${track.track_id}/subtitles/zh/download`}
+                  download
+                  className="menu-action"
                 >
-                  <Sparkles size={14} className="text-accent" /> 生成字幕
-                </button>
-
-                {track.has_target_sub && (
-                  <a
-                    href={`/api/tracks/${track.track_id}/subtitles/zh/download`}
-                    download
-                    className="btn btn-secondary btn-sm p-1.5 text-fg-dim hover:text-white"
-                    title="下载中文字幕 (SRT)"
-                  >
-                    <Download size={15} />
-                  </a>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => handleDeleteTrack(track.track_id)}
-                  className="btn btn-danger btn-sm p-1.5"
-                  title="删除该音轨"
-                >
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            </div>
+                  下载字幕
+                </a>
+              )}
+              <button
+                type="button"
+                className="menu-action danger"
+                onClick={() => handleDeleteTrack(track.track_id)}
+              >
+                删除音轨
+              </button>
+            </article>
           ))}
         </div>
-      </div>
+      </section>
 
       {/* Edit Item Modal */}
       {editModalOpen && (
@@ -659,6 +563,6 @@ export function ItemDetailPage() {
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }

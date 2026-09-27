@@ -95,70 +95,41 @@ export function LibraryPage() {
     }
   }
 
+  const formatSize = (bytes: number) => {
+    if (!bytes) return '0 MB'
+    return `${(bytes / 1048576).toFixed(1)} MB`
+  }
+
   return (
-    <div className="page-container space-y-6">
-      {/* Header & Controls */}
-      <div className="page-header flex flex-wrap justify-between items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">作品库</h1>
-          <p className="text-sm text-fg-dim mt-0.5">
-            共 {total} 部作品 · 本地 ASMR 与同人音声媒体库
-          </p>
-        </div>
+    <>
+      <section className="works-head">
+        <h1>作品库</h1>
+        <div className="library-toolbar">
+          <input
+            id="work-search"
+            className="works-search"
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                setPage(1)
+                fetchItems()
+              }
+            }}
+            placeholder="搜索标题 / RJ 号…"
+            aria-label="搜索作品"
+          />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setImportSingleOpen(true)}
-            className="btn btn-secondary flex items-center gap-1.5"
-          >
-            <Plus size={16} />
-            导入音频
-          </button>
-          <button
-            type="button"
-            onClick={() => setImportFolderOpen(true)}
-            className="btn btn-secondary flex items-center gap-1.5"
-          >
-            <FolderPlus size={16} />
-            导入文件夹
-          </button>
-          <button
-            type="button"
-            onClick={() => setImportUrlOpen(true)}
-            className="btn btn-primary flex items-center gap-1.5"
-          >
-            <Globe size={16} />
-            从链接导入
-          </button>
-        </div>
-      </div>
-
-      {/* Search & Filter Bar */}
-      <div className="bg-panel p-4 rounded-xl border border-line space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <form onSubmit={handleSearchSubmit} className="flex-1 min-w-[240px] relative">
-            <Search
-              size={18}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-dim"
-            />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜索标题、RJ号、声优..."
-              className="input-text pl-9 w-full"
-            />
-          </form>
-
-          <div className="flex items-center gap-2">
+          {allCreators.length > 0 && (
             <select
               value={selectedCreatorId}
               onChange={(e) => {
                 setSelectedCreatorId(e.target.value)
                 setPage(1)
               }}
-              className="input-text w-auto text-sm"
+              className="custom-select-trigger"
+              style={{ width: 'auto', padding: '6px 12px' }}
             >
               <option value="">全部创作者</option>
               {allCreators.map((c) => (
@@ -167,125 +138,91 @@ export function LibraryPage() {
                 </option>
               ))}
             </select>
+          )}
 
-            <select
-              value={sortBy}
-              onChange={(e) => {
-                setSortBy(e.target.value)
-                setPage(1)
-              }}
-              className="input-text w-auto text-sm"
-            >
-              <option value="created_desc">最新添加</option>
-              <option value="created_asc">最早添加</option>
-              <option value="title_asc">标题升序</option>
-              <option value="title_desc">标题降序</option>
-              <option value="duration_desc">时长最长</option>
-              <option value="duration_asc">时长最短</option>
-            </select>
-          </div>
-        </div>
-
-        {allTags.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs">
-            <span className="text-fg-faint flex items-center gap-1">
-              <Tag size={12} /> 标签:
-            </span>
+          <div className="works-actions">
             <button
               type="button"
-              onClick={() => {
-                setSelectedTag('')
-                setPage(1)
-              }}
-              className={`tag-chip ${!selectedTag ? 'active' : ''}`}
+              onClick={() => setImportSingleOpen(true)}
+              id="pick-audio"
             >
-              全部
-            </button>
-            {allTags.slice(0, 15).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => {
-                  setSelectedTag(selectedTag === t ? '' : t)
-                  setPage(1)
-                }}
-                className={`tag-chip ${selectedTag === t ? 'active' : ''}`}
+              <svg
+                className="btn-ic"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                aria-hidden="true"
               >
-                {t}
-              </button>
-            ))}
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              导入
+            </button>
+            <button
+              type="button"
+              onClick={() => setImportFolderOpen(true)}
+              className="ghost small"
+              title="导入 RJ 文件夹"
+            >
+              文件夹
+            </button>
+            <button
+              type="button"
+              onClick={() => setImportUrlOpen(true)}
+              className="ghost small"
+              title="从链接下载导入"
+            >
+              链接
+            </button>
           </div>
-        )}
-      </div>
+        </div>
+      </section>
 
-      {/* Work Cards Grid */}
       {loading ? (
-        <div className="text-center py-20 text-fg-dim text-sm">正在加载作品库...</div>
+        <div className="empty" style={{ padding: '60px 0', textAlign: 'center' }}>
+          <p>正在加载作品库…</p>
+        </div>
       ) : items.length === 0 ? (
-        <div className="empty-state">
-          <p className="text-fg-dim text-base">暂无符合条件的作品</p>
-          <p className="text-fg-faint text-xs mt-1">可以通过上方按钮导入音频或扫描本地作品目录</p>
+        <div className="empty" style={{ padding: '60px 0', textAlign: 'center' }}>
+          <p>暂无符合条件的作品</p>
+          <small style={{ color: 'var(--fg-faint)', marginTop: 6, display: 'block' }}>
+            可以通过上方按钮导入音频或扫描本地作品目录
+          </small>
         </div>
       ) : (
         <div className="works-grid">
           {items.map((item) => (
-            <Link
-              key={item.item_id}
-              to={`/items/${item.item_id}`}
-              className="work-card group"
-            >
-              <div className="work-cover-wrapper">
+            <Link key={item.item_id} to={`/items/${item.item_id}`} className="work-card">
+              <div className={`work-cover ${item.kind === 'rj_work' ? 'cover-rj' : 'cover-stream'}`}>
                 <img
                   src={item.cover_url}
-                  alt={item.title}
+                  alt=""
                   loading="lazy"
                   className="work-cover-img"
                   onError={(e) => {
                     ;(e.target as HTMLElement).style.opacity = '0.3'
                   }}
                 />
-                {item.rj_code && (
-                  <span className="rj-badge">{item.rj_code}</span>
-                )}
-                <button
-                  type="button"
-                  onClick={(e) => handlePlayFirstTrack(e, item)}
-                  className="card-play-overlay-btn"
-                  title="立即播放"
-                >
-                  <Play size={20} className="ml-0.5" />
-                </button>
-                {item.subtitle_status === 'bilingual' && (
-                  <span className="sub-status-pill pill-bilingual">双语</span>
-                )}
-                {item.subtitle_status === 'zh' && (
-                  <span className="sub-status-pill pill-zh">中字</span>
-                )}
-                {item.subtitle_status === 'jp' && (
-                  <span className="sub-status-pill pill-jp">日字</span>
-                )}
+                <span className="work-kind">
+                  {item.rj_code || (item.kind === 'rj_work' ? 'RJ' : 'LIVE')}
+                </span>
+                <span className="work-size">{formatSize(item.total_size)}</span>
               </div>
 
-              <div className="work-meta">
-                <h3 className="work-title" title={item.title}>
-                  {item.title}
-                </h3>
-
-                <div className="work-creators truncate">
-                  {item.creators && item.creators.length > 0 ? (
-                    item.creators.map((c) => c.name).join(' / ')
-                  ) : (
-                    <span className="text-fg-faint">未知声优</span>
-                  )}
-                </div>
-
-                <div className="work-stats-row">
-                  <span className="flex items-center gap-1">
-                    <Layers size={12} /> {item.track_count} 音轨
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Clock size={12} /> {item.total_duration_label}
-                  </span>
+              <div className="work-body">
+                <h2>{item.title}</h2>
+                <div className="work-meta">
+                  {item.creators &&
+                    item.creators.slice(0, 2).map((c) => (
+                      <span key={c.creator_id} className={`creator-tag creator-tag-${c.kind}`}>
+                        {c.name}
+                      </span>
+                    ))}
+                  {item.subtitle_status === 'bilingual' && <span className="chip sub-ok">双语 ✓</span>}
+                  {item.subtitle_status === 'zh' && <span className="chip sub-ok">中字 ✓</span>}
+                  {item.subtitle_status === 'jp' && <span className="chip sub-ok">日字 ✓</span>}
+                  {item.subtitle_status === 'none' && <span className="chip sub-none">未生成</span>}
                 </div>
               </div>
             </Link>
@@ -295,27 +232,39 @@ export function LibraryPage() {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="pagination-bar">
-          <button
-            type="button"
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page <= 1}
-            className="page-btn"
-          >
-            <ChevronLeft size={16} /> 上一页
-          </button>
-          <span className="page-indicator text-sm text-fg-dim">
-            第 {page} / {totalPages} 页
+        <nav className="library-pagination">
+          <span className="pagination-summary">
+            共 {total} 部作品 · 第 {page} / {totalPages} 页
           </span>
-          <button
-            type="button"
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page >= totalPages}
-            className="page-btn"
-          >
-            下一页 <ChevronRight size={16} />
-          </button>
-        </div>
+          <div className="pagination-controls">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="pagination-nav"
+            >
+              上一页
+            </button>
+            {Array.from({ length: totalPages }).map((_, i) => (
+              <button
+                key={i + 1}
+                type="button"
+                className={`pagination-page ${page === i + 1 ? 'active' : ''}`}
+                onClick={() => setPage(i + 1)}
+              >
+                {i + 1}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="pagination-nav"
+            >
+              下一页
+            </button>
+          </div>
+        </nav>
       )}
 
       {/* Modals */}
@@ -336,6 +285,6 @@ export function LibraryPage() {
         onSuccess={fetchItems}
         creators={allCreators}
       />
-    </div>
+    </>
   )
 }

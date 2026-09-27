@@ -27,14 +27,22 @@
 <div class="shell" hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">
   <aside class="sidebar">
     <a class="brand" href="/"><img class="brand-icon" src="/static/subforge-icon.svg" alt=""><span class="brand-text">SubForge</span></a>
+    {% set current_path = request.url.path if request else '/' %}
+    {% set active_nav = '/profiles' if current_path == '/profiles' or current_path.startswith('/profiles/')
+                   else '/creators' if current_path == '/creators' or current_path.startswith('/creators/')
+                   else '/settings' if current_path == '/settings' or current_path.startswith('/settings/')
+                   else '/stats' if current_path == '/stats' or current_path.startswith('/stats/')
+                   else '/downloads' if current_path == '/downloads' or current_path.startswith('/downloads/')
+                   else '/about' if current_path == '/about' or current_path.startswith('/about/')
+                   else '/' %}
     <nav class="side-nav">
-      <a href="/" data-nav="/" data-label="作品库"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>作品库</a>
-      <a href="/profiles" data-nav="/profiles" data-label="翻译配置"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><path d="M2 12h20"/></svg>翻译配置</a>
-      <a href="/creators" data-nav="/creators" data-label="创作者"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>创作者</a>
-      <a href="/settings" data-nav="/settings" data-label="设置"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>设置</a>
-      <a href="/stats" data-nav="/stats" data-label="统计"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="16"/></svg>统计</a>
-      <a href="/downloads" data-nav="/downloads" data-label="任务中心"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>任务中心</a>
-      <a href="/about" data-nav="/about" data-label="关于"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>关于</a>
+      <a href="/" data-nav="/" data-label="作品库" class="{{ 'active' if active_nav == '/' else '' }}"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>作品库</a>
+      <a href="/profiles" data-nav="/profiles" data-label="翻译配置" class="{{ 'active' if active_nav == '/profiles' else '' }}"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><path d="M2 12h20"/></svg>翻译配置</a>
+      <a href="/creators" data-nav="/creators" data-label="创作者" class="{{ 'active' if active_nav == '/creators' else '' }}"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>创作者</a>
+      <a href="/settings" data-nav="/settings" data-label="设置" class="{{ 'active' if active_nav == '/settings' else '' }}"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>设置</a>
+      <a href="/stats" data-nav="/stats" data-label="统计" class="{{ 'active' if active_nav == '/stats' else '' }}"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="16"/></svg>统计</a>
+      <a href="/downloads" data-nav="/downloads" data-label="任务中心" class="{{ 'active' if active_nav == '/downloads' else '' }}"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>任务中心</a>
+      <a href="/about" data-nav="/about" data-label="关于" class="{{ 'active' if active_nav == '/about' else '' }}"><svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>关于</a>
     </nav>
     <div class="appearance-controls">
       <div class="accent-picker" data-accent-picker aria-label="强调色">
@@ -65,17 +73,38 @@
 {% block scripts %}{% endblock %}
 <script>
 /* 侧边栏高亮：匹配当前 location.pathname */
-const navLinks = [...document.querySelectorAll('.side-nav a')];
 function highlightNav(path) {
-  if (!path) path = window.location.pathname;
+  if (typeof path !== 'string' || !path) {
+    path = window.location.pathname;
+  } else {
+    try {
+      path = new URL(path, window.location.origin).pathname;
+    } catch (_) {
+      path = path.split('?')[0].split('#')[0];
+    }
+  }
+  const navLinks = [...document.querySelectorAll('.side-nav a')];
+  if (!navLinks.length) return;
   const exact = navLinks.find(a => path === a.dataset.nav || (a.dataset.nav !== '/' && path.startsWith(a.dataset.nav + '/')));
   const fallback = navLinks.find(a => a.dataset.nav === '/');
   const target = exact || fallback;
   for (const a of navLinks) a.classList.toggle('active', a === target);
 }
 highlightNav();
-window.addEventListener('htmx:afterOnLoad', () => highlightNav());
-window.addEventListener('htmx:pushedIntoHistory', () => highlightNav());
+
+/* 侧边栏点击即时高亮反馈 */
+document.addEventListener('click', (e) => {
+  const link = e.target.closest('.side-nav a');
+  if (!link) return;
+  const navLinks = document.querySelectorAll('.side-nav a');
+  for (const a of navLinks) a.classList.toggle('active', a === link);
+});
+
+/* HTMX 导航与历史事件同步（在 document 与 window 级别均做保障） */
+const syncNav = (e) => highlightNav(e?.detail?.path);
+document.addEventListener('htmx:afterOnLoad', () => highlightNav());
+document.addEventListener('htmx:pushedIntoHistory', syncNav);
+document.addEventListener('htmx:replacedInHistory', syncNav);
 window.addEventListener('popstate', () => highlightNav());
 window.addEventListener('htmx:historyRestore', () => {
   highlightNav();
@@ -86,7 +115,9 @@ window.addEventListener('htmx:historyRestore', () => {
     window.initTabs(document.body);
   }
 });
+document.addEventListener('htmx:historyRestore', (e) => highlightNav(e?.detail?.path));
 document.addEventListener('htmx:afterSwap', (e) => {
+  highlightNav();
   if (window.Alpine && e.detail.target) {
     window.Alpine.initTree(e.detail.target);
   }
@@ -97,6 +128,7 @@ document.addEventListener('htmx:afterSwap', (e) => {
     window.SubForgeApp.initWidgets(e.detail.target);
   }
 });
+document.addEventListener('htmx:afterSettle', () => highlightNav());
 </script>
 </body>
 </html>

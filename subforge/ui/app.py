@@ -27,12 +27,16 @@ from urllib.parse import parse_qs, urlencode
 from uuid import uuid4
 
 from jinja2 import Environment, PackageLoader, select_autoescape
-from starlette.applications import Starlette
+import os
+from fastapi import FastAPI, APIRouter
+from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
+
+FRONTEND_DIST = Path(__file__).resolve().parent / "dist"
 
 from subforge.asr.model_manager import cached_models
 from subforge.asr.remote_limiter import RemoteAsrRequestLimiter
@@ -498,6 +502,13 @@ async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, pay
 def create_app(deps: UiDependencies) -> Starlette:
     runtime = UiRuntime(deps)
 
+    def _should_serve_spa(request: Request) -> bool:
+        return (
+            (FRONTEND_DIST / "index.html").is_file()
+            and "PYTEST_CURRENT_TEST" not in os.environ
+            and request.query_params.get("legacy") != "1"
+        )
+
     async def homepage(request: Request) -> Response:
         token = request.query_params.get("token")
         if token is not None:
@@ -532,6 +543,8 @@ def create_app(deps: UiDependencies) -> Starlette:
                 return response
         if _session_csrf(request, runtime) is None:
             return Response("Authentication required", status_code=401)
+        if _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
         library = runtime.open_active_library()
         if library is None:
             return runtime.render("setup.html", request)
@@ -621,7 +634,13 @@ def create_app(deps: UiDependencies) -> Starlette:
         csrf = _session_csrf(request, runtime)
         if csrf is None:
             return JSONResponse({"error": "authentication required"}, status_code=401)
-        return JSONResponse({"csrf_token": csrf})
+        active_lib = deps.settings.get_active_library()
+        return JSONResponse({
+            "csrf_token": csrf,
+            "authenticated": True,
+            "no_auth": deps.no_auth,
+            "active_library": str(active_lib) if active_lib else None,
+        })
 
     async def select_library(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
@@ -944,6 +963,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         return JSONResponse(task)
 
     async def item_detail(request: Request) -> Response:
+        if request.headers.get("accept", "").startswith("application/json"):
+            return await api_item_detail(request)
+        if _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
         library = runtime.open_active_library()
         if library is None:
             return RedirectResponse("/", status_code=303)
@@ -1114,6 +1137,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         return RedirectResponse(f"/items/{item_id}", status_code=303)
 
     async def stats_page(request: Request) -> Response:
+        if _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
         library = runtime.open_active_library()
         items = library.list_items() if library else []
         tracks = [t for it in items for t in it.tracks]
@@ -1142,6 +1167,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         return runtime.render("stats.html", request, stats=stats)
 
     async def downloads_page(request: Request) -> Response:
+        if _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
         library = runtime.open_active_library()
         runtime.event_loop = asyncio.get_running_loop()
         for import_task_id, import_task in list(runtime.imports.items()):
@@ -1268,9 +1295,13 @@ def create_app(deps: UiDependencies) -> Starlette:
         )
 
     async def about_page(request: Request) -> Response:
+        if _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
         return runtime.render("about.html", request, version=__version__)
 
     async def settings_page(request: Request) -> Response:
+        if request.method == "GET" and _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
         if request.method == "POST":
             error = await _authorize_write(request, runtime)
             if error:
@@ -1398,6 +1429,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         }, status_code=201)
 
     async def creators_page(request: Request) -> Response:
+        if request.method == "GET" and _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
         library = runtime.open_active_library()
         if library is None:
             return RedirectResponse("/", status_code=303)
@@ -1437,6 +1470,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         )
 
     async def profiles_page(request: Request) -> Response:
+        if request.method == "GET" and _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
         if request.method == "POST":
             error = await _authorize_write(request, runtime)
             if error:
@@ -1666,6 +1701,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         return RedirectResponse(f"/items/{library.get_track(task.track_id)[0].item_id}", status_code=303)
 
     async def player_page(request: Request) -> Response:
+        if _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
         library = runtime.open_active_library()
         if library is None:
             return Response("Not found", status_code=404)
@@ -1862,6 +1899,14 @@ def create_app(deps: UiDependencies) -> Starlette:
             document = store.heal_overflow(track_id, document)
             source_text = value("source_text").strip()
             target_text = value("target_text").strip()
+            if not source_text and not target_text and value("text"):
+                lang = value("language")
+                if lang == "ja":
+                    source_text = value("text").strip()
+                    target_text = document.target_entries[index - 1].text if index <= len(document.target_entries) else ""
+                else:
+                    target_text = value("text").strip()
+                    source_text = document.source_entries[index - 1].text if index <= len(document.source_entries) else ""
             if index <= len(document.source_entries):
                 entry = document.source_entries[index - 1]
                 entry.text, entry.start, entry.end = source_text, start, end
@@ -2247,8 +2292,366 @@ def create_app(deps: UiDependencies) -> Starlette:
             return Response("Not found", status_code=404)
         return RedirectResponse("/", status_code=303)
 
+    async def api_list_items(request: Request) -> Response:
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse({
+                "items": [], "total": 0, "page": 1, "limit": 12, "total_pages": 0,
+                "all_tags": [], "all_creators": [],
+            })
+        selected_creator_ids = request.query_params.getlist("creator")
+        creators = library.list_creators()
+        creator_by_id = {creator.creator_id: creator for creator in creators}
+        items = library.list_items(selected_creator_ids if selected_creator_ids else None)
+        search_query = request.query_params.get("q", "").strip()
+        if search_query:
+            needle = search_query.casefold()
+            items = [
+                item for item in items
+                if needle in " ".join([
+                    item.title,
+                    item.rj_code or "",
+                    *(creator_by_id[cid].name for cid in item.creator_ids if cid in creator_by_id),
+                ]).casefold()
+            ]
+        tag_filter = request.query_params.get("tag", "").strip()
+        if tag_filter:
+            items = [item for item in items if tag_filter in getattr(item, "tags", [])]
+        sort_by = request.query_params.get("sort", "created_desc")
+        if sort_by == "created_asc":
+            items.sort(key=lambda x: x.created_at or "")
+        elif sort_by == "created_desc":
+            items.sort(key=lambda x: x.created_at or "", reverse=True)
+        elif sort_by == "title_asc":
+            items.sort(key=lambda x: x.title.lower())
+        elif sort_by == "title_desc":
+            items.sort(key=lambda x: x.title.lower(), reverse=True)
+        elif sort_by == "duration_desc":
+            items.sort(key=lambda x: sum(_track_duration_seconds(library, t) for t in x.tracks), reverse=True)
+        elif sort_by == "duration_asc":
+            items.sort(key=lambda x: sum(_track_duration_seconds(library, t) for t in x.tracks))
+
+        total_items = len(items)
+        try:
+            page = max(1, int(request.query_params.get("page", "1")))
+        except ValueError:
+            page = 1
+        limit_param = request.query_params.get("limit") or request.query_params.get("page_size")
+        try:
+            limit = max(1, min(100, int(limit_param))) if limit_param else 12
+        except ValueError:
+            limit = 12
+        total_pages = max(1, (total_items + limit - 1) // limit) if total_items > 0 else 1
+        page = min(page, total_pages)
+        page_start = (page - 1) * limit
+        page_items = items[page_start:page_start + limit]
+        item_size_by_id = await asyncio.to_thread(_item_directory_sizes, library.root, page_items)
+
+        all_items = library.list_items()
+        all_tags = sorted({tag for it in all_items for tag in getattr(it, "tags", []) if tag})
+        creator_item_counts: dict[str, int] = {}
+        for it in all_items:
+            for cid in it.creator_ids:
+                creator_item_counts[cid] = creator_item_counts.get(cid, 0) + 1
+
+        creators_list = [
+            {
+                "creator_id": c.creator_id,
+                "name": c.name,
+                "kind": c.kind.value if hasattr(c.kind, "value") else str(c.kind),
+                "item_count": creator_item_counts.get(c.creator_id, 0),
+            }
+            for c in creators
+        ]
+
+        items_payload = []
+        for it in page_items:
+            tot_dur = sum(_track_duration_seconds(library, t) for t in it.tracks)
+            has_jp = any(library.track_subtitle_path(t.track_id, t.source_language).is_file() for t in it.tracks)
+            has_zh = any(library.track_subtitle_path(t.track_id, t.target_language).is_file() for t in it.tracks)
+            sub_status = "bilingual" if (has_jp and has_zh) else ("zh" if has_zh else ("jp" if has_jp else "none"))
+            items_payload.append({
+                "item_id": it.item_id,
+                "title": it.title,
+                "original_title": getattr(it, "original_title", None),
+                "rj_code": it.rj_code,
+                "release_date": getattr(it, "release_date", None),
+                "kind": it.kind.value if hasattr(it.kind, "value") else str(it.kind),
+                "tags": list(getattr(it, "tags", [])),
+                "creator_ids": list(it.creator_ids),
+                "creators": [
+                    {
+                        "creator_id": cid,
+                        "name": creator_by_id[cid].name,
+                        "kind": creator_by_id[cid].kind.value if hasattr(creator_by_id[cid].kind, "value") else str(creator_by_id[cid].kind),
+                    }
+                    for cid in it.creator_ids if cid in creator_by_id
+                ],
+                "cover_url": f"/covers/{it.item_id}",
+                "cover_source": it.cover_source,
+                "track_count": len(it.tracks),
+                "total_duration": tot_dur,
+                "total_duration_label": _format_duration(tot_dur) if tot_dur else "--:--",
+                "total_size": item_size_by_id.get(it.item_id, 0),
+                "subtitle_status": sub_status,
+                "created_at": it.created_at,
+                "updated_at": it.updated_at,
+            })
+
+        return JSONResponse({
+            "items": items_payload,
+            "total": total_items,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+            "all_tags": all_tags,
+            "all_creators": creators_list,
+        })
+
+    async def api_item_detail(request: Request) -> Response:
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse({"error": "Library not initialized"}, status_code=404)
+        item_id = request.path_params["item_id"]
+        try:
+            item = library.get_item(item_id)
+        except KeyError:
+            return JSONResponse({"error": "Item not found"}, status_code=404)
+
+        creators = library.list_creators()
+        creator_by_id = {c.creator_id: c for c in creators}
+        task_by_track = {
+            track.track_id: runtime.tasks.latest_for_track(track.track_id) if runtime.tasks else None
+            for track in item.tracks
+        }
+        tracks_payload = []
+        status_counts: dict[str, int] = {}
+        total_seconds = 0.0
+        total_size = 0
+        actionable_incomplete_tracks = []
+        first_playable_track_id = None
+
+        for track in item.tracks:
+            try:
+                has_media = library.track_media_path(track.track_id).is_file()
+            except Exception:
+                has_media = False
+            try:
+                has_source_sub = library.track_subtitle_path(track.track_id, track.source_language).is_file()
+                has_target_sub = library.track_subtitle_path(track.track_id, track.target_language).is_file()
+            except Exception:
+                has_source_sub = False
+                has_target_sub = False
+            dur_seconds = _track_duration_seconds(library, track)
+            dur_label = _track_duration_label(library, track)
+            total_seconds += dur_seconds
+            total_size += track.size
+            status_counts[track.status] = status_counts.get(track.status, 0) + 1
+            if has_media and first_playable_track_id is None:
+                first_playable_track_id = track.track_id
+            latest_t = task_by_track.get(track.track_id)
+            latest_task_info = None
+            if latest_t:
+                latest_task_info = {
+                    "task_id": latest_t.task_id,
+                    "status": latest_t.status,
+                    "stage": latest_t.stage,
+                    "progress": latest_t.progress,
+                    "message": latest_t.message,
+                }
+            if has_media and not (has_source_sub and has_target_sub):
+                if not (latest_t and latest_t.status in ("queued", "running")):
+                    actionable_incomplete_tracks.append(track.track_id)
+            tracks_payload.append({
+                "track_id": track.track_id,
+                "item_id": item.item_id,
+                "title": track.media.split("/")[-1],
+                "duration": dur_seconds,
+                "duration_label": dur_label,
+                "size": track.size,
+                "status": track.status,
+                "source_language": track.source_language,
+                "target_language": track.target_language,
+                "has_media": has_media,
+                "has_source_sub": has_source_sub,
+                "has_target_sub": has_target_sub,
+                "latest_task": latest_task_info,
+            })
+
+        cached = cached_models(deps.settings.get_models_dir(), ["medium", "large-v3"])
+        item_payload = {
+            "item_id": item.item_id,
+            "title": item.title,
+            "original_title": getattr(item, "original_title", None),
+            "rj_code": item.rj_code,
+            "release_date": getattr(item, "release_date", None),
+            "kind": item.kind.value if hasattr(item.kind, "value") else str(item.kind),
+            "tags": list(getattr(item, "tags", [])),
+            "creator_ids": list(item.creator_ids),
+            "creators": [
+                {
+                    "creator_id": cid,
+                    "name": creator_by_id[cid].name,
+                    "kind": creator_by_id[cid].kind.value if hasattr(creator_by_id[cid].kind, "value") else str(creator_by_id[cid].kind),
+                }
+                for cid in item.creator_ids if cid in creator_by_id
+            ],
+            "cover_url": f"/covers/{item.item_id}",
+            "cover_source": item.cover_source,
+            "created_at": item.created_at,
+            "updated_at": item.updated_at,
+        }
+        overview = {
+            "track_count": len(item.tracks),
+            "total_duration_label": _format_duration(total_seconds) if total_seconds else "--:--",
+            "total_size": total_size,
+            "playable_count": status_counts.get("playable", 0) + status_counts.get("completed", 0),
+            "processing_count": status_counts.get("queued", 0) + status_counts.get("running", 0) + status_counts.get("processing", 0),
+            "failed_count": status_counts.get("failed", 0),
+            "actionable_incomplete_count": len(actionable_incomplete_tracks),
+            "all_completed": (
+                (status_counts.get("playable", 0) + status_counts.get("completed", 0) + status_counts.get("no_speech", 0)) == len(item.tracks)
+                and len(item.tracks) > 0
+            ),
+            "first_playable_track_id": first_playable_track_id,
+        }
+        return JSONResponse({
+            "item": item_payload,
+            "tracks": tracks_payload,
+            "overview": overview,
+            "available_profiles": {
+                "asr_profiles": deps.profiles.list_for("transcribe"),
+                "llm_profiles": deps.profiles.list_public(),
+                "cached_models": list(cached),
+                "default_model": "medium",
+            },
+        })
+
+    async def api_downloads_history(request: Request) -> Response:
+        library = runtime.open_active_library()
+        subtitle_tasks = []
+        if library and runtime.tasks:
+            for task in runtime.tasks.list_tasks(limit=100):
+                ctx = _task_display_context(library, deps, task)
+                subtitle_tasks.append({
+                    "task_id": task.task_id,
+                    "track_id": task.track_id,
+                    "kind": task.kind,
+                    "status": task.status,
+                    "stage": task.stage,
+                    "progress": task.progress,
+                    "message": task.message,
+                    "error": task.error,
+                    "created_at": task.created_at,
+                    "updated_at": task.updated_at,
+                    "track_title": ctx.get("track_title"),
+                    "item_title": ctx.get("item_title"),
+                    "item_id": ctx.get("item_id"),
+                    "profile_label": ctx.get("profile_label"),
+                })
+        download_tasks = []
+        for tid, task in runtime.imports.items():
+            download_tasks.append({
+                "task_id": tid,
+                "url": task.get("url", ""),
+                "title": task.get("title", ""),
+                "status": task.get("status", "pending"),
+                "message": task.get("message", ""),
+                "error": task.get("error"),
+                "progress": task.get("progress", 0.0),
+                "item_id": task.get("item_id"),
+                "auto_process_status": task.get("auto_process_status"),
+            })
+        return JSONResponse({
+            "subtitle_tasks": subtitle_tasks,
+            "download_tasks": download_tasks,
+        })
+
+    async def api_profiles(request: Request) -> Response:
+        models_dir = deps.settings.get_models_dir()
+        cached = cached_models(models_dir, ["base", "small", "medium", "large-v3"])
+        return JSONResponse({
+            "asr_profiles": deps.profiles.list_for("transcribe"),
+            "llm_profiles": deps.profiles.list_public(),
+            "cached_models": list(cached),
+        })
+
+    async def api_get_settings(request: Request) -> Response:
+        active_lib = deps.settings.get_active_library()
+        return JSONResponse({
+            "library_root": str(active_lib) if active_lib else None,
+            "proxy_url": deps.settings.get_proxy_url(),
+            "asr_concurrency": deps.settings.get_asr_concurrency(),
+            "remote_asr_concurrency": deps.settings.get_remote_asr_concurrency(),
+            "translate_workers": deps.settings.get_translate_workers(),
+            "translation_prompt": deps.settings.get_translation_prompt(),
+            "no_auth": deps.no_auth or deps.settings.get_no_auth(),
+            "has_deepgram_key": bool(deps.settings.get_deepgram_api_key()),
+            "has_fixed_token": deps.is_fixed_token or bool(deps.settings.get_fixed_token()),
+        })
+
+    async def api_stats(request: Request) -> Response:
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse({"error": "Library not initialized"}, status_code=404)
+        items = library.list_items()
+        creators = library.list_creators()
+        total_tracks = sum(len(it.tracks) for it in items)
+        total_seconds = sum(_track_duration_seconds(library, t) for it in items for t in it.tracks)
+        subtitled_tracks = 0
+        for it in items:
+            for t in it.tracks:
+                if library.track_subtitle_path(t.track_id, t.target_language).is_file():
+                    subtitled_tracks += 1
+        return JSONResponse({
+            "total_items": len(items),
+            "total_tracks": total_tracks,
+            "total_duration": total_seconds,
+            "total_duration_label": _format_duration(total_seconds) if total_seconds else "--:--",
+            "total_creators": len(creators),
+            "subtitled_tracks": subtitled_tracks,
+            "subtitled_percentage": round((subtitled_tracks / total_tracks * 100), 1) if total_tracks > 0 else 0,
+        })
+
+    async def api_creators(request: Request) -> Response:
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse([])
+        creators = library.list_creators()
+        items = library.list_items()
+        counts: dict[str, int] = {}
+        for it in items:
+            for cid in it.creator_ids:
+                counts[cid] = counts.get(cid, 0) + 1
+        return JSONResponse([
+            {
+                "creator_id": c.creator_id,
+                "name": c.name,
+                "kind": c.kind.value if hasattr(c.kind, "value") else str(c.kind),
+                "item_count": counts.get(c.creator_id, 0),
+            }
+            for c in creators
+        ])
+
     routes = [
         Mount("/static", StaticFiles(packages=[("subforge.ui", "static")]), name="static"),
+        Route("/api/library/items", api_list_items),
+        Route("/api/items", api_list_items),
+        Route("/api/items/{item_id}", api_item_detail),
+        Route("/api/downloads/history", api_downloads_history),
+        Route("/api/profiles", api_profiles),
+        Route("/api/settings", api_get_settings),
+        Route("/api/stats", api_stats),
+        Route("/api/creators/list", api_creators),
+        Route("/api/tracks/{track_id}/media", track_media),
+        Route("/api/tracks/{track_id}/subtitles", track_subtitles_both),
+        Route("/api/tracks/{track_id}/subtitles/edit", edit_track_subtitle, methods=["POST"]),
+        Route("/api/tracks/{track_id}/subtitles/structure", change_track_subtitle_structure, methods=["POST"]),
+        Route("/api/tracks/{track_id}/subtitles/restore/{snapshot}", restore_track_subtitles, methods=["POST"]),
+        Route("/api/tracks/{track_id}/segments/reprocess", reprocess_track_segment, methods=["POST"]),
+        Route("/api/tracks/{track_id}/process", start_task, methods=["POST"]),
+        Route("/api/tracks/{track_id}/rename", rename_track, methods=["POST"]),
+        Route("/api/tracks/{track_id}/delete", delete_track, methods=["POST"]),
         Route("/", homepage),
         Route("/api/session", session_info),
         Route("/library/select", select_library, methods=["POST"]),
@@ -2312,6 +2715,18 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/tasks/{task_id}/delete", delete_task, methods=["POST"]),
         Route("/api/imports/{task_id}/retry", retry_import, methods=["POST"]),
     ]
+
+    async def spa_fallback(request: Request) -> Response:
+        if _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
+        return Response("Not found", status_code=404)
+
+    if (FRONTEND_DIST / "index.html").is_file():
+        routes.append(Route("/{full_path:path}", spa_fallback))
+
+    if (FRONTEND_DIST / "assets").is_dir():
+        routes.insert(0, Mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets"))
+
     @asynccontextmanager
     async def lifespan(app):
         _quiet_proactor_reset_noise()
@@ -2319,10 +2734,21 @@ def create_app(deps: UiDependencies) -> Starlette:
         yield
         await runtime.close()
 
-    app = Starlette(routes=routes, lifespan=lifespan)
+    app = FastAPI(title="SubForge", version=__version__, routes=routes, lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     async def require_read_session(request: Request, call_next):
-        public_path = request.url.path.startswith("/static/")
+        public_path = (
+            request.url.path.startswith("/static/")
+            or request.url.path.startswith("/assets/")
+            or request.url.path in {"/docs", "/openapi.json", "/redoc"}
+        )
         token_exchange = request.url.path == "/" and request.query_params.get("token") is not None
         no_auth_root = deps.no_auth and request.url.path == "/"
         if not public_path and not token_exchange and not no_auth_root and _session_csrf(request, runtime) is None:
@@ -2485,7 +2911,13 @@ async def _authorize_write(request: Request, runtime: UiRuntime) -> Response | N
     if csrf is None:
         return JSONResponse({"error": "authentication required"}, status_code=401)
     origin = request.headers.get("origin")
-    if origin not in {f"http://{request.headers.get('host')}", f"https://{request.headers.get('host')}"}:
+    allowed_origins = {
+        f"http://{request.headers.get('host')}",
+        f"https://{request.headers.get('host')}",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    }
+    if origin and origin not in allowed_origins:
         return JSONResponse({"error": "invalid origin"}, status_code=403)
     supplied = request.headers.get("x-csrf-token")
     if not supplied:
@@ -3181,6 +3613,19 @@ def _resolve_selected_path(runtime: UiRuntime, form: dict[str, str], field: str)
 
 
 async def _read_form_values(request: Request) -> dict[str, list[str]]:
+    ct = request.headers.get("content-type", "").lower()
+    if "application/json" in ct:
+        try:
+            data = await request.json()
+            res: dict[str, list[str]] = {}
+            for k, v in data.items():
+                if isinstance(v, list):
+                    res[k] = [str(x) for x in v]
+                else:
+                    res[k] = [str(v) if v is not None else ""]
+            return res
+        except Exception:
+            return {}
     body = (await request.body()).decode("utf-8")
     return parse_qs(body, keep_blank_values=True)
 

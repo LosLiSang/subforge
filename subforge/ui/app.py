@@ -2747,7 +2747,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         public_path = (
             request.url.path.startswith("/static/")
             or request.url.path.startswith("/assets/")
-            or request.url.path in {"/docs", "/openapi.json", "/redoc"}
+            or request.url.path.endswith(".svg")
+            or request.url.path.endswith(".png")
+            or request.url.path.endswith(".ico")
+            or request.url.path in {"/docs", "/openapi.json", "/redoc", "/subforge-icon.svg", "/favicon.svg"}
         )
         token_exchange = request.url.path == "/" and request.query_params.get("token") is not None
         no_auth_root = deps.no_auth and request.url.path == "/"

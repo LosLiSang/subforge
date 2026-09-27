@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { NavLink, Link } from 'react-router-dom'
 import { useTasks } from '../../context/TaskContext'
+import subforgeLogo from '../../assets/subforge-icon.svg'
 
 export function Sidebar() {
   const { activeTaskCount } = useTasks()
@@ -117,8 +118,11 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <Link className="brand" to="/">
-        <img className="brand-icon" src="/subforge-icon.svg" alt="" />
-        <span className="brand-text">SubForge</span>
+        <img className="brand-icon" src={subforgeLogo} alt="SubForge" />
+        <div className="brand-title-wrap">
+          <span className="brand-text">SubForge</span>
+          <span className="brand-sub">音声工坊</span>
+        </div>
       </Link>
 
       <nav className="side-nav">

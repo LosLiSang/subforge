@@ -1,5 +1,4 @@
-import React, { useEffect, useState } from 'react'
-import { Settings, Shield, Network, Sliders, Folder, Save, Key, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { api } from '../../api/client'
 import type { UiSettings } from '../../types'
 
@@ -82,148 +81,117 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="page-container space-y-6 max-w-3xl">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">系统设置</h1>
-        <p className="text-sm text-fg-dim mt-0.5">
+    <>
+      <div className="page-head">
+        <div>
+          <h1>系统设置</h1>
+          <p className="page-sub">
           配置本地媒体库路径、网络代理、并发性能限制与系统访问权限
         </p>
       </div>
+      </div>
 
-      <form onSubmit={handleSave} className="space-y-6">
+      <form onSubmit={handleSave} className="settings-dashboard">
         {savedSuccess && (
-          <div className="p-3 bg-green-900/30 border border-green-800 rounded-lg text-green-300 text-sm">
+          <div className="model-status-row" style={{ color: '#3fb950', borderColor: '#2ea04340', marginBottom: 16 }}>
             设置已成功保存！
           </div>
         )}
 
-        {/* Library Path */}
-        <div className="p-4 bg-panel rounded-xl border border-line space-y-3">
-          <div className="flex items-center gap-2 font-semibold text-white text-sm">
-            <Folder size={18} className="text-accent" />
-            媒体库存储路径
-          </div>
-          <div className="flex gap-2 items-center">
-            <input
-              type="text"
-              readOnly
-              value={settings?.library_root || '未配置媒体库路径'}
-              className="input-text flex-1 font-mono text-xs bg-panel-2"
-            />
-            <button
-              type="button"
-              onClick={handleSelectLibrary}
-              className="btn btn-secondary flex items-center gap-1.5"
-            >
-              重新选择目录
-            </button>
-          </div>
-        </div>
+        <section className="dash-section tab-panel active">
+          <div className="field-list">
+            <div className="field">
+              <div className="field-label">媒体库存储路径</div>
+              <div className="path-picker">
+                <input readOnly value={settings?.library_root || '未配置媒体库路径'} />
+                <button type="button" className="pick-check-btn" onClick={handleSelectLibrary}>
+                  重新选择目录
+                </button>
+              </div>
+              <small>当前正在使用的同人音声与 ASMR 媒体库根路径。</small>
+            </div>
 
-        {/* Network & Proxy */}
-        <div className="p-4 bg-panel rounded-xl border border-line space-y-3">
-          <div className="flex items-center gap-2 font-semibold text-white text-sm">
-            <Network size={18} className="text-accent" />
-            网络代理设置
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs text-fg-dim">HTTP / SOCKS5 代理地址</label>
-            <input
-              type="text"
-              value={proxyUrl}
-              onChange={(e) => setProxyUrl(e.target.value)}
-              placeholder="例: http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
-              className="input-text font-mono text-xs"
-            />
-            <small className="text-xs text-fg-faint block">
-              用于 YouTube 下载、境外 API 连接；访问 B站 时系统会自动优先尝试直连。
-            </small>
-          </div>
-        </div>
+            <div className="field">
+              <div className="field-label">网络代理 (HTTP/SOCKS5)</div>
+              <input
+                type="text"
+                value={proxyUrl}
+                onChange={(e) => setProxyUrl(e.target.value)}
+                placeholder="例: http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+              />
+              <small>用于 YouTube 下载、境外 API 连接；访问 B站 时系统会自动优先尝试直连。</small>
+            </div>
 
-        {/* Performance & Concurrency */}
-        <div className="p-4 bg-panel rounded-xl border border-line space-y-4">
-          <div className="flex items-center gap-2 font-semibold text-white text-sm">
-            <Sliders size={18} className="text-accent" />
-            并发与性能
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <label className="text-xs text-fg-dim">本地 ASR 并发上限 (线程数)</label>
+            <div className="field-inline">
+              <div>
+                <div className="field-label">本地 ASR 并发上限 (线程数)</div>
+                <small>本地 Faster-Whisper 转录并发数</small>
+              </div>
               <input
                 type="number"
                 min={1}
                 max={8}
+                className="narrow"
                 value={asrConcurrency}
                 onChange={(e) => setAsrConcurrency(parseInt(e.target.value) || 1)}
-                className="input-text text-sm"
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-xs text-fg-dim">翻译并发 Workers</label>
+
+            <div className="field-inline">
+              <div>
+                <div className="field-label">翻译 Workers 并发数量</div>
+                <small>LLM 翻译并发协程数</small>
+              </div>
               <input
                 type="number"
                 min={1}
                 max={32}
+                className="narrow"
                 value={translateWorkers}
                 onChange={(e) => setTranslateWorkers(parseInt(e.target.value) || 8)}
-                className="input-text text-sm"
+              />
+            </div>
+
+            <div className="field">
+              <div className="field-label">自定义翻译系统提示词 (Prompt)</div>
+              <textarea
+                value={translationPrompt}
+                onChange={(e) => setTranslationPrompt(e.target.value)}
+                placeholder="可选，留空则使用默认的高质量同人音声二次元翻译预设"
+              />
+            </div>
+
+            <div className="field">
+              <label className="check-field">
+                <span>
+                  <input
+                    type="checkbox"
+                    checked={noAuth}
+                    onChange={(e) => setNoAuth(e.target.checked)}
+                  />
+                  本地免 Token 登录模式
+                </span>
+              </label>
+            </div>
+
+            <div className="field">
+              <div className="field-label">固定访问密码 / Token (可选)</div>
+              <input
+                type="password"
+                value={fixedToken}
+                onChange={(e) => setFixedToken(e.target.value)}
+                placeholder="设置后下次启动可通过固定密码访问，留空保持原样"
               />
             </div>
           </div>
 
-          <div className="space-y-1">
-            <label className="text-xs text-fg-dim">自定义翻译系统提示词 (Prompt)</label>
-            <textarea
-              value={translationPrompt}
-              onChange={(e) => setTranslationPrompt(e.target.value)}
-              placeholder="可选，留空则使用默认的高质量同人音声二次元翻译预设"
-              className="input-text text-xs h-24 font-mono"
-            />
+          <div className="dash-actions" style={{ marginTop: 24 }}>
+            <button type="submit" disabled={saving} className="primary">
+              {saving ? '正在保存…' : '保存系统设置'}
+            </button>
           </div>
-        </div>
-
-        {/* Security & Access */}
-        <div className="p-4 bg-panel rounded-xl border border-line space-y-4">
-          <div className="flex items-center gap-2 font-semibold text-white text-sm">
-            <Shield size={18} className="text-accent" />
-            访问与安全模式
-          </div>
-
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={noAuth}
-              onChange={(e) => setNoAuth(e.target.checked)}
-              className="accent-accent"
-            />
-            <span className="text-sm font-medium">本地免 Token 登录模式</span>
-          </label>
-
-          <div className="space-y-1 pt-1">
-            <label className="text-xs text-fg-dim">固定访问密码 / Token (可选)</label>
-            <input
-              type="password"
-              value={fixedToken}
-              onChange={(e) => setFixedToken(e.target.value)}
-              placeholder="设置后下次启动可通过固定密码访问，留空保持原样"
-              className="input-text text-sm"
-            />
-          </div>
-        </div>
-
-        <div className="flex justify-end pt-2">
-          <button
-            type="submit"
-            disabled={saving}
-            className="btn btn-primary flex items-center gap-2 px-6"
-          >
-            <Save size={16} />
-            {saving ? '正在保存...' : '保存系统设置'}
-          </button>
-        </div>
+        </section>
       </form>
-    </div>
+    </>
   )
 }

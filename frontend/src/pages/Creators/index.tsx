@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import { Users, Plus, Edit2, Trash2, Search, Mic, Building2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../../api/client'
 import type { Creator } from '../../types'
 
@@ -86,11 +86,11 @@ export function CreatorsPage() {
   })
 
   return (
-    <div className="page-container space-y-6">
-      <div className="flex justify-between items-center">
+    <>
+      <div className="page-head">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">创作者管理</h1>
-          <p className="text-sm text-fg-dim mt-0.5">
+          <h1>创作者</h1>
+          <p className="page-sub">
             分类管理音声声优 (CV) 与社团组织，维护作品关联关系
           </p>
         </div>
@@ -98,101 +98,96 @@ export function CreatorsPage() {
         <button
           type="button"
           onClick={() => setAddOpen(true)}
-          className="btn btn-primary flex items-center gap-1.5"
+          className="primary"
         >
-          <Plus size={16} /> 添加创作者
+          <svg className="btn-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          添加创作者
         </button>
       </div>
 
-      {/* Controls */}
-      <div className="bg-panel p-4 rounded-xl border border-line flex flex-wrap gap-4 items-center justify-between">
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => setCurrentKind('all')}
-            className={`tab-btn text-xs ${currentKind === 'all' ? 'active' : ''}`}
-          >
-            全部 ({creators.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setCurrentKind('voice_actor')}
-            className={`tab-btn text-xs flex items-center gap-1 ${currentKind === 'voice_actor' ? 'active' : ''}`}
-          >
-            <Mic size={14} /> 声优 (
-            {creators.filter((c) => c.kind === 'voice_actor').length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setCurrentKind('circle')}
-            className={`tab-btn text-xs flex items-center gap-1 ${currentKind === 'circle' ? 'active' : ''}`}
-          >
-            <Building2 size={14} /> 社团 (
-            {creators.filter((c) => c.kind === 'circle').length})
-          </button>
-        </div>
+      <nav className="tab-bar creator-tabs" role="tablist">
+        <button
+          type="button"
+          onClick={() => setCurrentKind('all')}
+          className={`tab ${currentKind === 'all' ? 'active' : ''}`}
+        >
+          全部 ({creators.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setCurrentKind('voice_actor')}
+          className={`tab ${currentKind === 'voice_actor' ? 'active' : ''}`}
+        >
+          声优 ({creators.filter((c) => c.kind === 'voice_actor').length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setCurrentKind('circle')}
+          className={`tab ${currentKind === 'circle' ? 'active' : ''}`}
+        >
+          社团 ({creators.filter((c) => c.kind === 'circle').length})
+        </button>
+      </nav>
 
-        <div className="relative min-w-[200px]">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-dim" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜索创作者名称..."
-            className="input-text text-sm pl-8"
-          />
-        </div>
-      </div>
+      <section className="tab-panel active">
+        <input
+          type="search"
+          className="creator-list-search"
+          placeholder="搜索创作者…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ marginBottom: 16 }}
+        />
 
-      {/* Creators Grid */}
-      {loading ? (
-        <div className="text-center py-20 text-fg-dim text-sm">加载创作者列表中...</div>
-      ) : filtered.length === 0 ? (
-        <div className="empty-state py-16 text-sm text-fg-dim">暂无匹配的创作者</div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {filtered.map((c) => (
-            <div
-              key={c.creator_id}
-              className="p-3.5 bg-panel rounded-xl border border-line flex items-center justify-between gap-3"
-            >
-              <div className="flex items-center gap-3 min-w-0 flex-1">
-                <div className="w-8 h-8 rounded-full bg-panel-2 border border-line flex items-center justify-center text-fg-dim flex-none">
-                  {c.kind === 'voice_actor' ? <Mic size={16} /> : <Building2 size={16} />}
+        {loading ? (
+          <p className="empty">加载创作者列表中…</p>
+        ) : filtered.length === 0 ? (
+          <p className="empty">暂无创作者数据。</p>
+        ) : (
+          <div className="creator-list">
+            {filtered.map((c) => (
+              <article
+                key={c.creator_id}
+                className="creator-row"
+                data-creator-name={c.name}
+              >
+                <div className="creator-row-main">
+                  <Link
+                    className="creator-row-link"
+                    to={`/?creator=${c.creator_id}`}
+                    title="在作品库中筛选该创作者"
+                  >
+                    <span className={`creator-tag creator-tag-${c.kind}`}>{c.name}</span>
+                  </Link>
+                  <span>{c.item_count || 0} 部作品</span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-sm text-white truncate">{c.name}</div>
-                  <div className="text-xs text-fg-dim">
-                    关联 {c.item_count || 0} 部作品 · {c.kind === 'voice_actor' ? '声优' : '社团'}
-                  </div>
-                </div>
-              </div>
 
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRenameTarget(c)
-                    setEditName(c.name)
-                  }}
-                  className="p-1.5 text-fg-dim hover:text-white"
-                  title="重命名"
-                >
-                  <Edit2 size={15} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDelete(c)}
-                  className="p-1.5 text-fg-dim hover:text-red-400"
-                  title="删除"
-                >
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+                <div className="creator-row-menu-wrap" style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    type="button"
+                    className="ghost small"
+                    onClick={() => {
+                      setRenameTarget(c)
+                      setEditName(c.name)
+                    }}
+                  >
+                    修改
+                  </button>
+                  <button
+                    type="button"
+                    className="danger ghost small"
+                    onClick={() => handleDelete(c)}
+                  >
+                    删除
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* Add Modal */}
       {addOpen && (
@@ -263,11 +258,11 @@ export function CreatorsPage() {
                 <button
                   type="button"
                   onClick={() => setRenameTarget(null)}
-                  className="btn btn-secondary"
+                  className="ghost"
                 >
                   取消
                 </button>
-                <button type="submit" className="btn btn-primary">
+                <button type="submit" className="primary">
                   保存名称
                 </button>
               </div>
@@ -275,6 +270,6 @@ export function CreatorsPage() {
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }

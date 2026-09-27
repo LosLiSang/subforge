@@ -1,14 +1,4 @@
-import React, { useState } from 'react'
-import {
-  DownloadCloud,
-  Sparkles,
-  RotateCcw,
-  XCircle,
-  Trash2,
-  CheckCircle2,
-  AlertCircle,
-  Clock,
-} from 'lucide-react'
+import { useState } from 'react'
 import { useTasks } from '../../context/TaskContext'
 
 export function TasksPage() {
@@ -26,11 +16,11 @@ export function TasksPage() {
   const [currentTab, setCurrentTab] = useState<'subtitles' | 'downloads'>('subtitles')
 
   return (
-    <div className="page-container space-y-6">
-      <div className="flex justify-between items-center">
+    <>
+      <div className="page-head task-center-head">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">任务与下载中心</h1>
-          <p className="text-sm text-fg-dim mt-0.5">
+          <h1>任务中心</h1>
+          <p className="page-sub">
             监控后台 ASR 识别、LLM 翻译流水线以及在线音视频下载进度
           </p>
         </div>
@@ -38,117 +28,108 @@ export function TasksPage() {
         <button
           type="button"
           onClick={refreshTasks}
-          className="btn btn-secondary text-xs flex items-center gap-1.5"
+          className="ghost small"
         >
-          <RotateCcw size={14} /> 刷新状态
+          刷新状态
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b border-line gap-2">
+      <nav className="tab-bar task-center-tabs" role="tablist">
         <button
           type="button"
           onClick={() => setCurrentTab('subtitles')}
-          className={`tab-btn ${currentTab === 'subtitles' ? 'active' : ''}`}
+          className={`tab ${currentTab === 'subtitles' ? 'active' : ''}`}
         >
-          <Sparkles size={16} />
-          字幕生成流水线 ({subtitleTasks.length})
+          字幕 ({subtitleTasks.length})
         </button>
         <button
           type="button"
           onClick={() => setCurrentTab('downloads')}
-          className={`tab-btn ${currentTab === 'downloads' ? 'active' : ''}`}
+          className={`tab ${currentTab === 'downloads' ? 'active' : ''}`}
         >
-          <DownloadCloud size={16} />
-          媒体下载任务 ({downloadTasks.length})
+          下载 ({downloadTasks.length})
         </button>
-      </div>
+      </nav>
 
-      {/* Tab Panels */}
       {currentTab === 'subtitles' && (
-        <div className="space-y-3">
+        <div className="task-center-list">
           {subtitleTasks.length === 0 ? (
-            <div className="empty-state py-16">
-              <p className="text-fg-dim text-sm">暂无字幕生成任务</p>
-            </div>
+            <p className="empty">当前没有字幕处理任务。</p>
           ) : (
             subtitleTasks.map((t) => {
               const isRunning = ['queued', 'running', 'processing'].includes(t.status)
               const isFailed = t.status === 'failed'
-              const isCompleted = t.status === 'completed' || t.status === 'complete'
+              const percent = Math.round(t.progress * 100)
 
               return (
-                <div key={t.task_id} className="task-card">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="space-y-1 min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        {isRunning && <Clock size={16} className="text-yellow-400 animate-spin" />}
-                        {isFailed && <AlertCircle size={16} className="text-red-400" />}
-                        {isCompleted && <CheckCircle2 size={16} className="text-green-400" />}
-                        <span className="font-semibold text-sm text-white truncate">
-                          {t.track_title || t.task_id}
-                        </span>
-                        {t.stage && (
-                          <span className="badge badge-accent uppercase text-xs">{t.stage}</span>
-                        )}
+                <article key={t.task_id} className="task-center-row">
+                  <div className="task-center-header">
+                    <div className="task-center-main">
+                      <div className="task-title-group">
+                        <strong className="task-title">{t.item_title || t.task_id}</strong>
                       </div>
-                      <div className="text-xs text-fg-dim">
-                        作品: {t.item_title || '未知'} · 模型: {t.profile_label || '默认'}
-                      </div>
+                      <span className="task-media-name">{t.track_title || '音轨'}</span>
                     </div>
 
-                    <div className="flex items-center gap-2 flex-none">
-                      {isRunning && (
-                        <button
-                          type="button"
-                          onClick={() => cancelTask(t.task_id)}
-                          className="btn btn-secondary btn-sm text-red-400 flex items-center gap-1"
-                        >
-                          <XCircle size={14} /> 取消
-                        </button>
-                      )}
-                      {isFailed && (
-                        <button
-                          type="button"
-                          onClick={() => retryTask(t.task_id)}
-                          className="btn btn-secondary btn-sm flex items-center gap-1"
-                        >
-                          <RotateCcw size={14} /> 重试
-                        </button>
-                      )}
-                      {!isRunning && (
-                        <button
-                          type="button"
-                          onClick={() => deleteTask(t.task_id)}
-                          className="btn btn-danger btn-sm p-1.5"
-                          title="删除任务记录"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      )}
+                    <div className="task-center-actions-wrap">
+                      <div className="task-center-state">
+                        <span className={`status-badge status-${t.status}`}>{t.status}</span>
+                        {t.stage && (
+                          <span className={`chip task-stage chip-stage-${t.stage}`}>{t.stage}</span>
+                        )}
+                      </div>
+                      <div className="task-actions">
+                        {isRunning && (
+                          <button
+                            type="button"
+                            onClick={() => cancelTask(t.task_id)}
+                            className="danger ghost small"
+                          >
+                            取消
+                          </button>
+                        )}
+                        {isFailed && (
+                          <button
+                            type="button"
+                            onClick={() => retryTask(t.task_id)}
+                            className="small"
+                          >
+                            重试
+                          </button>
+                        )}
+                        {!isRunning && (
+                          <button
+                            type="button"
+                            onClick={() => deleteTask(t.task_id)}
+                            className="danger ghost small"
+                          >
+                            删除
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  {/* Progress bar */}
-                  <div className="space-y-1 pt-2">
-                    <div className="progress-track">
-                      <div
-                        className={`progress-fill ${isFailed ? 'bg-red-500' : isCompleted ? 'bg-green-500' : 'bg-accent'}`}
-                        style={{ width: `${Math.round(t.progress * 100)}%` }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-xs text-fg-faint">
-                      <span>{t.message || (isCompleted ? '已完成' : '处理中...')}</span>
-                      <span>{Math.round(t.progress * 100)}%</span>
+                  <div className="task-progress-section">
+                    <div className="task-progress-bar-wrap">
+                      <div className="task-progress-track">
+                        <div className="task-progress-fill" style={{ width: `${percent}%` }} />
+                      </div>
+                      <div className="task-center-progress">
+                        <span className="task-progress">{percent}</span>%
+                      </div>
                     </div>
                   </div>
 
                   {t.error && (
-                    <div className="mt-2 p-2 bg-red-950/40 border border-red-800 rounded text-xs text-red-300 font-mono overflow-x-auto">
+                    <p className="task-center-message" style={{ color: '#ff7b72' }}>
                       {t.error}
-                    </div>
+                    </p>
                   )}
-                </div>
+                  {t.message && !t.error && (
+                    <p className="task-center-message">{t.message}</p>
+                  )}
+                </article>
               )
             })
           )}
@@ -156,74 +137,70 @@ export function TasksPage() {
       )}
 
       {currentTab === 'downloads' && (
-        <div className="space-y-3">
+        <div className="task-center-list">
           {downloadTasks.length === 0 ? (
-            <div className="empty-state py-16">
-              <p className="text-fg-dim text-sm">暂无在线下载任务</p>
-            </div>
+            <p className="empty">当前没有媒体下载任务。</p>
           ) : (
             downloadTasks.map((t) => {
               const isRunning = t.status === 'running' || t.status === 'pending'
               const isFailed = t.status === 'failed' || t.status === 'error'
-              const isCompleted = t.status === 'complete' || t.status === 'completed'
+              const percent = Math.round((t.progress || 0) * 100)
 
               return (
-                <div key={t.task_id} className="task-card">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="space-y-1 min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        {isRunning && <Clock size={16} className="text-yellow-400 animate-spin" />}
-                        {isFailed && <AlertCircle size={16} className="text-red-400" />}
-                        {isCompleted && <CheckCircle2 size={16} className="text-green-400" />}
-                        <span className="font-semibold text-sm text-white truncate">
-                          {t.title || t.url}
-                        </span>
+                <article key={t.task_id} className="task-center-row">
+                  <div className="task-center-header">
+                    <div className="task-center-main">
+                      <div className="task-title-group">
+                        <strong className="task-title">{t.title || t.url}</strong>
                       </div>
-                      <div className="text-xs text-fg-dim truncate">
-                        来源 URL: {t.url}
-                      </div>
+                      <span className="task-media-name">{t.url}</span>
                     </div>
 
-                    <div className="flex items-center gap-2 flex-none">
-                      {isRunning && (
-                        <button
-                          type="button"
-                          onClick={() => cancelDownload(t.task_id)}
-                          className="btn btn-secondary btn-sm text-red-400 flex items-center gap-1"
-                        >
-                          <XCircle size={14} /> 取消
-                        </button>
-                      )}
-                      {isFailed && (
-                        <button
-                          type="button"
-                          onClick={() => retryDownload(t.task_id)}
-                          className="btn btn-secondary btn-sm flex items-center gap-1"
-                        >
-                          <RotateCcw size={14} /> 重试
-                        </button>
-                      )}
+                    <div className="task-center-actions-wrap">
+                      <div className="task-center-state">
+                        <span className={`status-badge status-${t.status}`}>{t.status}</span>
+                      </div>
+                      <div className="task-actions">
+                        {isRunning && (
+                          <button
+                            type="button"
+                            onClick={() => cancelDownload(t.task_id)}
+                            className="danger ghost small"
+                          >
+                            取消
+                          </button>
+                        )}
+                        {isFailed && (
+                          <button
+                            type="button"
+                            onClick={() => retryDownload(t.task_id)}
+                            className="small"
+                          >
+                            重试
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="space-y-1 pt-2">
-                    <div className="progress-track">
-                      <div
-                        className={`progress-fill ${isFailed ? 'bg-red-500' : isCompleted ? 'bg-green-500' : 'bg-accent'}`}
-                        style={{ width: `${Math.round((t.progress || 0) * 100)}%` }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-xs text-fg-faint">
-                      <span>{t.message || (isCompleted ? '下载完成' : '下载中...')}</span>
-                      <span>{Math.round((t.progress || 0) * 100)}%</span>
+                  <div className="task-progress-section">
+                    <div className="task-progress-bar-wrap">
+                      <div className="task-progress-track">
+                        <div className="task-progress-fill" style={{ width: `${percent}%` }} />
+                      </div>
+                      <div className="task-center-progress">
+                        <span className="task-progress">{percent}</span>%
+                      </div>
                     </div>
                   </div>
-                </div>
+
+                  {t.message && <p className="task-center-message">{t.message}</p>}
+                </article>
               )
             })
           )}
         </div>
       )}
-    </div>
+    </>
   )
 }

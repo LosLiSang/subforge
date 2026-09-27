@@ -1,5 +1,4 @@
-import React, { useEffect, useState } from 'react'
-import { Cpu, Plus, Sparkles, CheckCircle2, AlertCircle, Trash2, Key, HardDrive } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { api } from '../../api/client'
 
 export function ProfilesPage() {
@@ -127,158 +126,155 @@ export function ProfilesPage() {
   }
 
   return (
-    <div className="page-container space-y-6">
-      <div className="flex justify-between items-center">
+    <>
+      <div className="page-head">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">模型配置</h1>
-          <p className="text-sm text-fg-dim mt-0.5">
+          <h1>模型配置</h1>
+          <p className="page-sub">
             配置本地 Faster-Whisper、在线 Deepgram、Gemini 以及各类 OpenAI 兼容的大语言模型
           </p>
         </div>
 
         <button
           type="button"
+          className="primary"
           onClick={() => {
             setModalType(currentTab)
             setAddModalOpen(true)
           }}
-          className="btn btn-primary flex items-center gap-1.5"
         >
-          <Plus size={16} />
+          <svg className="btn-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
           {currentTab === 'asr' ? '添加语音模型' : '添加翻译模型'}
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b border-line gap-2">
+      <nav className="tab-bar" role="tablist">
         <button
           type="button"
           onClick={() => setCurrentTab('asr')}
-          className={`tab-btn ${currentTab === 'asr' ? 'active' : ''}`}
+          className={`tab ${currentTab === 'asr' ? 'active' : ''}`}
         >
-          <Cpu size={16} />
-          语音识别模型 (ASR) ({asrProfiles.length})
+          语音识别模型 (ASR)
         </button>
         <button
           type="button"
           onClick={() => setCurrentTab('llm')}
-          className={`tab-btn ${currentTab === 'llm' ? 'active' : ''}`}
+          className={`tab ${currentTab === 'llm' ? 'active' : ''}`}
         >
-          <Sparkles size={16} />
-          翻译大模型 (LLM) ({llmProfiles.length})
+          翻译大模型 (LLM)
         </button>
-      </div>
+      </nav>
 
-      {/* Local Faster-Whisper Cache Status */}
       {currentTab === 'asr' && (
-        <div className="p-3.5 bg-panel-2 rounded-xl border border-line flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2">
-            <HardDrive size={16} className="text-accent" />
-            <span className="font-semibold text-white">本地 Faster-Whisper 缓存状态:</span>
-            <span className="text-fg-dim">
-              {cachedModels.length > 0 ? cachedModels.join(', ') : '未检测到本地缓存模型'}
-            </span>
-          </div>
-          <span className="text-fg-faint">首次运行未缓存模型时将自动下载</span>
+        <div className="model-status-row" style={{ padding: '12px 14px', marginBottom: 16 }}>
+          <strong>本地 Faster-Whisper 缓存状态：</strong>
+          <span>{cachedModels.length > 0 ? cachedModels.join(', ') : '未检测到本地缓存模型'}</span>
+          <small style={{ color: 'var(--fg-faint)', marginLeft: 12 }}>首次运行未缓存模型时将自动下载</small>
         </div>
       )}
 
-      {/* ASR List */}
       {currentTab === 'asr' && (
-        <div className="grid gap-3">
+        <div className="profile-list">
           {asrProfiles.map((p) => {
             const result = testResults[p.profile_id]
             return (
-              <div key={p.profile_id} className="p-4 bg-panel rounded-xl border border-line flex items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-white text-sm">{p.name}</span>
-                    <span className="badge badge-accent uppercase text-xs">{p.provider || 'faster-whisper'}</span>
-                    {p.model && <span className="text-xs text-fg-dim font-mono">{p.model}</span>}
-                  </div>
-                  <div className="text-xs text-fg-dim flex items-center gap-3">
-                    {p.device && <span>设备: {p.device}</span>}
-                    {p.compute_type && <span>计算类型: {p.compute_type}</span>}
-                    {p.has_key && (
-                      <span className="text-green-400 flex items-center gap-1">
-                        <Key size={12} /> 已配置密钥
-                      </span>
-                    )}
-                  </div>
-                  {result && (
-                    <div className={`text-xs mt-1 flex items-center gap-1 ${result.ok ? 'text-green-400' : 'text-red-400'}`}>
-                      {result.ok ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
-                      {result.msg}
-                    </div>
-                  )}
+              <article key={p.profile_id} className="profile-row">
+                <div className="profile-row-main">
+                  <strong className="profile-row-name">{p.name}</strong>
+                  <span className="profile-row-model">{p.model}</span>
+                  <span className="profile-row-badges">
+                    <span className="chip chip-cap chip-cap-transcribe">{p.provider || 'faster-whisper'}</span>
+                    {p.device && <span className="chip">{p.device}</span>}
+                    {p.has_key && <span className="chip chip-key">已配置密钥</span>}
+                  </span>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleTestAsr(p.profile_id)}
-                    disabled={result?.loading}
-                    className="btn btn-secondary btn-sm"
-                  >
-                    {result?.loading ? '测试中...' : '测试连通性'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteAsr(p.profile_id)}
-                    className="btn btn-danger btn-sm p-1.5"
-                    title="删除配置"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                <div className="profile-row-actions">
+                  <div className="profile-controls">
+                    <button
+                      type="button"
+                      className="profile-action profile-action-test"
+                      onClick={() => handleTestAsr(p.profile_id)}
+                      disabled={result?.loading}
+                    >
+                      <svg viewBox="0 0 16 16" aria-hidden="true" style={{ width: 14, height: 14 }}>
+                        <path d="M8 2.25a5.75 5.75 0 1 0 5.75 5.75M8 5v3l2 1.25" />
+                      </svg>
+                      <span>{result?.loading ? '测试中…' : '测试'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="profile-action profile-action-delete"
+                      onClick={() => handleDeleteAsr(p.profile_id)}
+                    >
+                      <svg viewBox="0 0 16 16" aria-hidden="true" style={{ width: 14, height: 14 }}>
+                        <path d="M3.5 4.25h9M6 2.75h4M5 6.25v6.5m3-6.5v6.5m3-6.5v6.5M4.25 4.25l.5 9h6.5l.5-9" />
+                      </svg>
+                      <span>删除</span>
+                    </button>
+                  </div>
+                  {result && (
+                    <output className="check-result" style={{ color: result.ok ? '#3fb950' : '#ff7b72' }}>
+                      {result.msg}
+                    </output>
+                  )}
                 </div>
-              </div>
+              </article>
             )
           })}
         </div>
       )}
 
-      {/* LLM List */}
       {currentTab === 'llm' && (
-        <div className="grid gap-3">
+        <div className="profile-list">
           {llmProfiles.map((p) => {
             const result = testResults[p.profile_id]
             return (
-              <div key={p.profile_id} className="p-4 bg-panel rounded-xl border border-line flex items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-white text-sm">{p.name}</span>
-                    <span className="badge badge-accent text-xs font-mono">{p.model}</span>
-                  </div>
-                  <div className="text-xs text-fg-dim font-mono truncate max-w-lg">
-                    接口: {p.api_base || 'https://api.openai.com/v1'}
-                  </div>
-                  {result && (
-                    <div className={`text-xs mt-1 flex items-center gap-1 ${result.ok ? 'text-green-400' : 'text-red-400'}`}>
-                      {result.ok ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
-                      {result.msg}
-                    </div>
-                  )}
+              <article key={p.profile_id} className="profile-row">
+                <div className="profile-row-main">
+                  <strong className="profile-row-name">{p.name}</strong>
+                  <span className="profile-row-model">{p.model}</span>
+                  <span className="profile-row-url">{p.api_base || p.base_url}</span>
+                  <span className="profile-row-badges">
+                    <span className="chip chip-cap chip-cap-translate">翻译</span>
+                    <span className="chip chip-direct">直连</span>
+                    <span className="chip chip-key">sk-***</span>
+                  </span>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleTestLlm(p.profile_id)}
-                    disabled={result?.loading}
-                    className="btn btn-secondary btn-sm"
-                  >
-                    {result?.loading ? '测试中...' : '测试连通性'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteLlm(p.profile_id)}
-                    className="btn btn-danger btn-sm p-1.5"
-                    title="删除配置"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                <div className="profile-row-actions">
+                  <div className="profile-controls">
+                    <button
+                      type="button"
+                      className="profile-action profile-action-test"
+                      onClick={() => handleTestLlm(p.profile_id)}
+                      disabled={result?.loading}
+                    >
+                      <svg viewBox="0 0 16 16" aria-hidden="true" style={{ width: 14, height: 14 }}>
+                        <path d="M8 2.25a5.75 5.75 0 1 0 5.75 5.75M8 5v3l2 1.25" />
+                      </svg>
+                      <span>{result?.loading ? '测试中…' : '测试'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="profile-action profile-action-delete"
+                      onClick={() => handleDeleteLlm(p.profile_id)}
+                    >
+                      <svg viewBox="0 0 16 16" aria-hidden="true" style={{ width: 14, height: 14 }}>
+                        <path d="M3.5 4.25h9M6 2.75h4M5 6.25v6.5m3-6.5v6.5m3-6.5v6.5M4.25 4.25l.5 9h6.5l.5-9" />
+                      </svg>
+                      <span>删除</span>
+                    </button>
+                  </div>
+                  {result && (
+                    <output className="check-result" style={{ color: result.ok ? '#3fb950' : '#ff7b72' }}>
+                      {result.msg}
+                    </output>
+                  )}
                 </div>
-              </div>
+              </article>
             )
           })}
         </div>
@@ -293,95 +289,89 @@ export function ProfilesPage() {
                 {modalType === 'asr' ? '添加语音识别模型配置' : '添加翻译模型配置'}
               </h3>
             </div>
-            <form onSubmit={handleSaveProfile} className="modal-body space-y-4">
-              <div className="space-y-1">
-                <label className="text-sm font-medium">配置名称 *</label>
+            <form onSubmit={handleSaveProfile} className="modal-body">
+              <label>
+                配置名称
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="例: 本地 Medium / DeepSeek V3 翻译"
-                  className="input-text"
                   required
                 />
-              </div>
+              </label>
 
               {modalType === 'asr' && (
                 <>
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium">提供商</label>
+                  <label>
+                    提供商
                     <select
                       value={provider}
                       onChange={(e) => setProvider(e.target.value)}
-                      className="input-text"
                     >
                       <option value="faster-whisper">本地 Faster-Whisper</option>
                       <option value="deepgram">Deepgram API</option>
                       <option value="gemini-audio">Gemini Audio API</option>
                     </select>
-                  </div>
+                  </label>
 
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium">模型标识 (例如 medium, large-v3)</label>
+                  <label>
+                    模型标识
                     <input
                       type="text"
                       value={model}
                       onChange={(e) => setModel(e.target.value)}
                       placeholder="medium"
-                      className="input-text"
                       required
                     />
-                  </div>
+                  </label>
                 </>
               )}
 
               {modalType === 'llm' && (
                 <>
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium">API Base 地址</label>
+                  <label>
+                    API Base 地址
                     <input
                       type="text"
                       value={apiBase}
                       onChange={(e) => setApiBase(e.target.value)}
                       placeholder="https://api.openai.com/v1"
-                      className="input-text"
                     />
-                  </div>
+                  </label>
 
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium">模型名称 (例如 gpt-4o-mini, deepseek-chat)</label>
+                  <label>
+                    模型名称
                     <input
                       type="text"
                       value={model}
                       onChange={(e) => setModel(e.target.value)}
                       placeholder="gpt-4o-mini"
-                      className="input-text"
                       required
                     />
-                  </div>
+                  </label>
                 </>
               )}
 
-              <div className="space-y-1">
-                <label className="text-sm font-medium">API Key (若需要)</label>
+              <label>
+                API Key (若需要)
                 <input
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder="sk-..."
-                  className="input-text"
                 />
-              </div>
+              </label>
 
               <div className="modal-footer">
                 <button
                   type="button"
                   onClick={() => setAddModalOpen(false)}
-                  className="btn btn-secondary"
+                  className="ghost"
                 >
                   取消
                 </button>
-                <button type="submit" className="btn btn-primary">
+                <button type="submit" className="primary">
                   保存配置
                 </button>
               </div>
@@ -389,6 +379,6 @@ export function ProfilesPage() {
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }

@@ -1,7 +1,8 @@
 """
-End-to-End Verification Test for Issue #6 and Issue #7:
+End-to-End Verification Test for Issue #6, Issue #7, and Light Theme Model Settings Fix:
 - Issue #6: Works library table view size column wrapping / squeeze prevention
 - Issue #7: Light theme task center tabs and .btn-ghost hover text visibility
+- Light Theme Settings: Eliminate hardcoded dark rgba(0,0,0,0.25) boxes in Default Processing Models
 
 SYSTEM FAILURE MODES (Documented upfront as required by AGENTS.md):
 -----------------------------------------------------------------------------
@@ -18,7 +19,13 @@ SYSTEM FAILURE MODES (Documented upfront as required by AGENTS.md):
      background (#ffffff / #f8f9fa), making text completely invisible to users (contrast ratio ~ 1:1).
    - Prior partial fix only targeted .detail-hero .btn-ghost, leaving the rest of the application broken.
 
-3. FM3: Distribution Build Synchronization Failure:
+3. FM3: Hardcoded Dark Background Inset Leakage (Settings Models & Cards):
+   - Settings -> Default Models containers hardcode background: 'rgba(0, 0, 0, 0.25)'.
+   - Under [data-theme="light"], 25% black wash turns into a muddy dark grey box (#bebebe)
+     inside a clean white card, severely damaging visual contrast and aesthetics.
+   - Inset cards must use semantic --bg-card-inset with #f8fafc / subtle styling in light mode.
+
+4. FM4: Distribution Build Synchronization Failure:
    - Changes in frontend source files (frontend/src/index.css, frontend/src/pages/Library/index.tsx)
      must compile cleanly into subforge/ui/dist (assets/*.css, assets/*.js).
    - FastAPI backend must successfully serve these static assets and routes (/, /tasks, /api/library).
@@ -86,6 +93,16 @@ async def test_library_size_and_light_ghost_btn_e2e(tmp_path: Path):
     )
     assert "#fff" not in ghost_hover_content, "FM2: [data-theme=\"light\"] .btn-ghost:hover must NOT turn text white"
 
+    # Verify --bg-card-inset and .card-inset exist
+    assert "--bg-card-inset" in index_css_src, "FM3: frontend/src/index.css must define --bg-card-inset"
+    assert ".card-inset" in index_css_src, "FM3: frontend/src/index.css must define .card-inset class"
+
+    # Verify Settings page uses semantic card-inset instead of hardcoded dark backgrounds
+    settings_page_src = (FRONTEND_SRC / "pages" / "Settings" / "index.tsx").read_text(encoding="utf-8")
+    assert "background: 'rgba(0, 0, 0, 0.25)'" not in settings_page_src, (
+        "FM3: Settings page must NOT contain hardcoded background: 'rgba(0, 0, 0, 0.25)'"
+    )
+
     # -------------------------------------------------------------------------
     # Step 3: Verify compiled distribution bundle (subforge/ui/dist)
     # -------------------------------------------------------------------------
@@ -104,6 +121,7 @@ async def test_library_size_and_light_ghost_btn_e2e(tmp_path: Path):
 
     # In compiled JS, nowrap and size column definition must be present
     assert "nowrap" in compiled_js, "FM3: Compiled JS bundle must contain nowrap styles"
+    assert "card-inset" in compiled_css, "FM3: Compiled CSS bundle must contain .card-inset"
 
     # -------------------------------------------------------------------------
     # Step 4: FastAPI E2E runtime route serving & API integration
@@ -183,6 +201,12 @@ async def test_library_size_and_light_ghost_btn_e2e(tmp_path: Path):
                 "rule": "[data-theme=\"light\"] .btn-ghost:hover",
                 "hover_color": "var(--fg-main)",
                 "hover_bg": "rgba(0, 0, 0, 0.05)",
+            },
+            "light_theme_model_settings": {
+                "description": "Settings Default Models inset card light theme background fix",
+                "variable": "--bg-card-inset",
+                "class": ".card-inset",
+                "eliminated_hardcoded_dark_boxes": True,
             },
         },
     }

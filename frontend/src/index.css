@@ -75,12 +75,15 @@
 [data-theme="light"] .hero-orig-title {
   color: var(--fg-dim);
 }
-[data-theme="light"] .detail-hero .btn-ghost {
+[data-theme="light"] .btn-ghost {
   color: var(--fg-dim);
 }
-[data-theme="light"] .detail-hero .btn-ghost:hover {
+[data-theme="light"] .btn-ghost:hover {
   color: var(--fg-main);
   background: rgba(0, 0, 0, 0.05);
+}
+[data-theme="light"] .btn-ghost:active {
+  background: rgba(0, 0, 0, 0.08);
 }
 [data-theme="light"] .works-table th,
 [data-theme="light"] .newapi-table th {

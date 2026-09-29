@@ -6,6 +6,7 @@ import inspect
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Awaitable, Callable
@@ -113,6 +114,7 @@ class GeminiAudioProfile:
     temperature: float = 0.0
     bilingual_prompt: str = ""
     transcribe_prompt: str = ""
+    reasoning_effort: str = ""
     proxy_url: str = ""
     verify_tls: bool = True
     ca_bundle: str = ""
@@ -132,6 +134,7 @@ def gemini_profile_from_mapping(profile: dict) -> GeminiAudioProfile:
         temperature=float(profile.get("temperature", 0.0) or 0.0),
         bilingual_prompt=str(profile.get("bilingual_prompt", "")),
         transcribe_prompt=str(profile.get("transcribe_prompt", "")),
+        reasoning_effort=str(profile.get("reasoning_effort", "")),
         proxy_url=str(profile.get("proxy_url", "")),
         verify_tls=bool(profile.get("verify_tls", True)),
         ca_bundle=str(profile.get("ca_bundle", "")),
@@ -334,11 +337,43 @@ class GoogleGeminiTransport(_BaseGeminiTransport):
                 {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(audio).decode("ascii")}},
             ]}],
             "generationConfig": {"temperature": self.profile.temperature},
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
+            ],
         }
 
         def parse(data: dict) -> str:
-            parts = data["candidates"][0]["content"]["parts"]
-            return "\n".join(str(part.get("text", "")) for part in parts if part.get("text"))
+            candidates = data.get("candidates") or []
+            if not candidates:
+                feedback = data.get("promptFeedback") or {}
+                block_reason = feedback.get("blockReason")
+                if block_reason:
+                    raise GeminiAudioError(f"Gemini 输入触发安全拦截（{block_reason}）")
+                return ""
+            candidate = candidates[0]
+            finish_reason = candidate.get("finishReason")
+            parts = candidate.get("content", {}).get("parts") or []
+            regular_texts = [
+                str(part.get("text", ""))
+                for part in parts
+                if part.get("text") and not part.get("thought", False)
+            ]
+            if regular_texts:
+                return "\n".join(regular_texts)
+            all_texts = [str(part.get("text", "")) for part in parts if part.get("text")]
+            if all_texts:
+                return "\n".join(all_texts)
+            if finish_reason == "SAFETY":
+                raise GeminiAudioError("Gemini 触发安全审查拦截（SAFETY，可能包含敏感音频内容）")
+            if finish_reason == "MAX_TOKENS":
+                raise GeminiAudioError("Gemini 生成达到最大 Token 上限截断（MAX_TOKENS）")
+            if finish_reason and finish_reason not in {"STOP", ""}:
+                raise GeminiAudioError(f"Gemini 异常结束（{finish_reason}）")
+            return ""
 
         return await self._post(
             url,
@@ -362,16 +397,34 @@ class OpenAICompatibleAudioTransport(_BaseGeminiTransport):
             ]}],
             "temperature": self.profile.temperature,
         }
+        if getattr(self.profile, "reasoning_effort", ""):
+            body["reasoning_effort"] = self.profile.reasoning_effort
 
         def parse(data: dict) -> str:
             choices = data.get("choices") or []
             if not choices:
                 return ""
             first = choices[0] if isinstance(choices[0], dict) else {}
-            content = first.get("message", {}).get("content", "")
+            msg = first.get("message", {}) or {}
+            content = msg.get("content", "")
+            finish_reason = first.get("finish_reason", "")
+            text = ""
             if isinstance(content, list):
-                return "\n".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
-            return str(content or "")
+                text = "\n".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
+            elif isinstance(content, str):
+                text = content
+            if not text.strip():
+                reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
+                if reasoning:
+                    text = str(reasoning)
+            if not text.strip():
+                if finish_reason in {"content_filter", "safety"}:
+                    raise GeminiAudioError(f"Gemini 触发内容安全审查拦截（{finish_reason}）")
+                if finish_reason == "length":
+                    raise GeminiAudioError("Gemini 生成达到最大 Token 上限截断（length）")
+                if finish_reason and finish_reason not in {"stop", ""}:
+                    raise GeminiAudioError(f"Gemini 异常结束（{finish_reason}）")
+            return text
 
         return await self._post(
             url,
@@ -557,8 +610,14 @@ class GeminiAudioAdapter:
                 prompt = template + context
                 # 请求槽由 transport 在每次真实 HTTP attempt 上管理；
                 # adapter 只负责限制本进程的分片 worker 数。
-                raw = await self.transport.generate(audio, "audio/wav", prompt)
-                segments, structured = self._parse_segments(raw, bilingual=mode == "bilingual_once")
+                try:
+                    raw = await self.transport.generate(audio, "audio/wav", prompt)
+                    segments, structured = self._parse_segments(raw, bilingual=mode == "bilingual_once")
+                except GeminiAudioError as exc:
+                    if len(chunks) > 1 and "返回空内容" in str(exc):
+                        segments, structured = [], True
+                    else:
+                        raise
                 entries: list[SubtitleEntry] = []
                 targets: list[SubtitleEntry] = []
                 for rel_start, rel_end, seg in self._assign_times(segments, chunk_span):
@@ -744,6 +803,49 @@ class GeminiAudioAdapter:
             text = chr(10).join(quote_lines).strip()
         return text
 
+    @staticmethod
+    def _clean_reasoning_and_prompt_leak(raw: str) -> str:
+        """从模型输出中清理思维链（CoT）与 Prompt 泄漏残留。"""
+        text = raw.strip()
+        text = re.sub(r"(?is)<think>.*?</think>", "", text).strip()
+        lines = text.splitlines()
+        filtered_lines = []
+        cot_prefixes = (
+            "- the user wants",
+            "- constraints",
+            "- json format",
+            "- output only",
+            "- start and end",
+            "- transcript verbatim",
+            "audio analysis:",
+            "let's re-listen",
+            "let's double check",
+            "output json format",
+            "rest is asmr",
+            "are there any other",
+        )
+        for line in lines:
+            line_str = line.strip()
+            lower = line_str.lower()
+            if any(lower.startswith(p) for p in cot_prefixes):
+                continue
+            if line_str.startswith("- ") and any(p in lower for p in ("transcription", "constraints", "json", "audio clip")):
+                continue
+            filtered_lines.append(line)
+        cleaned = "\n".join(filtered_lines).strip()
+        lower_cleaned = cleaned.lower()
+        if any(p in lower_cleaned for p in ("audio analysis:", "- the user wants", "output json format")):
+            m = re.findall(r'[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff][^\n\r]*', cleaned)
+            if m:
+                valid_parts = [p.strip() for p in m if p.strip() not in {"原文", "译文", "原文}", "译文}"}]
+                cleaned = "".join(valid_parts)
+            else:
+                cleaned = ""
+        if not re.search(r'[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]', cleaned):
+            if any(k in cleaned.lower() for k in ("transcription", "audio", "segments", "speech", "whisper", "sound", "constraints")):
+                return ""
+        return cleaned.strip()
+
     def _parse_segments(self, raw: str, *, bilingual: bool) -> tuple[list[dict], bool]:
         """解析模型输出为语句级分段。返回 (segments, structured)。
 
@@ -751,44 +853,64 @@ class GeminiAudioAdapter:
         兼容旧格式：{"source_text","target_text"} 或纯文本 → 单段，structured=False。
         """
         text = self._strip_code_fence(raw)
-        # 模型可能在 JSON 前后夹带说明文字：提取首个 { 到最后一个 } 的子串再解析
-        first, last = text.find("{"), text.rfind("}")
-        if first != -1 and last > first:
-            candidate_text = text[first:last + 1]
-        else:
-            candidate_text = text
-        try:
-            data = json.loads(candidate_text)
-        except (ValueError, TypeError):
-            data = None
+        text = re.sub(r"(?is)<think>.*?</think>", "", text).strip()
+
+        # 倒序遍历 '{' 提取包含 "segments" 的有效 JSON 字典，穿透 CoT 思考块
+        data = None
+        decoder = json.JSONDecoder()
+        indices = [i for i, ch in enumerate(text) if ch == "{"]
+        for idx in reversed(indices):
+            try:
+                obj, _ = decoder.raw_decode(text[idx:])
+                if isinstance(obj, dict):
+                    if "segments" in obj:
+                        data = obj
+                        break
+                    if data is None and ("source_text" in obj or "text" in obj):
+                        data = obj
+            except Exception:
+                continue
+
+        # 兜底截取
+        if data is None:
+            first, last = text.find("{"), text.rfind("}")
+            if first != -1 and last > first:
+                try:
+                    data = json.loads(text[first:last + 1])
+                except (ValueError, TypeError):
+                    data = None
+
         segments: list[dict] = []
-        if isinstance(data, dict) and isinstance(data.get("segments"), list) and data["segments"]:
+        if isinstance(data, dict) and isinstance(data.get("segments"), list):
             for item in data["segments"]:
                 if not isinstance(item, dict):
                     continue
                 source = str(item.get("source_text", "") if bilingual else item.get("text", "")).strip()
                 target = str(item.get("target_text", "")).strip() if bilingual else ""
+                cleaned_source = self._clean_reasoning_and_prompt_leak(source)
+                if not cleaned_source:
+                    continue
                 segments.append({
-                    "source": source,
+                    "source": cleaned_source,
                     "target": target,
                     "start": _parse_clock_time(item.get("start")),
                     "end": _parse_clock_time(item.get("end")),
                 })
             segments = [segment for segment in segments if segment["source"]]
-            if segments:
-                return segments, True
+            return segments, True
         if bilingual:
             if not isinstance(data, dict):
                 raise GeminiAudioError("Gemini 双语结果不是有效 JSON")
             source = str(data.get("source_text", "")).strip()
             target = str(data.get("target_text", "")).strip()
-            if not source or not target:
+            cleaned_source = self._clean_reasoning_and_prompt_leak(source)
+            if not cleaned_source or not target:
                 raise GeminiAudioError("Gemini 双语结果缺少源文或译文")
-            return [{"source": source, "target": target, "start": None, "end": None}], False
-        text = text.strip()
-        if not text:
-            raise GeminiAudioError("Gemini 转写结果为空")
-        return [{"source": text, "target": "", "start": None, "end": None}], False
+            return [{"source": cleaned_source, "target": target, "start": None, "end": None}], False
+        cleaned_text = self._clean_reasoning_and_prompt_leak(text)
+        if not cleaned_text:
+            return [], True
+        return [{"source": cleaned_text, "target": "", "start": None, "end": None}], False
 
     @staticmethod
     def _assign_times(

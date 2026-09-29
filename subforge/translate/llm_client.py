@@ -109,7 +109,7 @@ def _get_retry_after(exception: Exception) -> int | None:
 
 
 def _build_body(messages: list[dict[str, str]], config: Config) -> dict[str, Any]:
-    return {
+    body: dict[str, Any] = {
         "model": config.llm_model,
         "messages": messages,
         "temperature": 0.3,
@@ -117,6 +117,9 @@ def _build_body(messages: list[dict[str, str]], config: Config) -> dict[str, Any
         # 吃光 max_tokens 导致 content 为空；给足预算避免空翻译。
         "max_tokens": 16384,
     }
+    if getattr(config, "llm_reasoning_effort", ""):
+        body["reasoning_effort"] = config.llm_reasoning_effort
+    return body
 
 
 async def translate_batch(

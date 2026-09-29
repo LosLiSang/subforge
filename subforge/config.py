@@ -127,6 +127,7 @@ class Config:
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o"
+    llm_reasoning_effort: str = ""
     llm_proxy_url: str = ""
     llm_verify_tls: bool = True
     llm_ca_bundle: str = ""
@@ -233,6 +234,7 @@ def load_config(
     kwargs["llm_api_key"] = toml_data.get("llm", {}).get("api_key", "")
     kwargs["llm_base_url"] = toml_data.get("llm", {}).get("base_url", "https://api.openai.com/v1")
     kwargs["llm_model"] = toml_data.get("llm", {}).get("model", "gpt-4o")
+    kwargs["llm_reasoning_effort"] = toml_data.get("llm", {}).get("reasoning_effort", "")
     kwargs["llm_proxy_url"] = ""
     kwargs["llm_verify_tls"] = True
     kwargs["llm_ca_bundle"] = ""

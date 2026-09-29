@@ -766,7 +766,7 @@ def ui_cmd(
     port: int = typer.Option(None, "--port", "-p", help="Port to listen on (default: 8765)"),
     no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser automatically"),
     token: str = typer.Option(None, "--token", help="Fixed startup token for authentication (or env: SUBFORGE_TOKEN)"),
-    no_auth: bool = typer.Option(False, "--no-auth", help="Disable token authentication for local access (or env: SUBFORGE_NO_AUTH=1)"),
+    no_auth: bool | None = typer.Option(None, "--no-auth/--auth", help="Disable token authentication for local access (default: True)"),
 ) -> None:
     """Launch the local Library UI web server."""
     from subforge.ui.server import run_ui
@@ -780,8 +780,10 @@ def ui_cmd(
         kwargs["open_browser"] = False
     if token is not None:
         kwargs["token"] = token
-    if no_auth:
-        kwargs["no_auth"] = True
+        if no_auth is None:
+            kwargs["no_auth"] = False
+    if no_auth is not None:
+        kwargs["no_auth"] = no_auth
     try:
         run_ui(**kwargs)
     except KeyboardInterrupt:

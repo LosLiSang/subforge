@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">SubForge</title>
+  <defs>
+    <linearGradient id="bg" x1="7" y1="5" x2="42" y2="44" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2f81f7"/>
+      <stop offset="1" stop-color="#39d0ad"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="15" y1="14" x2="34" y2="35" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff"/>
+      <stop offset="1" stop-color="#e7f4ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="13" fill="url(#bg)"/>
+  <path d="M10.5 15.5A4.5 4.5 0 0 1 15 11h18a4.5 4.5 0 0 1 4.5 4.5v14A4.5 4.5 0 0 1 33 34H22l-7.4 4.3c-.8.5-1.8-.1-1.7-1l.7-3.8a4.5 4.5 0 0 1-3.1-4.3V15.5Z" fill="url(#shine)"/>
+  <path d="M17 20h14M17 25h10" fill="none" stroke="#2577c8" stroke-width="2.8" stroke-linecap="round"/>
+  <path d="m35.8 7.6.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8.8-2.1Z" fill="#fff"/>
+</svg>

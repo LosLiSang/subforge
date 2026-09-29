@@ -736,7 +736,9 @@ def test_profile_connection_test_reports_success_without_exposing_key(tmp_path):
         response = client.post(f"/profiles/{profile.profile_id}/test", headers=headers)
 
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "message": "连接成功"}
+    data = response.json()
+    assert data["ok"] is True
+    assert data["message"] == "连接成功"
     assert "secret-key-value" not in response.text
 
 
@@ -1350,11 +1352,13 @@ def test_cover_route_returns_extracted_image(tmp_path):
     # 缓存已写入
     assert (library / ".subforge" / "covers" / f"{imported.item_id}.jpg").exists()
 
-    # 无封面作品 → 404
+    # 无封面作品 → 自动降级为默认封面
     no_cover = tmp_path / "plain.mp3"
     no_cover.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x00not really audio")
     no_cover_item = _import_audio(tmp_path, library, no_cover)
-    assert client.get(f"/covers/{no_cover_item}").status_code == 404
+    no_cover_resp = client.get(f"/covers/{no_cover_item}")
+    assert no_cover_resp.status_code == 200
+    assert "image/" in no_cover_resp.headers.get("content-type", "")
 
 
 def _import_audio(tmp_path, library, media) -> str:

@@ -19,6 +19,7 @@ dependencies = [
     "jinja2>=3.1",
     "rich>=13.0",
     "typer>=0.25.1",
+    "fastapi>=0.115",
 ]
 
 [project.urls]
@@ -46,6 +47,7 @@ artifacts = [
     "subforge/ui/templates/*.html",
     "subforge/ui/static/*",
     "subforge/ui/static/vendor/*",
+    "subforge/ui/dist/**",
 ]
 
 [tool.pytest.ini_options]

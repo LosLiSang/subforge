@@ -632,20 +632,20 @@ export function TasksPage() {
 
             <div className="modal-body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               {/* Current */}
-              <div style={{ background: 'rgba(0, 0, 0, 0.25)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+            <div style={{ background: 'var(--bg-card-inset)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
                 <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: 'var(--fg-dim)' }}>
                   当前台本 (正式)
                 </h4>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div>
                     <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginBottom: 4 }}>原文 (JA)</div>
-                    <div style={{ fontSize: 13, background: 'rgba(255, 255, 255, 0.03)', padding: 8, borderRadius: 4, maxHeight: 180, overflowY: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 13, background: 'var(--bg-input)', border: '1px solid var(--border-subtle)', padding: 8, borderRadius: 4, maxHeight: 180, overflowY: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
                       {candidateModalData.current?.source?.map((s: any) => s.text).join('\n') || '（该范围无字幕）'}
                     </div>
                   </div>
                   <div>
                     <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginBottom: 4 }}>译文 (ZH)</div>
-                    <div style={{ fontSize: 13, background: 'rgba(255, 255, 255, 0.03)', padding: 8, borderRadius: 4, maxHeight: 180, overflowY: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 13, background: 'var(--bg-input)', border: '1px solid var(--border-subtle)', padding: 8, borderRadius: 4, maxHeight: 180, overflowY: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
                       {candidateModalData.current?.target?.map((t: any) => t.text).join('\n') || '（该范围无字幕）'}
                     </div>
                   </div>
@@ -660,13 +660,13 @@ export function TasksPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div>
                     <div style={{ fontSize: 11, color: '#c084fc', marginBottom: 4 }}>原文 (JA)</div>
-                    <div style={{ fontSize: 13, background: 'rgba(0, 0, 0, 0.3)', padding: 8, borderRadius: 4, maxHeight: 180, overflowY: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 13, background: 'var(--bg-input)', border: '1px solid rgba(168, 85, 247, 0.25)', padding: 8, borderRadius: 4, maxHeight: 180, overflowY: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
                       {candidateModalData.candidate?.source?.map((s: any) => s.text).join('\n') || '（未生成内容）'}
                     </div>
                   </div>
                   <div>
                     <div style={{ fontSize: 11, color: '#c084fc', marginBottom: 4 }}>译文 (ZH)</div>
-                    <div style={{ fontSize: 13, background: 'rgba(0, 0, 0, 0.3)', padding: 8, borderRadius: 4, maxHeight: 180, overflowY: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 13, background: 'var(--bg-input)', border: '1px solid rgba(168, 85, 247, 0.25)', padding: 8, borderRadius: 4, maxHeight: 180, overflowY: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
                       {candidateModalData.candidate?.target?.map((t: any) => t.text).join('\n') || '（未生成内容）'}
                     </div>
                   </div>

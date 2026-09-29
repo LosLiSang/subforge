@@ -408,7 +408,7 @@ export function SettingsPage() {
             </div>
 
             {/* 1. Default ASR Engine */}
-            <div style={{ padding: '16px 18px', background: 'rgba(0, 0, 0, 0.25)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)' }}>
+            <div className="card-inset" style={{ padding: '16px 18px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                 <Cpu size={16} style={{ color: 'var(--accent-base)' }} />
                 <h4 style={{ fontSize: 14, fontWeight: 600 }}>默认 ASR 语音转写引擎</h4>
@@ -428,12 +428,11 @@ export function SettingsPage() {
                     <button
                       key={p.key}
                       type="button"
-                      className={`btn btn-sm ${defaultAsrProvider === p.key ? 'btn-primary' : 'btn-ghost'}`}
+                      className={`option-card-btn ${defaultAsrProvider === p.key ? 'active' : ''}`}
                       onClick={() => setDefaultAsrProvider(p.key as any)}
-                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', height: 'auto' }}
                     >
                       <span style={{ fontWeight: 600 }}>{p.label}</span>
-                      <span style={{ fontSize: 10.5, opacity: 0.75 }}>{p.desc}</span>
+                      <span style={{ fontSize: 10.5, opacity: defaultAsrProvider === p.key ? 0.9 : 0.75 }}>{p.desc}</span>
                     </button>
                   ))}
                 </div>
@@ -524,7 +523,7 @@ export function SettingsPage() {
             </div>
 
             {/* 2. Default LLM Translation Engine */}
-            <div style={{ padding: '16px 18px', background: 'rgba(0, 0, 0, 0.25)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)' }}>
+            <div className="card-inset" style={{ padding: '16px 18px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                 <Globe size={16} style={{ color: 'var(--accent-base)' }} />
                 <h4 style={{ fontSize: 14, fontWeight: 600 }}>默认 LLM 双语翻译模型</h4>
@@ -931,7 +930,7 @@ export function SettingsPage() {
             <div
               style={{
                 padding: '12px 14px',
-                background: 'rgba(0, 0, 0, 0.25)',
+                background: 'var(--bg-card-inset)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)',
                 display: 'flex',
@@ -970,7 +969,7 @@ export function SettingsPage() {
             <div
               style={{
                 padding: '12px 14px',
-                background: 'rgba(0, 0, 0, 0.25)',
+                background: 'var(--bg-card-inset)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)',
                 display: 'flex',
@@ -1009,7 +1008,7 @@ export function SettingsPage() {
             <div
               style={{
                 padding: '12px 14px',
-                background: 'rgba(0, 0, 0, 0.25)',
+                background: 'var(--bg-card-inset)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)',
                 display: 'flex',
@@ -1048,7 +1047,7 @@ export function SettingsPage() {
             <div
               style={{
                 padding: '12px 14px',
-                background: 'rgba(0, 0, 0, 0.25)',
+                background: 'var(--bg-card-inset)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)',
                 display: 'flex',
@@ -1087,7 +1086,7 @@ export function SettingsPage() {
             <div
               style={{
                 padding: '12px 14px',
-                background: 'rgba(0, 0, 0, 0.25)',
+                background: 'var(--bg-card-inset)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)',
                 display: 'flex',
@@ -1127,7 +1126,7 @@ export function SettingsPage() {
           <div
             style={{
               padding: '14px 16px',
-              background: 'rgba(0, 0, 0, 0.35)',
+              background: 'var(--bg-card-inset)',
               border: '1px solid var(--border-subtle)',
               borderRadius: 'var(--radius-sm)',
             }}
@@ -1351,7 +1350,7 @@ export function SettingsPage() {
             <div
               style={{
                 padding: '16px 20px',
-                background: 'rgba(0, 0, 0, 0.4)',
+                background: 'var(--bg-card-inset)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-md)',
                 display: 'flex',

@@ -7,6 +7,7 @@
   --bg-surface: #121822;
   --bg-card: rgba(18, 24, 34, 0.75);
   --bg-card-hover: rgba(28, 36, 50, 0.85);
+  --bg-card-inset: rgba(0, 0, 0, 0.25);
   --bg-input: rgba(13, 17, 24, 0.8);
   --bg-overlay: rgba(4, 7, 12, 0.8);
 
@@ -44,6 +45,7 @@
   --bg-surface: #ffffff;
   --bg-card: rgba(255, 255, 255, 0.9);
   --bg-card-hover: #f8fafc;
+  --bg-card-inset: #f8fafc;
   --bg-input: #ffffff;
   --bg-overlay: rgba(15, 23, 42, 0.5);
 
@@ -52,7 +54,7 @@
 
   --fg-main: #0f172a;
   --fg-dim: #475569;
-  --fg-faint: #94a3b8;
+  --fg-faint: #64748b;
 
   --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
@@ -1024,6 +1026,35 @@ button, input, select, textarea {
   height: 32px;
   padding: 0;
   border-radius: 50%;
+}
+
+.option-card-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 8px 14px;
+  height: auto;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--fg-dim);
+  text-align: left;
+}
+.option-card-btn:hover {
+  border-color: var(--accent-border);
+  color: var(--fg-main);
+  background: var(--bg-card-hover);
+}
+.option-card-btn.active {
+  background: var(--accent-base);
+  border-color: var(--accent-base);
+  color: #fff;
+}
+.option-card-btn.active:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 .input-field {
@@ -2201,6 +2232,11 @@ button, input, select, textarea {
   border-radius: var(--radius-lg);
   padding: 20px;
 }
+.card-inset {
+  background: var(--bg-card-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -2394,6 +2430,7 @@ html[data-corner-global="sharp"] {
 
 /* 1. 卡片与面板 (Cards & Panels) */
 html[data-corner-cards="sharp"] .card-panel,
+html[data-corner-cards="sharp"] .card-inset,
 html[data-corner-cards="sharp"] .stat-card,
 html[data-corner-cards="sharp"] .modal-content,
 html[data-corner-cards="sharp"] .tasks-table-container,
@@ -2414,6 +2451,7 @@ html[data-corner-buttons="sharp"] .btn,
 html[data-corner-buttons="sharp"] .btn-primary,
 html[data-corner-buttons="sharp"] .btn-ghost,
 html[data-corner-buttons="sharp"] .btn-danger,
+html[data-corner-buttons="sharp"] .option-card-btn,
 html[data-corner-buttons="sharp"] .btn-sm,
 html[data-corner-buttons="sharp"] .action-btn,
 html[data-corner-buttons="sharp"] .theme-toggle,
@@ -2441,6 +2479,7 @@ html[data-corner-library="sharp"] .library-filter-pill {
 
 /* 4. 系统设置 (Settings) */
 html[data-corner-settings="sharp"] .settings-page-container .card-panel,
+html[data-corner-settings="sharp"] .settings-page-container .card-inset,
 html[data-corner-settings="sharp"] .settings-tab-btn,
 html[data-corner-settings="sharp"] .settings-page-container .input-field,
 html[data-corner-settings="sharp"] .settings-page-container .select-field,

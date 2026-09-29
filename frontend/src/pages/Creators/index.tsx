@@ -142,31 +142,32 @@ export function CreatorsPage() {
       <div className="vas-header-row">
         <div className="vas-title-group">
           <h1 className="vas-main-title">{pageTitle}</h1>
-          <div className="vas-type-tabs">
-            <button
-              type="button"
-              className={`vas-tab ${kindFilter === 'voice_actor' ? 'active' : ''}`}
-              onClick={() => setKindFilter('voice_actor')}
-            >
-              <Mic size={14} style={{ marginRight: 4 }} />
-              声优 (All vas)
-            </button>
-            <button
-              type="button"
-              className={`vas-tab ${kindFilter === 'circle' ? 'active' : ''}`}
-              onClick={() => setKindFilter('circle')}
-            >
-              <Users size={14} style={{ marginRight: 4 }} />
-              社团 (Circles)
-            </button>
-            <button
-              type="button"
-              className={`vas-tab ${kindFilter === 'all' ? 'active' : ''}`}
-              onClick={() => setKindFilter('all')}
-            >
-              全部 ({creators.length})
-            </button>
-          </div>
+        </div>
+
+        <div className="vas-type-tabs">
+          <button
+            type="button"
+            className={`vas-tab ${kindFilter === 'voice_actor' ? 'active' : ''}`}
+            onClick={() => setKindFilter('voice_actor')}
+          >
+            <Mic size={14} style={{ marginRight: 4 }} />
+            声优 (All vas)
+          </button>
+          <button
+            type="button"
+            className={`vas-tab ${kindFilter === 'circle' ? 'active' : ''}`}
+            onClick={() => setKindFilter('circle')}
+          >
+            <Users size={14} style={{ marginRight: 4 }} />
+            社团 (Circles)
+          </button>
+          <button
+            type="button"
+            className={`vas-tab ${kindFilter === 'all' ? 'active' : ''}`}
+            onClick={() => setKindFilter('all')}
+          >
+            全部 ({creators.length})
+          </button>
         </div>
 
         <div className="vas-header-actions">
@@ -288,39 +289,6 @@ export function CreatorsPage() {
           ))}
         </div>
       )}
-
-      {/* Mascot & Bottom hash code matching Image #2 */}
-      <div className="vas-mascot-container">
-        <div className="vas-typing-cat" title="正在努力为您敲键盘统计创作者呢~">
-          <svg width="78" height="58" viewBox="0 0 120 90" fill="none" xmlns="http://www.w3.org/2000/svg">
-            {/* Cat ears */}
-            <polygon points="26,38 34,14 48,34" fill="#ffffff" stroke="#1e293b" strokeWidth="2.5" strokeLinejoin="round" />
-            <polygon points="32,32 36,20 44,30" fill="#fbcfe8" />
-            <polygon points="72,34 86,14 94,38" fill="#ffffff" stroke="#1e293b" strokeWidth="2.5" strokeLinejoin="round" />
-            <polygon points="76,30 84,20 88,32" fill="#fbcfe8" />
-            {/* Cat head */}
-            <ellipse cx="60" cy="46" rx="38" ry="30" fill="#ffffff" stroke="#1e293b" strokeWidth="2.5" />
-            {/* Eyes */}
-            <path d="M44 45 Q50 49 54 45" stroke="#1e293b" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-            <path d="M66 45 Q70 49 76 45" stroke="#1e293b" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-            {/* Nose & Mouth */}
-            <ellipse cx="60" cy="51" rx="2" ry="1.5" fill="#f472b6" />
-            <path d="M57 53 Q60 56 63 53" stroke="#1e293b" strokeWidth="1.8" strokeLinecap="round" fill="none" />
-            {/* Whiskers */}
-            <line x1="22" y1="46" x2="35" y2="48" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" />
-            <line x1="22" y1="52" x2="35" y2="51" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" />
-            <line x1="85" y1="48" x2="98" y2="46" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" />
-            <line x1="85" y1="51" x2="98" y2="52" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" />
-            {/* Laptop */}
-            <polygon points="18,86 102,86 94,68 26,68" fill="#cbd5e1" stroke="#1e293b" strokeWidth="2" />
-            <line x1="32" y1="74" x2="88" y2="74" stroke="#64748b" strokeWidth="1.5" strokeDasharray="3 2" />
-            <line x1="28" y1="80" x2="92" y2="80" stroke="#64748b" strokeWidth="1.5" strokeDasharray="3 2" />
-            {/* Paws */}
-            <ellipse cx="40" cy="72" rx="7" ry="5" fill="#ffffff" stroke="#1e293b" strokeWidth="1.8" />
-            <ellipse cx="80" cy="70" rx="7" ry="5" fill="#ffffff" stroke="#1e293b" strokeWidth="1.8" />
-          </svg>
-        </div>
-      </div>
 
       <div className="vas-footer-id">
         <span>7fc0f47a</span>

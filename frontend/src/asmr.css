@@ -230,17 +230,15 @@
   gap: 16px;
 }
 .vas-header-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
   gap: 14px;
 }
 .vas-title-group {
   display: flex;
   align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
+  min-width: 0;
 }
 .vas-main-title {
   font-size: 24px;
@@ -248,9 +246,12 @@
   color: var(--fg-main);
   margin: 0;
   letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 .vas-type-tabs {
   display: flex;
+  justify-content: center;
+  justify-self: center;
   gap: 4px;
   background: rgba(255, 255, 255, 0.05);
   padding: 3px;
@@ -271,6 +272,7 @@
   align-items: center;
   font-weight: 500;
   transition: all 0.15s ease;
+  white-space: nowrap;
 }
 .vas-tab.active {
   background: var(--accent-base);
@@ -280,7 +282,21 @@
 .vas-header-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  justify-self: end;
   gap: 8px;
+}
+@media (max-width: 768px) {
+  .vas-header-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+  .vas-type-tabs {
+    order: 3;
+    width: 100%;
+    margin-top: 4px;
+  }
 }
 .vas-search-bar-wrap {
   position: relative;
@@ -445,19 +461,6 @@
   font-size: 12px;
   color: var(--fg-faint);
   font-family: var(--font-mono);
-}
-.vas-mascot-container {
-  display: flex;
-  justify-content: flex-end;
-  padding-right: 32px;
-  margin-top: -24px;
-  margin-bottom: 8px;
-  pointer-events: none;
-}
-.vas-typing-cat {
-  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.15));
-  opacity: 0.92;
-  transition: transform 0.2s ease;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

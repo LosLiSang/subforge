@@ -172,12 +172,16 @@ class UiSettingsStore:
         core = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
         keys = (*core, "asr_profile_id", "merge_profile_id")
         normalized = {key: str(snapshot.get(key, "")).strip() for key in keys}
+        if not normalized["whisper_model"]:
+            normalized["whisper_model"] = "large-v3"
+        if not normalized["scene"]:
+            normalized["scene"] = "asmr"
+        if not normalized["asr_provider"]:
+            normalized["asr_provider"] = "local"
         try:
             normalized["asr_chunk_seconds"] = max(10, min(3600, int(snapshot.get("asr_chunk_seconds", 60))))
         except (TypeError, ValueError):
             normalized["asr_chunk_seconds"] = 60
-        if not all(normalized[key] for key in core):
-            raise ValueError("default processing snapshot is incomplete")
         data = self._load()
         data["default_processing_snapshot"] = normalized
         self._save(data)
@@ -219,3 +223,69 @@ class UiSettingsStore:
         if os.environ.get("SUBFORGE_NO_AUTH", "").lower() in {"1", "true", "yes"}:
             return True
         return bool(self._load().get("no_auth", False))
+
+    def set_no_auth(self, enabled: bool) -> None:
+        data = self._load()
+        data["no_auth"] = bool(enabled)
+        self._save(data)
+
+    def get_default_cover_info(self) -> dict:
+        data = self._load()
+        info = data.get("default_cover", {})
+        if not isinstance(info, dict):
+            info = {}
+        custom_file = self.get_default_cover_file()
+        return {
+            "mode": info.get("mode", "preset"),
+            "preset": info.get("preset", "default"),
+            "url": info.get("url", ""),
+            "has_custom_file": custom_file is not None and custom_file.is_file(),
+        }
+
+    def set_default_cover_config(self, mode: str, preset: str = "default", url: str = "") -> None:
+        data = self._load()
+        data["default_cover"] = {
+            "mode": mode,
+            "preset": preset,
+            "url": url,
+        }
+        self._save(data)
+
+    def get_default_cover_file(self) -> Path | None:
+        for ext in (".jpg", ".png", ".webp"):
+            candidate = self.path.parent / f"default_cover{ext}"
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def save_default_cover_file(self, content: bytes, filename: str) -> Path:
+        ext = ".jpg"
+        lower = filename.lower()
+        if lower.endswith(".png"):
+            ext = ".png"
+        elif lower.endswith(".webp"):
+            ext = ".webp"
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        for old_ext in (".jpg", ".png", ".webp"):
+            (self.path.parent / f"default_cover{old_ext}").unlink(missing_ok=True)
+        dest = self.path.parent / f"default_cover{ext}"
+        dest.write_bytes(content)
+        data = self._load()
+        data["default_cover"] = {
+            "mode": "upload",
+            "preset": "default",
+            "url": "",
+        }
+        self._save(data)
+        return dest
+
+    def reset_default_cover(self) -> None:
+        for old_ext in (".jpg", ".png", ".webp"):
+            (self.path.parent / f"default_cover{old_ext}").unlink(missing_ok=True)
+        data = self._load()
+        data["default_cover"] = {
+            "mode": "preset",
+            "preset": "default",
+            "url": "",
+        }
+        self._save(data)

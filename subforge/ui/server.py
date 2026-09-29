@@ -19,15 +19,18 @@ def run_ui(
     port: int = 8765,
     open_browser: bool = True,
     token: str | None = None,
-    no_auth: bool = False,
+    no_auth: bool = True,
 ) -> None:
     """Run the localhost-only Library UI."""
     if host != "127.0.0.1":
         raise ValueError("SubForge UI only supports 127.0.0.1")
     settings = UiSettingsStore(DEFAULT_CONFIG_DIR / "ui.json")
-    effective_no_auth = no_auth or settings.get_no_auth()
     effective_token = token or settings.get_fixed_token()
     is_fixed = bool(token or settings.get_fixed_token())
+    if effective_token and not no_auth:
+        effective_no_auth = False
+    else:
+        effective_no_auth = no_auth or settings.get_no_auth()
     startup_token = "" if effective_no_auth else (effective_token or secrets.token_urlsafe(32))
     app = create_app(UiDependencies(
         settings=settings,

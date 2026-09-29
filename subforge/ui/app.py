@@ -22,7 +22,9 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from datetime import timezone
 from pathlib import Path
+import time
 from urllib.parse import parse_qs, urlencode
 from uuid import uuid4
 
@@ -63,7 +65,7 @@ from subforge.translate.context import translate_all
 from subforge.translate.llm_client import translate_batch
 from subforge.translate.srt_io import read_srt
 from subforge.ui.checks import check_model_configuration, test_profile_connection
-from subforge.ui.covers import cover_for_item, covers_dir, replace_cover
+from subforge.ui.covers import cover_for_item, covers_dir, replace_cover, get_preset_cover_svg, is_valid_image_bytes, parse_multipart_data
 from subforge.ui.model_profiles import ModelProfileStore
 from subforge.ui.picker import FilePicker
 from subforge.ui.settings import UiSettingsStore
@@ -241,8 +243,8 @@ def _resolve_segment_window(library, track_id: str, payload: dict):
     raw_end_idx = str(payload.get("end_index", "")).strip()
     has_indices = raw_start_idx.isdigit() and raw_end_idx.isdigit()
 
-    start_time_raw = str(payload.get("start_time", "")).strip()
-    end_time_raw = str(payload.get("end_time", "")).strip()
+    start_time_raw = str(payload.get("start_time") or payload.get("start_seconds") or "").strip()
+    end_time_raw = str(payload.get("end_time") or payload.get("end_seconds") or "").strip()
     duration = _audio_duration_seconds(library.track_media_path(track_id))
 
     if has_indices:
@@ -309,11 +311,36 @@ def _profile_label(profiles, profile_id) -> str | None:
     return f"{profile.name} · {profile.model}"
 
 
+def _health_file_path(deps) -> Path:
+    return deps.profiles.path.parent / "profile-health.json"
+
+
+def _load_profile_health(deps) -> dict[str, dict]:
+    path = _health_file_path(deps)
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _save_one_profile_health(deps, profile_id: str, health: dict) -> None:
+    current = _load_profile_health(deps)
+    current[profile_id] = health
+    path = _health_file_path(deps)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _segment_range_display(library, task) -> str | None:
     """片段任务处理的时间范围文案；旧 payload 回退到按字幕序号解析。"""
     payload = task.payload or {}
-    start = payload.get("target_start", payload.get("start_time"))
-    end = payload.get("target_end", payload.get("end_time"))
+    start = payload.get("target_start", payload.get("start_time", payload.get("start_seconds")))
+    end = payload.get("target_end", payload.get("end_time", payload.get("end_seconds")))
     if start in (None, "") or end in (None, ""):
         try:
             _document, start, end, _source, _target = _resolve_segment_window(library, task.track_id, payload)
@@ -331,7 +358,7 @@ def _task_display_context(library, deps, task) -> dict:
     payload = task.payload or {}
     profiles = deps.profiles
     if task.kind == "segment_reprocess":
-        processor_name = str(payload.get("processor", "whisper"))
+        processor_name = str(payload.get("processor") or ("gemini" if payload.get("asr_profile_id") else "whisper"))
         asr_profile = _profile_label(profiles, payload.get("asr_profile_id"))
         if processor_name == "gemini":
             asr_display = asr_profile or "音频模型（配置缺失）"
@@ -378,7 +405,9 @@ async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, pay
     except SegmentProcessingError as exc:
         raise RuntimeError(str(exc)) from exc
 
-    processor_name = value("processor", "whisper")
+    processor_name = value("processor", "")
+    if not processor_name:
+        processor_name = "gemini" if payload.get("asr_profile_id") else "whisper"
     processing_mode = value("processing_mode", "transcribe_then_translate")
     duration = max(0.0, target_end - target_start)
     if processor_name == "gemini":
@@ -540,6 +569,24 @@ def create_app(deps: UiDependencies) -> Starlette:
                     samesite="strict",
                     secure=False,
                 )
+                return response
+            if _should_serve_spa(request):
+                response = FileResponse(FRONTEND_DIST / "index.html")
+            else:
+                library = runtime.open_active_library()
+                if library is None:
+                    response = runtime.render("setup.html", request)
+                else:
+                    response = runtime.render(
+                        "library.html",
+                        request,
+                        library=library,
+                        items=library.list_items(),
+                        creators=library.list_creators(),
+                        profiles=deps.profiles.list_public(),
+                        default_cover_info=deps.settings.get_default_cover_info(),
+                        default_cover_file_configured=bool(deps.settings.get_default_cover_file()),
+                    )
                 return response
         if _session_csrf(request, runtime) is None:
             return Response("Authentication required", status_code=401)
@@ -1372,8 +1419,23 @@ def create_app(deps: UiDependencies) -> Starlette:
             profile = deps.profiles.resolve(request.path_params["profile_id"])
         except KeyError:
             return Response("Not found", status_code=404)
+        t0 = time.perf_counter()
         ok, message = await test_profile_connection(profile)
-        return JSONResponse({"ok": ok, "message": message})
+        latency_ms = round((time.perf_counter() - t0) * 1000)
+        health_data = {
+            "status": "online" if ok else "failed",
+            "latency_ms": latency_ms,
+            "tested_at": datetime.now(timezone.utc).isoformat(),
+            "message": message,
+        }
+        _save_one_profile_health(deps, profile.profile_id, health_data)
+        return JSONResponse({
+            "ok": ok,
+            "message": message,
+            "latency_ms": latency_ms,
+            "status": health_data["status"],
+            "tested_at": health_data["tested_at"],
+        })
 
     async def check_model(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
@@ -1454,7 +1516,12 @@ def create_app(deps: UiDependencies) -> Starlette:
             except KeyError:
                 return Response("Not found", status_code=404)
             except ValueError as exc:
-                return JSONResponse({"error": str(exc)}, status_code=400)
+                msg = str(exc)
+                if "associated with Library Items" in msg:
+                    msg = "该创作者仍有关联作品，无法直接删除。请先在作品中移除该关联。"
+                return JSONResponse({"error": msg}, status_code=400)
+            if "application/json" in request.headers.get("accept", "").lower():
+                return JSONResponse({"ok": True, "action": action})
             return RedirectResponse("/creators", status_code=303)
         creators = library.list_creators()
         items = library.list_items()
@@ -1490,6 +1557,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                     "api_key": form.get("api_key", ""),
                     "protocol": form.get("protocol", "openai_compatible"),
                     "capabilities": capabilities,
+                    "reasoning_effort": form.get("reasoning_effort", ""),
                     "max_request_seconds": int(form.get("max_request_seconds", "60") or 60),
                     "temperature": float(form.get("temperature", "0") or 0),
                     "transcribe_prompt": form.get("transcribe_prompt", ""),
@@ -1565,6 +1633,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         error = await _authorize_write(request, runtime)
         if error:
             return error
+        t0 = time.perf_counter()
         try:
             profile = deps.profiles.resolve(request.path_params["profile_id"])
             gemini_profile = gemini_profile_from_mapping(asdict(profile))
@@ -1589,11 +1658,39 @@ def create_app(deps: UiDependencies) -> Starlette:
             )
             if not result.strip():
                 raise ValueError("模型返回空内容")
+            latency_ms = round((time.perf_counter() - t0) * 1000)
+            health_data = {
+                "status": "online",
+                "latency_ms": latency_ms,
+                "tested_at": datetime.now(timezone.utc).isoformat(),
+                "message": f"音频输入成功 · {profile.model}",
+            }
+            _save_one_profile_health(deps, profile.profile_id, health_data)
+            return JSONResponse({
+                "ok": True,
+                "message": health_data["message"],
+                "latency_ms": latency_ms,
+                "status": "online",
+                "tested_at": health_data["tested_at"],
+            })
         except KeyError:
             return Response("Not found", status_code=404)
-        except (ValueError, RuntimeError) as exc:
-            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
-        return JSONResponse({"ok": True, "message": f"音频输入成功 · {profile.model}"})
+        except (ValueError, RuntimeError, Exception) as exc:
+            latency_ms = round((time.perf_counter() - t0) * 1000)
+            health_data = {
+                "status": "failed",
+                "latency_ms": latency_ms,
+                "tested_at": datetime.now(timezone.utc).isoformat(),
+                "message": str(exc),
+            }
+            _save_one_profile_health(deps, request.path_params["profile_id"], health_data)
+            return JSONResponse({
+                "ok": False,
+                "message": str(exc),
+                "latency_ms": latency_ms,
+                "status": "failed",
+                "tested_at": health_data["tested_at"],
+            }, status_code=400)
 
     async def process_item(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
@@ -1613,6 +1710,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             _record_full_process_selection(library, selected_snapshot)
             scope = form.get("scope", "incomplete")
             mode = form.get("mode", "continue")
+            enqueued_count = 0
             for track in item.tracks:
                 latest = runtime.tasks.latest_for_track(track.track_id)
                 if latest and latest.status in {"queued", "running"}:
@@ -1622,14 +1720,17 @@ def create_app(deps: UiDependencies) -> Starlette:
                 if track.status == "playable" and mode == "continue":
                     continue
                 snapshot = selected_snapshot
-                if mode == "continue" and latest and latest.config_snapshot:
+                if mode == "continue" and latest and latest.config_snapshot and not form.get("asr_profile_id") and not form.get("llm_profile_id"):
                     snapshot = ProcessingSnapshot(**latest.config_snapshot)
                     deps.profiles.resolve(snapshot.llm_profile_id)
                 await runtime.tasks.enqueue(track.track_id, snapshot, mode=mode)
+                enqueued_count += 1
         except KeyError:
             return JSONResponse({"error": "LLM profile not found"}, status_code=404)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"ok": True, "item_id": item.item_id, "enqueued_count": enqueued_count})
         return RedirectResponse(f"/items/{item.item_id}", status_code=303)
 
     async def rename_track(request: Request) -> Response:
@@ -1671,6 +1772,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             library.trash_track(track_id)
         except KeyError:
             return Response("Not found", status_code=404)
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"ok": True, "track_id": track_id})
         return RedirectResponse(f"/items/{item.item_id}", status_code=303)
 
     async def start_task(request: Request) -> Response:
@@ -1681,10 +1784,13 @@ def create_app(deps: UiDependencies) -> Starlette:
         if library is None or runtime.tasks is None:
             return JSONResponse({"error": "Library is not configured"}, status_code=409)
         form = await _read_form(request)
-        mode = form.get("mode", "continue")
+        mode = form.get("mode", "")
+        if not mode:
+            item, track = library.get_track(request.path_params["track_id"])
+            mode = "from_scratch" if track.status in ("completed", "playable") else "continue"
         previous = runtime.tasks.latest_for_track(request.path_params["track_id"])
         try:
-            if mode == "continue" and previous and previous.config_snapshot:
+            if mode == "continue" and previous and previous.config_snapshot and not form.get("asr_profile_id") and not form.get("llm_profile_id"):
                 snapshot = ProcessingSnapshot(**previous.config_snapshot)
             else:
                 snapshot = _snapshot_from_form(deps, form)
@@ -1698,9 +1804,13 @@ def create_app(deps: UiDependencies) -> Starlette:
             return JSONResponse({"error": "Track or LLM profile not found"}, status_code=404)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"ok": True, "task_id": task.task_id})
         return RedirectResponse(f"/items/{library.get_track(task.track_id)[0].item_id}", status_code=303)
 
     async def player_page(request: Request) -> Response:
+        if "application/json" in request.headers.get("accept", ""):
+            return await api_track_detail(request)
         if _should_serve_spa(request):
             return FileResponse(FRONTEND_DIST / "index.html")
         library = runtime.open_active_library()
@@ -1764,6 +1874,89 @@ def create_app(deps: UiDependencies) -> Starlette:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return RedirectResponse(f"/items/{item_id}", status_code=303)
 
+    async def get_default_cover_endpoint(request: Request) -> Response:
+        cover_info = deps.settings.get_default_cover_info()
+        mode = cover_info.get("mode", "preset")
+        if mode == "upload" and cover_info.get("has_custom_file"):
+            custom_file = deps.settings.get_default_cover_file()
+            if custom_file and custom_file.is_file():
+                mt = mimetypes.guess_type(custom_file.name)[0] or "image/jpeg"
+                return FileResponse(custom_file, media_type=mt, headers={"Cache-Control": "public, max-age=3600"})
+        if mode == "url" and cover_info.get("url"):
+            return RedirectResponse(cover_info["url"], status_code=307)
+        preset = cover_info.get("preset", "default")
+        svg_content = get_preset_cover_svg(preset)
+        return Response(svg_content, media_type="image/svg+xml; charset=utf-8", headers={"Cache-Control": "public, max-age=3600"})
+
+    async def api_set_default_cover(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        content_type = request.headers.get("content-type", "")
+        file_bytes = b""
+        filename = "cover.png"
+        mode = "upload"
+        preset = "default"
+        url = ""
+        if "multipart/form-data" in content_type:
+            try:
+                form = await request.form()
+                file = form.get("file")
+                if file and hasattr(file, "read"):
+                    file_bytes = await file.read()
+                    filename = getattr(file, "filename", "cover.png") or "cover.png"
+                mode = str(form.get("mode", "upload"))
+                preset = str(form.get("preset", "default"))
+                url = str(form.get("url", ""))
+            except Exception:
+                body = await request.body()
+                fb, fn, fields = parse_multipart_data(body, content_type)
+                if fb:
+                    file_bytes = fb
+                    filename = fn
+                mode = fields.get("mode", mode)
+                preset = fields.get("preset", preset)
+                url = fields.get("url", url)
+        elif "application/json" in content_type:
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            mode = body.get("mode", "preset")
+            preset = body.get("preset", "default")
+            url = body.get("url", "")
+            data_b64 = body.get("data", "")
+            if data_b64:
+                import base64
+                if "," in data_b64:
+                    data_b64 = data_b64.split(",", 1)[1]
+                try:
+                    file_bytes = base64.b64decode(data_b64)
+                    filename = body.get("filename", "cover.png")
+                except Exception:
+                    file_bytes = b""
+        else:
+            body = await request.body()
+            if body and is_valid_image_bytes(body):
+                file_bytes = body
+                filename = request.headers.get("x-filename", "cover.png")
+                mode = "upload"
+
+        if file_bytes:
+            if not is_valid_image_bytes(file_bytes, filename):
+                return JSONResponse({"error": "上传的文件不是有效的图片格式 (JPG / PNG / WebP)"}, status_code=400)
+            deps.settings.save_default_cover_file(file_bytes, filename)
+        elif mode:
+            deps.settings.set_default_cover_config(mode=mode, preset=preset, url=url)
+        return JSONResponse({"ok": True, "default_cover": deps.settings.get_default_cover_info()})
+
+    async def api_reset_default_cover(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        deps.settings.reset_default_cover()
+        return JSONResponse({"ok": True, "default_cover": deps.settings.get_default_cover_info()})
+
     async def item_cover(request: Request) -> Response:
         """按需提取并返回作品第一音轨的内嵌封面（缓存到 .subforge/covers/）。"""
         library = runtime.open_active_library()
@@ -1783,7 +1976,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         if cover_path is not None and item.cover_source is None:
             library.set_cover_source(item.item_id, "embedded")
         if cover_path is None:
-            return Response("Not found", status_code=404)
+            return await get_default_cover_endpoint(request)
         stat = cover_path.stat()
         etag = f'"{int(stat.st_mtime)}-{stat.st_size}"'
         if request.headers.get("if-none-match") == etag:
@@ -1865,6 +2058,53 @@ def create_app(deps: UiDependencies) -> Starlette:
             "source": read_lang(track.source_language),
             "target": read_lang(track.target_language),
         })
+
+    async def api_track_detail(request: Request) -> Response:
+        """返回单轨详情与所属作品元数据，供前端 PlayerPage / 歌词页就绪播放。"""
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse({"error": "Library not initialized"}, status_code=404)
+        track_id = request.path_params["track_id"]
+        try:
+            item, track = library.get_track(track_id)
+        except KeyError:
+            return JSONResponse({"error": "Track not found"}, status_code=404)
+        try:
+            has_media = library.track_media_path(track.track_id).is_file()
+        except Exception:
+            has_media = False
+        try:
+            has_source_sub = library.track_subtitle_path(track.track_id, track.source_language).is_file()
+            has_target_sub = library.track_subtitle_path(track.track_id, track.target_language).is_file()
+        except Exception:
+            has_source_sub = False
+            has_target_sub = False
+        dur_seconds = _track_duration_seconds(library, track)
+        dur_label = _track_duration_label(library, track)
+        track_payload = {
+            "track_id": track.track_id,
+            "item_id": item.item_id,
+            "title": track.media.split("/")[-1],
+            "duration": dur_seconds,
+            "duration_label": dur_label,
+            "size": track.size,
+            "status": track.status,
+            "source_language": track.source_language,
+            "target_language": track.target_language,
+            "has_media": has_media,
+            "has_source_sub": has_source_sub,
+            "has_target_sub": has_target_sub,
+        }
+        item_payload = {
+            "item_id": item.item_id,
+            "title": item.title,
+            "original_title": getattr(item, "original_title", None),
+            "rj_code": item.rj_code,
+            "kind": item.kind.value if hasattr(item.kind, "value") else str(item.kind),
+            "tags": _extract_item_tags(item),
+            "cover_url": f"/covers/{item.item_id}",
+        }
+        return JSONResponse({"track": track_payload, "item": item_payload})
 
     def _revision_payload(document) -> dict:
         def serialize(entries):
@@ -2290,6 +2530,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             library.trash_item(item.item_id)
         except KeyError:
             return Response("Not found", status_code=404)
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"ok": True, "item_id": item.item_id})
         return RedirectResponse("/", status_code=303)
 
     async def api_list_items(request: Request) -> Response:
@@ -2299,7 +2541,8 @@ def create_app(deps: UiDependencies) -> Starlette:
                 "items": [], "total": 0, "page": 1, "limit": 12, "total_pages": 0,
                 "all_tags": [], "all_creators": [],
             })
-        selected_creator_ids = request.query_params.getlist("creator")
+
+        selected_creator_ids = request.query_params.getlist("creator") or request.query_params.getlist("creator_id")
         creators = library.list_creators()
         creator_by_id = {creator.creator_id: creator for creator in creators}
         items = library.list_items(selected_creator_ids if selected_creator_ids else None)
@@ -2316,7 +2559,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             ]
         tag_filter = request.query_params.get("tag", "").strip()
         if tag_filter:
-            items = [item for item in items if tag_filter in getattr(item, "tags", [])]
+            items = [item for item in items if tag_filter in _extract_item_tags(item)]
         sort_by = request.query_params.get("sort", "created_desc")
         if sort_by == "created_asc":
             items.sort(key=lambda x: x.created_at or "")
@@ -2348,7 +2591,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         item_size_by_id = await asyncio.to_thread(_item_directory_sizes, library.root, page_items)
 
         all_items = library.list_items()
-        all_tags = sorted({tag for it in all_items for tag in getattr(it, "tags", []) if tag})
+        all_tags = sorted({tag for it in all_items for tag in _extract_item_tags(it) if tag})
         creator_item_counts: dict[str, int] = {}
         for it in all_items:
             for cid in it.creator_ids:
@@ -2377,7 +2620,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                 "rj_code": it.rj_code,
                 "release_date": getattr(it, "release_date", None),
                 "kind": it.kind.value if hasattr(it.kind, "value") else str(it.kind),
-                "tags": list(getattr(it, "tags", [])),
+                "tags": _extract_item_tags(it),
                 "creator_ids": list(it.creator_ids),
                 "creators": [
                     {
@@ -2486,7 +2729,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             "rj_code": item.rj_code,
             "release_date": getattr(item, "release_date", None),
             "kind": item.kind.value if hasattr(item.kind, "value") else str(item.kind),
-            "tags": list(getattr(item, "tags", [])),
+            "tags": _extract_item_tags(item),
             "creator_ids": list(item.creator_ids),
             "creators": [
                 {
@@ -2524,6 +2767,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                 "llm_profiles": deps.profiles.list_public(),
                 "cached_models": list(cached),
                 "default_model": "medium",
+                "default_processing": deps.settings.get_default_processing_snapshot() or deps.settings.get_last_processing_snapshot() or {},
             },
         })
 
@@ -2532,6 +2776,16 @@ def create_app(deps: UiDependencies) -> Starlette:
         subtitle_tasks = []
         if library and runtime.tasks:
             for task in runtime.tasks.list_tasks(limit=100):
+                track_title = None
+                item_title = None
+                item_id = None
+                try:
+                    item, track = library.get_track(task.track_id)
+                    item_title = item.title
+                    item_id = item.item_id
+                    track_title = Path(track.media).name
+                except Exception:
+                    pass
                 ctx = _task_display_context(library, deps, task)
                 subtitle_tasks.append({
                     "task_id": task.task_id,
@@ -2544,10 +2798,13 @@ def create_app(deps: UiDependencies) -> Starlette:
                     "error": getattr(task, "error", None) or (task.message if task.status == "failed" else None),
                     "created_at": getattr(task, "created_at", None),
                     "updated_at": getattr(task, "finished_at", None) or getattr(task, "started_at", None) or getattr(task, "created_at", None),
-                    "track_title": ctx.get("track_title"),
-                    "item_title": ctx.get("item_title"),
-                    "item_id": ctx.get("item_id"),
-                    "profile_label": ctx.get("profile_label"),
+                    "track_title": track_title or ctx.get("track_title"),
+                    "item_title": item_title or ctx.get("item_title"),
+                    "item_id": item_id or ctx.get("item_id"),
+                    "profile_label": ctx.get("profile_label") or ctx.get("asr") or ctx.get("translation"),
+                    "range": ctx.get("range"),
+                    "asr": ctx.get("asr"),
+                    "translation": ctx.get("translation"),
                 })
         download_tasks = []
         for tid, task in runtime.imports.items():
@@ -2565,19 +2822,126 @@ def create_app(deps: UiDependencies) -> Starlette:
         return JSONResponse({
             "subtitle_tasks": subtitle_tasks,
             "download_tasks": download_tasks,
+            "tasks": subtitle_tasks,
+            "downloads": download_tasks,
         })
+
+    async def api_tasks(request: Request) -> Response:
+        library = runtime.open_active_library()
+        subtitle_tasks = []
+        if library and runtime.tasks:
+            for task in runtime.tasks.list_tasks(limit=100):
+                track_title = None
+                item_title = None
+                item_id = None
+                try:
+                    item, track = library.get_track(task.track_id)
+                    item_title = item.title
+                    item_id = item.item_id
+                    track_title = Path(track.media).name
+                except Exception:
+                    pass
+                ctx = _task_display_context(library, deps, task)
+                subtitle_tasks.append({
+                    "task_id": task.task_id,
+                    "track_id": task.track_id,
+                    "kind": task.kind,
+                    "status": task.status,
+                    "stage": task.stage,
+                    "progress": task.progress,
+                    "message": task.message,
+                    "error": getattr(task, "error", None) or (task.message if task.status == "failed" else None),
+                    "created_at": getattr(task, "created_at", None),
+                    "updated_at": getattr(task, "finished_at", None) or getattr(task, "started_at", None) or getattr(task, "created_at", None),
+                    "track_title": track_title or ctx.get("track_title"),
+                    "item_title": item_title or ctx.get("item_title"),
+                    "item_id": item_id or ctx.get("item_id"),
+                    "profile_label": ctx.get("profile_label") or ctx.get("asr") or ctx.get("translation"),
+                    "range": ctx.get("range"),
+                    "asr": ctx.get("asr"),
+                    "translation": ctx.get("translation"),
+                })
+        return JSONResponse({"tasks": subtitle_tasks, "subtitle_tasks": subtitle_tasks})
+
+    async def api_retranscribe_task(request: Request) -> Response:
+        """重新转写任务：从头开始重新执行指定音轨的 ASR 语音识别与双语翻译流水线。"""
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        if runtime.tasks is None:
+            return JSONResponse({"error": "TaskManager not initialized"}, status_code=404)
+        task_id = request.path_params.get("task_id")
+        try:
+            old_task = runtime.tasks.get_task(task_id)
+        except KeyError:
+            return JSONResponse({"error": "Task not found"}, status_code=404)
+        
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse({"error": "Library not configured"}, status_code=409)
+        
+        track_id = old_task.track_id
+        snapshot = None
+        if getattr(old_task, "config_snapshot", None):
+            snapshot = ProcessingSnapshot(**old_task.config_snapshot)
+        else:
+            default_snap = deps.settings.get_last_processing_snapshot() or deps.settings.get_default_processing_snapshot()
+            if default_snap:
+                snapshot = ProcessingSnapshot(**default_snap)
+        if snapshot is None:
+            return JSONResponse({"error": "缺少转写配置"}, status_code=400)
+        
+        new_task = await runtime.tasks.enqueue(track_id, snapshot, mode="from_scratch")
+        return JSONResponse({"ok": True, "task_id": new_task.task_id, "track_id": track_id})
 
     async def api_profiles(request: Request) -> Response:
         models_dir = deps.settings.get_models_dir()
         cached = cached_models(models_dir, ["base", "small", "medium", "large-v3"])
+        library = runtime.open_active_library()
+        usage_map: dict[str, dict] = {}
+        if library:
+            with library._db_lock, library._db:
+                cur = library._db.cursor()
+                cur.execute(
+                    """SELECT option_key, SUM(selected_count) as total_count, MAX(last_selected_at) as last_used
+                       FROM selection_history
+                       GROUP BY option_key"""
+                )
+                for row in cur.fetchall():
+                    usage_map[row["option_key"]] = {
+                        "selected_count": row["total_count"],
+                        "last_used_at": row["last_used"],
+                    }
+
+        health_map = _load_profile_health(deps)
+
+        def _enrich(items: list[dict]) -> list[dict]:
+            enriched = []
+            for item in items:
+                it = dict(item)
+                pid = it.get("profile_id", "")
+                it["health"] = health_map.get(pid, {
+                    "status": "untested",
+                    "latency_ms": None,
+                    "tested_at": None,
+                    "message": "尚未检测",
+                })
+                it["usage"] = usage_map.get(pid, {
+                    "selected_count": 0,
+                    "last_used_at": None,
+                })
+                enriched.append(it)
+            return enriched
+
         return JSONResponse({
-            "asr_profiles": deps.profiles.list_for("transcribe"),
-            "llm_profiles": deps.profiles.list_public(),
+            "asr_profiles": _enrich(deps.profiles.list_for("transcribe")),
+            "llm_profiles": _enrich(deps.profiles.list_public()),
             "cached_models": list(cached),
         })
 
     async def api_get_settings(request: Request) -> Response:
         active_lib = deps.settings.get_active_library()
+        default_processing = deps.settings.get_default_processing_snapshot() or deps.settings.get_last_processing_snapshot() or {}
         return JSONResponse({
             "library_root": str(active_lib) if active_lib else None,
             "proxy_url": deps.settings.get_proxy_url(),
@@ -2588,6 +2952,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             "no_auth": deps.no_auth or deps.settings.get_no_auth(),
             "has_deepgram_key": bool(deps.settings.get_deepgram_api_key()),
             "has_fixed_token": deps.is_fixed_token or bool(deps.settings.get_fixed_token()),
+            "default_cover": deps.settings.get_default_cover_info(),
+            "default_processing": default_processing,
         })
 
     async def api_stats(request: Request) -> Response:
@@ -2638,6 +3004,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/api/library/items", api_list_items),
         Route("/api/items", api_list_items),
         Route("/api/items/{item_id}", api_item_detail),
+        Route("/api/items/{item_id}/trash", trash_item, methods=["POST"]),
         Route("/api/downloads/history", api_downloads_history),
         Route("/api/profiles", api_profiles),
         Route("/api/settings", api_get_settings),
@@ -2645,6 +3012,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/api/creators/list", api_creators),
         Route("/api/tracks/{track_id}/media", track_media),
         Route("/api/tracks/{track_id}/subtitles", track_subtitles_both),
+        Route("/api/tracks/{track_id}", api_track_detail),
+        Route("/api/tracks/{track_id}/play", api_track_detail),
         Route("/api/tracks/{track_id}/subtitles/edit", edit_track_subtitle, methods=["POST"]),
         Route("/api/tracks/{track_id}/subtitles/structure", change_track_subtitle_structure, methods=["POST"]),
         Route("/api/tracks/{track_id}/subtitles/restore/{snapshot}", restore_track_subtitles, methods=["POST"]),
@@ -2663,20 +3032,30 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/api/selections/{selection_id}/image", selected_image_preview),
         Route("/picker/directory", choose_directory, methods=["POST"]),
         Route("/items/import", import_item, methods=["POST"]),
+        Route("/library/import", import_item, methods=["POST"]),
+        Route("/api/library/import", import_item, methods=["POST"]),
         Route("/api/video-info", video_info, methods=["GET", "POST"]),
         Route("/api/url-info", video_info, methods=["GET", "POST"]),
         Route("/items/import-url", import_item_url, methods=["POST"]),
+        Route("/library/import-url", import_item_url, methods=["POST"]),
+        Route("/api/library/import-url", import_item_url, methods=["POST"]),
         Route("/api/import-folders/preview", preview_folder_import, methods=["POST"]),
         Route("/items/import-folder", import_folder, methods=["POST"]),
+        Route("/library/import-folder", import_folder, methods=["POST"]),
+        Route("/api/library/import-folder", import_folder, methods=["POST"]),
         Route("/api/imports/{task_id}", import_status),
         Route("/api/imports/{task_id}/cancel", cancel_import, methods=["POST"]),
         Route("/api/creators", create_creator_api, methods=["POST"]),
         Route("/items/{item_id}", item_detail),
         Route("/items/{item_id}/edit", edit_item, methods=["POST"]),
+        Route("/api/items/{item_id}/process", process_item, methods=["POST"]),
         Route("/items/{item_id}/process", process_item, methods=["POST"]),
         Route("/items/{item_id}/trash", trash_item, methods=["POST"]),
         Route("/items/{item_id}/cover", replace_item_cover, methods=["POST"]),
+        Route("/covers/default", get_default_cover_endpoint),
         Route("/covers/{item_id}", item_cover),
+        Route("/api/settings/default-cover", api_set_default_cover, methods=["POST"]),
+        Route("/api/settings/default-cover/reset", api_reset_default_cover, methods=["POST"]),
         Route("/settings", settings_page, methods=["GET", "POST"]),
         Route("/settings/deepgram/delete-key", delete_deepgram_key, methods=["POST"]),
         Route("/stats", stats_page),
@@ -2707,6 +3086,15 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/tasks/{task_id}/candidate/discard", discard_track_segment, methods=["POST"]),
         Route("/tracks/{track_id}/subtitles/{language}", track_subtitles),
         Route("/tracks/{track_id}/subtitles/{language}/download", download_track_subtitle),
+        Route("/api/tasks", api_tasks),
+        Route("/api/tasks/{task_id}/retry", retry_task, methods=["POST"]),
+        Route("/api/tasks/{task_id}/cancel", cancel_task, methods=["POST"]),
+        Route("/api/tasks/{task_id}/delete", delete_task, methods=["POST"]),
+        Route("/api/tasks/{task_id}/reprocess", api_retranscribe_task, methods=["POST"]),
+        Route("/api/tasks/{task_id}/retranscribe", api_retranscribe_task, methods=["POST"]),
+        Route("/api/tasks/{task_id}/candidate", segment_candidate),
+        Route("/api/tasks/{task_id}/candidate/confirm", confirm_track_segment, methods=["POST"]),
+        Route("/api/tasks/{task_id}/candidate/discard", discard_track_segment, methods=["POST"]),
         Route("/api/tasks/status", task_statuses),
         Route("/tasks/{task_id}", task_status),
         Route("/tasks/{task_id}/events", task_events),
@@ -2758,9 +3146,11 @@ def create_app(deps: UiDependencies) -> Starlette:
             if deps.no_auth:
                 session_id = secrets.token_urlsafe(32)
                 runtime.sessions[session_id] = secrets.token_urlsafe(32)
-                cookies = dict(request.cookies)
-                cookies["subforge_session"] = session_id
-                request._cookies = cookies
+                headers = [(k, v) for k, v in request.scope.get("headers", []) if k.lower() != b"cookie"]
+                headers.append((b"cookie", f"subforge_session={session_id}".encode("latin-1")))
+                request.scope["headers"] = headers
+                if hasattr(request, "_cookies"):
+                    delattr(request, "_cookies")
                 response = await call_next(request)
                 response.set_cookie(
                     "subforge_session",
@@ -2814,10 +3204,16 @@ def _record_segment_selection(library, payload: dict) -> None:
 
 def _snapshot_from_form(deps: UiDependencies, form: dict) -> ProcessingSnapshot:
     """从处理表单构建快照，并校验所选模型能力。"""
-    profile = deps.profiles.resolve(form.get("llm_profile_id", ""))
+    llm_profile_id = form.get("llm_profile_id", "")
+    if not llm_profile_id:
+        default_snap = deps.settings.get_default_processing_snapshot() or deps.settings.get_last_processing_snapshot() or {}
+        llm_profile_id = str(default_snap.get("llm_profile_id", ""))
+    profile = deps.profiles.resolve(llm_profile_id)
     if not profile.supports("translate"):
         raise ValueError("所选翻译配置不支持文本翻译")
-    asr_provider = form.get("asr_provider", "local")
+    asr_provider = form.get("asr_provider", "")
+    if not asr_provider:
+        asr_provider = "model" if form.get("asr_profile_id") else "local"
     if asr_provider not in {"local", "deepgram", "model"}:
         raise ValueError("不支持的 ASR 提供商")
     asr_profile_id = ""
@@ -2924,9 +3320,14 @@ async def _authorize_write(request: Request, runtime: UiRuntime) -> Response | N
         return JSONResponse({"error": "invalid origin"}, status_code=403)
     supplied = request.headers.get("x-csrf-token")
     if not supplied:
-        body = (await request.body()).decode("utf-8")
-        supplied = parse_qs(body, keep_blank_values=True).get("csrf_token", [""])[-1]
+        try:
+            body = (await request.body()).decode("utf-8", errors="ignore")
+            supplied = parse_qs(body, keep_blank_values=True).get("csrf_token", [""])[-1]
+        except Exception:
+            supplied = ""
     if not supplied or not hmac.compare_digest(supplied, csrf):
+        if runtime.deps.no_auth:
+            return None
         return JSONResponse({"error": "invalid csrf token"}, status_code=403)
     return None
 
@@ -3629,6 +4030,21 @@ async def _read_form_values(request: Request) -> dict[str, list[str]]:
             return res
         except Exception:
             return {}
+    if "multipart/form-data" in ct:
+        try:
+            body_bytes = await request.body()
+            import email
+            msg = email.message_from_bytes(b"Content-Type: " + ct.encode("latin1", errors="replace") + b"\r\n\r\n" + body_bytes)
+            res: dict[str, list[str]] = {}
+            for part in msg.walk():
+                name = part.get_param("name", header="content-disposition")
+                if name:
+                    payload = part.get_payload(decode=True)
+                    if payload is not None:
+                        res.setdefault(name, []).append(payload.decode("utf-8", errors="replace"))
+            return res
+        except Exception:
+            pass
     body = (await request.body()).decode("utf-8")
     return parse_qs(body, keep_blank_values=True)
 
@@ -3682,6 +4098,33 @@ def _item_directory_sizes(root: Path, items: list) -> dict[str, int]:
         except OSError:
             sizes[item.item_id] = sum(track.size for track in item.tracks)
     return sizes
+
+
+def _extract_item_tags(it) -> list[str]:
+    explicit = list(getattr(it, "tags", []))
+    if explicit:
+        return explicit
+    tags = set()
+    title_text = str(getattr(it, "title", "") or "")
+    for m in re.findall(r'#([^\s#\[\]【】_]+)', title_text):
+        if len(m) > 1 and not m.startswith('202'):
+            tags.add(m)
+    for m in re.findall(r'[\[【]([^\]】]+)[\]】]', title_text):
+        for part in re.split(r'[\s,，、/]+', m):
+            clean = part.lstrip('#').strip()
+            if 1 < len(clean) < 15 and not clean.startswith('202') and not clean.startswith('BV'):
+                tags.add(clean)
+    common_keywords = [
+        '耳舐め', '舔耳', 'ASMR', 'KU100', '囁き', '催眠', '安眠',
+        'マッサージ', '采耳', '甘サド', '双耳', '耳かき', '吐息', 'バイノーラル'
+    ]
+    for kw in common_keywords:
+        if kw.lower() in title_text.lower():
+            tags.add(kw)
+    rj = getattr(it, "rj_code", None)
+    if rj:
+        tags.discard(rj)
+    return sorted(tags)
 
 
 def _track_duration_seconds(library: LibraryStore, track) -> float:

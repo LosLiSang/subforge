@@ -66,14 +66,58 @@ export async function apiRequest<T = any>(
 
 export const api = {
   get: <T = any>(url: string) => apiRequest<T>(url, { method: 'GET' }),
-  post: <T = any>(url: string, body?: any) =>
-    apiRequest<T>(url, {
+  post: <T = any>(url: string, body?: any) => {
+    const isForm = body instanceof FormData || body instanceof URLSearchParams
+    return apiRequest<T>(url, {
       method: 'POST',
-      body: body ? JSON.stringify(body) : undefined,
-    }),
-  delete: <T = any>(url: string, body?: any) =>
-    apiRequest<T>(url, {
+      body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
+    })
+  },
+  postForm: <T = any>(url: string, form: FormData | Record<string, any>) => {
+    let body: any
+    let isMultipart = false
+    if (form instanceof FormData) {
+      let hasFile = false
+      for (const value of form.values()) {
+        if (typeof value !== 'string') {
+          hasFile = true
+          break
+        }
+      }
+      if (hasFile) {
+        body = form
+        isMultipart = true
+      } else {
+        const params = new URLSearchParams()
+        for (const [k, v] of form.entries()) {
+          params.append(k, String(v))
+        }
+        body = params.toString()
+      }
+    } else {
+      const params = new URLSearchParams()
+      Object.entries(form).forEach(([k, v]) => {
+        if (v !== undefined && v !== null) {
+          if (Array.isArray(v)) {
+            v.forEach((item) => params.append(k, String(item)))
+          } else {
+            params.append(k, String(v))
+          }
+        }
+      })
+      body = params.toString()
+    }
+    return apiRequest<T>(url, {
       method: 'POST',
-      body: body ? JSON.stringify(body) : undefined,
-    }),
+      headers: isMultipart ? undefined : { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    })
+  },
+  delete: <T = any>(url: string, body?: any) => {
+    const isForm = body instanceof FormData || body instanceof URLSearchParams
+    return apiRequest<T>(url, {
+      method: 'POST',
+      body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
+    })
+  },
 }

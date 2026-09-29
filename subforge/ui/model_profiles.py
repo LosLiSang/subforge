@@ -45,6 +45,7 @@ class ModelProfile:
     api_key: str = ""
     protocol: str = "openai_compatible"
     capabilities: list[str] = field(default_factory=lambda: ["translate"])
+    reasoning_effort: str = ""
     # 单个 ASR 请求允许的最大音频时长（秒），超过即分片。
     max_request_seconds: int = 60
     temperature: float = 0.0
@@ -181,6 +182,7 @@ class ModelProfileStore:
         profile_id: str | None = None,
         protocol: str = "openai_compatible",
         capabilities=None,
+        reasoning_effort: str = "",
         max_request_seconds: int = 60,
         temperature: float = 0.0,
         transcribe_prompt: str = "",
@@ -214,6 +216,7 @@ class ModelProfileStore:
             existing.api_key = api_key
         existing.protocol = protocol
         existing.capabilities = normalized_caps
+        existing.reasoning_effort = reasoning_effort.strip()
         existing.max_request_seconds = int(max_request_seconds)
         try:
             existing.temperature = max(0.0, min(2.0, float(temperature)))

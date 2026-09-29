@@ -1,5 +1,7 @@
 import React from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { FontProvider } from './context/FontContext'
+import { CornerProvider } from './context/CornerContext'
 import { PlayerProvider } from './context/PlayerContext'
 import { TaskProvider } from './context/TaskContext'
 import { Shell } from './components/layout/Shell'
@@ -16,6 +18,8 @@ import { AboutPage } from './pages/About'
 function App() {
   return (
     <BrowserRouter>
+      <FontProvider>
+      <CornerProvider>
       <TaskProvider>
         <PlayerProvider>
           <Routes>
@@ -35,6 +39,8 @@ function App() {
           </Routes>
         </PlayerProvider>
       </TaskProvider>
+      </CornerProvider>
+      </FontProvider>
     </BrowserRouter>
   )
 }

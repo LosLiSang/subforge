@@ -1,7 +1,6 @@
 import React, { useState } from 'react'
-import { X, FolderOpen, CheckCircle } from 'lucide-react'
+import { X, Folder, Upload } from 'lucide-react'
 import { api } from '../../api/client'
-import type { ImportFolderPreviewResponse } from '../../types'
 
 interface ImportFolderModalProps {
   isOpen: boolean
@@ -11,128 +10,115 @@ interface ImportFolderModalProps {
 
 export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderModalProps) {
   const [selectionId, setSelectionId] = useState('')
-  const [preview, setPreview] = useState<ImportFolderPreviewResponse | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [error, setError] = useState('')
+  const [folderName, setFolderName] = useState('')
+  const [autoProcess, setAutoProcess] = useState(true)
+  const [picking, setPicking] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   if (!isOpen) return null
 
   const handlePickFolder = async () => {
-    setError('')
-    setLoading(true)
+    setPicking(true)
+    setError(null)
     try {
-      const res = await api.post<{ selection_id: string }>('/picker/media-folder')
-      setSelectionId(res.selection_id)
-      // Preview
-      const previewRes = await api.post<ImportFolderPreviewResponse>(
-        '/api/import-folders/preview',
-        { selection_id: res.selection_id }
-      )
-      setPreview(previewRes)
+      const res = await api.post<{ selection_id?: string; name?: string; cancelled?: boolean }>('/picker/folder')
+      if (res.selection_id) {
+        setSelectionId(res.selection_id)
+        setFolderName(res.name || '已选文件夹')
+      }
     } catch (err: any) {
-      setError(err.message || '扫描文件夹失败')
+      setError('选择文件夹失败: ' + (err.message || '未知错误'))
     } finally {
-      setLoading(false)
+      setPicking(false)
     }
   }
 
-  const handleImport = async () => {
-    if (!selectionId) return
-    setImporting(true)
-    setError('')
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectionId) {
+      setError('请先选择要导入的作品文件夹')
+      return
+    }
+    setSubmitting(true)
+    setError(null)
     try {
-      await api.post('/items/import-folder', { selection_id: selectionId })
+      const formData = new FormData()
+      formData.append('selection_id', selectionId)
+      if (autoProcess) formData.append('auto_process', 'on')
+
+      await api.postForm('/items/import-folder', formData)
       onSuccess()
       onClose()
     } catch (err: any) {
-      setError(err.message || '批量导入失败')
+      setError('批量导入失败: ' + (err.message || '未知错误'))
     } finally {
-      setImporting(false)
+      setSubmitting(false)
     }
   }
 
   return (
-    <div className="modal-backdrop">
-      <div className="modal-dialog max-w-2xl">
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h3 className="modal-title flex items-center gap-2">
-            <FolderOpen size={18} className="text-accent" />
-            导入作品文件夹
-          </h3>
-          <button type="button" onClick={onClose} className="modal-close-btn">
+          <h3 className="modal-title">扫描/导入作品目录</h3>
+          <button type="button" className="btn btn-ghost btn-circle" onClick={onClose}>
             <X size={18} />
           </button>
         </div>
 
-        <div className="modal-body space-y-4">
-          {error && <div className="p-3 bg-red-900/30 border border-red-800 rounded text-red-300 text-sm">{error}</div>}
+        <form onSubmit={handleSubmit}>
+          <div className="modal-body">
+            {error && (
+              <div style={{ color: 'var(--color-red)', background: 'rgba(239, 68, 68, 0.1)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+                {error}
+              </div>
+            )}
 
-          {!preview && (
-            <div className="text-center py-8 space-y-4">
-              <p className="text-fg-dim text-sm">
-                选择包含音频文件的作品文件夹（例如带有 RJ 号的同人音声目录），系统将自动分组解析。
-              </p>
-              <button
-                type="button"
-                onClick={handlePickFolder}
-                disabled={loading}
-                className="btn btn-primary"
-              >
-                {loading ? '正在扫描...' : '选择本地目录'}
-              </button>
-            </div>
-          )}
+            <p style={{ fontSize: 13, color: 'var(--fg-dim)' }}>
+              选择包含同人音声作品的目录。系统会自动扫描子目录中的音频文件、封面并尝试提取 RJ 号建立作品索引。
+            </p>
 
-          {preview && (
-            <div className="space-y-4">
-              <div className="flex justify-between items-center bg-panel-2 p-3 rounded border border-line">
-                <div>
-                  <div className="font-semibold text-sm">{preview.folder_name}</div>
-                  <div className="text-xs text-fg-dim">发现 {preview.groups.length} 个作品分组</div>
-                </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                本地文件夹 *
+              </label>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                 <button
                   type="button"
+                  className="btn"
                   onClick={handlePickFolder}
-                  className="btn btn-secondary text-xs"
+                  disabled={picking}
                 >
-                  重新选择
+                  <Folder size={15} />
+                  {picking ? '正在选择…' : '选择文件夹'}
                 </button>
-              </div>
-
-              <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
-                {preview.groups.map((group, idx) => (
-                  <div key={idx} className="p-3 bg-panel border border-line rounded">
-                    <div className="flex items-center gap-2 font-medium text-sm">
-                      <CheckCircle size={16} className="text-green-400" />
-                      <span>{group.title}</span>
-                      {group.rj_code && (
-                        <span className="badge badge-accent">{group.rj_code}</span>
-                      )}
-                    </div>
-                    <div className="text-xs text-fg-dim mt-1 pl-6">
-                      包含 {group.tracks?.length || 0} 个音轨
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="modal-footer">
-                <button type="button" onClick={onClose} className="btn btn-secondary">
-                  取消
-                </button>
-                <button
-                  type="button"
-                  onClick={handleImport}
-                  disabled={importing}
-                  className="btn btn-primary"
-                >
-                  {importing ? '正在批量导入...' : `确认导入 (${preview.groups.length} 个作品)`}
-                </button>
+                <span style={{ fontSize: 13, color: folderName ? 'var(--fg-main)' : 'var(--fg-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {folderName || '未选择目录'}
+                </span>
               </div>
             </div>
-          )}
-        </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, marginTop: 4 }}>
+              <input
+                type="checkbox"
+                checked={autoProcess}
+                onChange={(e) => setAutoProcess(e.target.checked)}
+              />
+              导入完成后自动将所有音轨加入转写与翻译任务队列
+            </label>
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={submitting}>
+              取消
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={submitting || !selectionId}>
+              <Upload size={14} />
+              {submitting ? '正在扫描导入…' : '开始导入'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   )

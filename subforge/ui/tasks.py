@@ -556,6 +556,7 @@ class TaskManager:
             "jobs_dir": str(resume_dir),
             "llm_base_url": profile.base_url if profile else None,
             "llm_model": profile.model if profile else None,
+            "llm_reasoning_effort": getattr(profile, "reasoning_effort", "") if profile else "",
             "llm_proxy_url": profile.proxy_url if profile else "",
             "llm_verify_tls": profile.verify_tls if profile else True,
             "llm_ca_bundle": profile.ca_bundle if profile else "",

@@ -208,6 +208,29 @@ def test_react_fastapi_full_e2e(tmp_path):
     assert "download_tasks" in history_data
     artifact_records["history_api_verified"] = True
 
+    # 10. Creators creation and deletion roundtrip verification
+    new_cr_res = client.post(
+        "/api/creators",
+        data={"name": "独立测试声优B", "kind": "voice_actor"},
+        headers=headers,
+    )
+    assert new_cr_res.status_code == 201
+    new_cr_id = new_cr_res.json()["creator_id"]
+
+    # Delete creator via /creators
+    del_res = client.post(
+        "/creators",
+        data={"action": "delete", "creator_id": new_cr_id},
+        headers={**headers, "Accept": "application/json"},
+    )
+    assert del_res.status_code == 200
+    assert del_res.json().get("ok") is True
+    artifact_records["creator_deletion_verified"] = True
+
+    # Verify deleted from list
+    creators_after = client.get("/api/creators/list").json()
+    assert not any(c["creator_id"] == new_cr_id for c in creators_after)
+
     # 10. Generate verifiable artifact
     artifacts_dir = REPO_ROOT / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)

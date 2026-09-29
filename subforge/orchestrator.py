@@ -137,6 +137,7 @@ def _merge_fn_from_profile(profile: dict | None):
         llm_api_key=str(profile.get("api_key", "")),
         llm_base_url=str(profile.get("base_url", "")),
         llm_model=str(profile.get("model", "")),
+        llm_reasoning_effort=str(profile.get("reasoning_effort", "")),
         llm_proxy_url=str(profile.get("proxy_url", "")),
         llm_verify_tls=bool(profile.get("verify_tls", True)),
         llm_ca_bundle=str(profile.get("ca_bundle", "")),

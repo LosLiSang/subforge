@@ -1,234 +1,401 @@
-import { useEffect, useState } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import {
+  Plus,
+  Search,
+  Mic,
+  Users,
+  Edit2,
+  Trash2,
+  X,
+  Settings,
+  ArrowUpDown,
+} from 'lucide-react'
 import { api } from '../../api/client'
 import type { Creator } from '../../types'
 
 export function CreatorsPage() {
   const [creators, setCreators] = useState<Creator[]>([])
-  const [search, setSearch] = useState('')
-  const [currentKind, setCurrentKind] = useState<'all' | 'voice_actor' | 'circle'>('all')
   const [loading, setLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [kindFilter, setKindFilter] = useState<'voice_actor' | 'circle' | 'all'>('voice_actor')
+  const [sortBy, setSortBy] = useState<'count_desc' | 'name_asc'>('count_desc')
+  const [editMode, setEditMode] = useState(false)
 
-  // Add creator state
-  const [addOpen, setAddOpen] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newKind, setNewKind] = useState<'voice_actor' | 'circle'>('voice_actor')
+  // Add creator modal
+  const [modalOpen, setModalOpen] = useState(false)
+  const [formName, setFormName] = useState('')
+  const [formKind, setFormKind] = useState<'voice_actor' | 'circle'>('voice_actor')
+  const [submitting, setSubmitting] = useState(false)
 
-  // Rename state
+  // Rename modal
   const [renameTarget, setRenameTarget] = useState<Creator | null>(null)
-  const [editName, setEditName] = useState('')
+  const [renameName, setRenameName] = useState('')
+  const [submittingRename, setSubmittingRename] = useState(false)
 
-  const fetchCreators = async () => {
+  const loadCreators = async () => {
     setLoading(true)
     try {
-      const data = await api.get<Creator[]>('/api/creators/list')
-      setCreators(data || [])
+      const res = await api.get<any>('/api/creators/list')
+      const list = Array.isArray(res) ? res : (res.creators || res.all_creators || [])
+      setCreators(list)
     } catch (err) {
-      console.error('Failed to fetch creators:', err)
+      console.error('Failed to load creators:', err)
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchCreators()
+    loadCreators()
   }, [])
 
-  const handleAddCreator = async (e: React.FormEvent) => {
+  const filtered = useMemo(() => {
+    let list = creators.filter((c) => {
+      if (kindFilter !== 'all' && c.kind !== kindFilter) return false
+      if (searchQuery.trim() && !c.name.toLowerCase().includes(searchQuery.toLowerCase())) return false
+      return true
+    })
+
+    return list.sort((a, b) => {
+      if (sortBy === 'count_desc') {
+        const countA = a.item_count || 0
+        const countB = b.item_count || 0
+        if (countB !== countA) return countB - countA
+        return a.name.localeCompare(b.name, 'ja')
+      } else {
+        return a.name.localeCompare(b.name, 'ja')
+      }
+    })
+  }, [creators, kindFilter, searchQuery, sortBy])
+
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newName.trim()) return
+    if (!formName.trim()) return
+    setSubmitting(true)
     try {
-      await api.post('/api/creators', {
-        name: newName.trim(),
-        kind: newKind,
-      })
-      setAddOpen(false)
-      setNewName('')
-      fetchCreators()
+      const formData = new FormData()
+      formData.append('name', formName.trim())
+      formData.append('kind', formKind)
+      await api.postForm('/api/creators', formData)
+      setModalOpen(false)
+      setFormName('')
+      loadCreators()
     } catch (err: any) {
       alert('添加创作者失败: ' + err.message)
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  const handleRename = async (e: React.FormEvent) => {
+  const handleRenameSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!renameTarget || !editName.trim()) return
+    if (!renameTarget || !renameName.trim()) return
+    setSubmittingRename(true)
     try {
-      await api.post('/creators', {
-        action: 'rename',
-        creator_id: renameTarget.creator_id,
-        name: editName.trim(),
-      })
+      const formData = new FormData()
+      formData.append('action', 'rename')
+      formData.append('creator_id', renameTarget.creator_id)
+      formData.append('name', renameName.trim())
+      await api.postForm('/creators', formData)
       setRenameTarget(null)
-      fetchCreators()
+      loadCreators()
     } catch (err: any) {
       alert('重命名失败: ' + err.message)
+    } finally {
+      setSubmittingRename(false)
     }
   }
 
-  const handleDelete = async (creator: Creator) => {
-    if (!confirm(`确定要删除创作者 "${creator.name}" 吗？`)) return
+  const handleDeleteCreator = async (e: React.MouseEvent, c: Creator) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!window.confirm(`确定要删除创作者「${c.name}」吗？`)) return
     try {
-      await api.post('/creators', {
-        action: 'delete',
-        creator_id: creator.creator_id,
-      })
-      fetchCreators()
+      const formData = new FormData()
+      formData.append('action', 'delete')
+      formData.append('creator_id', c.creator_id)
+      await api.postForm('/creators', formData)
+      loadCreators()
     } catch (err: any) {
-      alert('删除失败: ' + err.message)
+      alert('删除创作者失败: ' + (err.message || '该创作者可能仍有关联作品'))
     }
   }
 
-  const filtered = creators.filter((c) => {
-    if (currentKind !== 'all' && c.kind !== currentKind) return false
-    if (search.trim() && !c.name.toLowerCase().includes(search.trim().toLowerCase())) return false
-    return true
-  })
+  const pageTitle =
+    kindFilter === 'voice_actor'
+      ? 'All vas'
+      : kindFilter === 'circle'
+      ? 'All circles'
+      : 'All creators'
+
+  const searchPlaceholder =
+    kindFilter === 'voice_actor'
+      ? 'Search for a vas...'
+      : kindFilter === 'circle'
+      ? 'Search for a circle...'
+      : 'Search creators...'
 
   return (
-    <>
-      <div className="page-head">
-        <div>
-          <h1>创作者</h1>
-          <p className="page-sub">
-            分类管理音声声优 (CV) 与社团组织，维护作品关联关系
-          </p>
+    <div className="vas-page-container">
+      {/* Top Header & Title matching asmr.one / Kikoeru */}
+      <div className="vas-header-row">
+        <div className="vas-title-group">
+          <h1 className="vas-main-title">{pageTitle}</h1>
+          <div className="vas-type-tabs">
+            <button
+              type="button"
+              className={`vas-tab ${kindFilter === 'voice_actor' ? 'active' : ''}`}
+              onClick={() => setKindFilter('voice_actor')}
+            >
+              <Mic size={14} style={{ marginRight: 4 }} />
+              声优 (All vas)
+            </button>
+            <button
+              type="button"
+              className={`vas-tab ${kindFilter === 'circle' ? 'active' : ''}`}
+              onClick={() => setKindFilter('circle')}
+            >
+              <Users size={14} style={{ marginRight: 4 }} />
+              社团 (Circles)
+            </button>
+            <button
+              type="button"
+              className={`vas-tab ${kindFilter === 'all' ? 'active' : ''}`}
+              onClick={() => setKindFilter('all')}
+            >
+              全部 ({creators.length})
+            </button>
+          </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setAddOpen(true)}
-          className="primary"
-        >
-          <svg className="btn-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-          添加创作者
-        </button>
+        <div className="vas-header-actions">
+          <button
+            type="button"
+            className={`btn btn-sm ${editMode ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setEditMode(!editMode)}
+            title="切换管理模式（重命名/删除）"
+          >
+            <Settings size={14} />
+            {editMode ? '完成编辑' : '管理'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => {
+              setFormKind(kindFilter === 'circle' ? 'circle' : 'voice_actor')
+              setModalOpen(true)
+            }}
+          >
+            <Plus size={15} />
+            新建创作者
+          </button>
+        </div>
       </div>
 
-      <nav className="tab-bar creator-tabs" role="tablist">
-        <button
-          type="button"
-          onClick={() => setCurrentKind('all')}
-          className={`tab ${currentKind === 'all' ? 'active' : ''}`}
-        >
-          全部 ({creators.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => setCurrentKind('voice_actor')}
-          className={`tab ${currentKind === 'voice_actor' ? 'active' : ''}`}
-        >
-          声优 ({creators.filter((c) => c.kind === 'voice_actor').length})
-        </button>
-        <button
-          type="button"
-          onClick={() => setCurrentKind('circle')}
-          className={`tab ${currentKind === 'circle' ? 'active' : ''}`}
-        >
-          社团 ({creators.filter((c) => c.kind === 'circle').length})
-        </button>
-      </nav>
-
-      <section className="tab-panel active">
+      {/* Wide Search Bar matching asmr.one / Kikoeru Image #2 */}
+      <div className="vas-search-bar-wrap">
         <input
-          type="search"
-          className="creator-list-search"
-          placeholder="搜索创作者…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          style={{ marginBottom: 16 }}
+          type="text"
+          className="vas-search-input"
+          placeholder={searchPlaceholder}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          autoComplete="off"
+          spellCheck="false"
         />
+        <div className="vas-search-icon-wrap">
+          <Search size={18} />
+        </div>
+      </div>
 
-        {loading ? (
-          <p className="empty">加载创作者列表中…</p>
-        ) : filtered.length === 0 ? (
-          <p className="empty">暂无创作者数据。</p>
-        ) : (
-          <div className="creator-list">
-            {filtered.map((c) => (
-              <article
-                key={c.creator_id}
-                className="creator-row"
-                data-creator-name={c.name}
+      {/* Sub toolbar: count info and sorting */}
+      <div className="vas-sub-toolbar">
+        <span className="vas-count-label">
+          共匹配到 <strong>{filtered.length}</strong> 位创作者
+        </span>
+        <div className="vas-sort-group">
+          <ArrowUpDown size={13} style={{ color: 'var(--fg-faint)' }} />
+          <button
+            type="button"
+            className={`vas-sort-btn ${sortBy === 'count_desc' ? 'active' : ''}`}
+            onClick={() => setSortBy('count_desc')}
+          >
+            按作品数排序
+          </button>
+          <span style={{ color: 'var(--border-subtle)' }}>|</span>
+          <button
+            type="button"
+            className={`vas-sort-btn ${sortBy === 'name_asc' ? 'active' : ''}`}
+            onClick={() => setSortBy('name_asc')}
+          >
+            按名称排序
+          </button>
+        </div>
+      </div>
+
+      {/* 4-column Table/Grid matching Image #2 */}
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '80px 0', color: 'var(--fg-dim)' }}>
+          <p>正在载入创作者列表…</p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="vas-empty-state">
+          <p>未找到匹配的创作者</p>
+          <small style={{ color: 'var(--fg-faint)', marginTop: 6 }}>
+            可以尝试更换搜索关键词，或点击右上角新建创作者
+          </small>
+        </div>
+      ) : (
+        <div className="vas-grid-container">
+          {filtered.map((c) => (
+            <div key={c.creator_id} className="vas-cell-item">
+              <Link
+                to={`/?creator=${c.creator_id}`}
+                className="vas-item-link"
+                title={`查看 ${c.name} 的所有作品 (${c.item_count || 0})`}
               >
-                <div className="creator-row-main">
-                  <Link
-                    className="creator-row-link"
-                    to={`/?creator=${c.creator_id}`}
-                    title="在作品库中筛选该创作者"
-                  >
-                    <span className={`creator-tag creator-tag-${c.kind}`}>{c.name}</span>
-                  </Link>
-                  <span>{c.item_count || 0} 部作品</span>
-                </div>
+                <span className="vas-name">{c.name}</span>
+                <span className="vas-badge-count">{c.item_count || 0}</span>
+              </Link>
 
-                <div className="creator-row-menu-wrap" style={{ display: 'flex', gap: 6 }}>
+              {editMode && (
+                <div className="vas-cell-actions">
                   <button
                     type="button"
-                    className="ghost small"
-                    onClick={() => {
+                    className="vas-cell-btn"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
                       setRenameTarget(c)
-                      setEditName(c.name)
+                      setRenameName(c.name)
                     }}
+                    title="重命名"
                   >
-                    修改
+                    <Edit2 size={12} />
                   </button>
                   <button
                     type="button"
-                    className="danger ghost small"
-                    onClick={() => handleDelete(c)}
+                    className="vas-cell-btn vas-cell-btn-delete"
+                    onClick={(e) => handleDeleteCreator(e, c)}
+                    title="删除"
                   >
-                    删除
+                    <Trash2 size={12} />
                   </button>
                 </div>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Mascot & Bottom hash code matching Image #2 */}
+      <div className="vas-mascot-container">
+        <div className="vas-typing-cat" title="正在努力为您敲键盘统计创作者呢~">
+          <svg width="78" height="58" viewBox="0 0 120 90" fill="none" xmlns="http://www.w3.org/2000/svg">
+            {/* Cat ears */}
+            <polygon points="26,38 34,14 48,34" fill="#ffffff" stroke="#1e293b" strokeWidth="2.5" strokeLinejoin="round" />
+            <polygon points="32,32 36,20 44,30" fill="#fbcfe8" />
+            <polygon points="72,34 86,14 94,38" fill="#ffffff" stroke="#1e293b" strokeWidth="2.5" strokeLinejoin="round" />
+            <polygon points="76,30 84,20 88,32" fill="#fbcfe8" />
+            {/* Cat head */}
+            <ellipse cx="60" cy="46" rx="38" ry="30" fill="#ffffff" stroke="#1e293b" strokeWidth="2.5" />
+            {/* Eyes */}
+            <path d="M44 45 Q50 49 54 45" stroke="#1e293b" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+            <path d="M66 45 Q70 49 76 45" stroke="#1e293b" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+            {/* Nose & Mouth */}
+            <ellipse cx="60" cy="51" rx="2" ry="1.5" fill="#f472b6" />
+            <path d="M57 53 Q60 56 63 53" stroke="#1e293b" strokeWidth="1.8" strokeLinecap="round" fill="none" />
+            {/* Whiskers */}
+            <line x1="22" y1="46" x2="35" y2="48" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" />
+            <line x1="22" y1="52" x2="35" y2="51" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" />
+            <line x1="85" y1="48" x2="98" y2="46" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" />
+            <line x1="85" y1="51" x2="98" y2="52" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" />
+            {/* Laptop */}
+            <polygon points="18,86 102,86 94,68 26,68" fill="#cbd5e1" stroke="#1e293b" strokeWidth="2" />
+            <line x1="32" y1="74" x2="88" y2="74" stroke="#64748b" strokeWidth="1.5" strokeDasharray="3 2" />
+            <line x1="28" y1="80" x2="92" y2="80" stroke="#64748b" strokeWidth="1.5" strokeDasharray="3 2" />
+            {/* Paws */}
+            <ellipse cx="40" cy="72" rx="7" ry="5" fill="#ffffff" stroke="#1e293b" strokeWidth="1.8" />
+            <ellipse cx="80" cy="70" rx="7" ry="5" fill="#ffffff" stroke="#1e293b" strokeWidth="1.8" />
+          </svg>
+        </div>
+      </div>
+
+      <div className="vas-footer-id">
+        <span>7fc0f47a</span>
+      </div>
 
       {/* Add Modal */}
-      {addOpen && (
-        <div className="modal-backdrop">
-          <div className="modal-dialog">
+      {modalOpen && (
+        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 className="modal-title">添加创作者</h3>
+              <h3 className="modal-title">新建创作者</h3>
+              <button
+                type="button"
+                className="btn btn-ghost btn-circle"
+                onClick={() => setModalOpen(false)}
+              >
+                <X size={18} />
+              </button>
             </div>
-            <form onSubmit={handleAddCreator} className="modal-body space-y-4">
-              <div className="space-y-1">
-                <label className="text-sm font-medium">创作者名称</label>
-                <input
-                  type="text"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="例: 秋野かえで"
-                  className="input-text"
-                  required
-                />
+
+            <form onSubmit={handleAddSubmit}>
+              <div className="modal-body">
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                    创作者类型
+                  </label>
+                  <div style={{ display: 'flex', gap: 16 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="formKind"
+                        checked={formKind === 'voice_actor'}
+                        onChange={() => setFormKind('voice_actor')}
+                      />
+                      声优 (Voice Actor)
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="formKind"
+                        checked={formKind === 'circle'}
+                        onChange={() => setFormKind('circle')}
+                      />
+                      制作社团 (Circle)
+                    </label>
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                    创作者姓名 / 社团名 *
+                  </label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    placeholder="例如: 陽向葵ゅか, 柚木つばめ, 或 社团名"
+                    required
+                    autoFocus
+                  />
+                </div>
               </div>
-              <div className="space-y-1">
-                <label className="text-sm font-medium">创作者类型</label>
-                <select
-                  value={newKind}
-                  onChange={(e) => setNewKind(e.target.value as any)}
-                  className="input-text"
-                >
-                  <option value="voice_actor">声优 (Voice Actor)</option>
-                  <option value="circle">社团 (Circle)</option>
-                </select>
-              </div>
+
               <div className="modal-footer">
                 <button
                   type="button"
-                  onClick={() => setAddOpen(false)}
-                  className="btn btn-secondary"
+                  className="btn btn-ghost"
+                  onClick={() => setModalOpen(false)}
+                  disabled={submitting}
                 >
                   取消
                 </button>
-                <button type="submit" className="btn btn-primary">
-                  确认添加
+                <button type="submit" className="btn btn-primary" disabled={submitting || !formName.trim()}>
+                  {submitting ? '正在创建…' : '确认创建'}
                 </button>
               </div>
             </form>
@@ -238,38 +405,57 @@ export function CreatorsPage() {
 
       {/* Rename Modal */}
       {renameTarget && (
-        <div className="modal-backdrop">
-          <div className="modal-dialog">
+        <div className="modal-overlay" onClick={() => setRenameTarget(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3 className="modal-title">重命名创作者</h3>
+              <button
+                type="button"
+                className="btn btn-ghost btn-circle"
+                onClick={() => setRenameTarget(null)}
+              >
+                <X size={18} />
+              </button>
             </div>
-            <form onSubmit={handleRename} className="modal-body space-y-4">
-              <div className="space-y-1">
-                <label className="text-sm font-medium">新名称</label>
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="input-text"
-                  required
-                />
+
+            <form onSubmit={handleRenameSubmit}>
+              <div className="modal-body">
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                    新名称 *
+                  </label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    value={renameName}
+                    onChange={(e) => setRenameName(e.target.value)}
+                    required
+                    autoFocus
+                  />
+                </div>
               </div>
+
               <div className="modal-footer">
                 <button
                   type="button"
+                  className="btn btn-ghost"
                   onClick={() => setRenameTarget(null)}
-                  className="ghost"
+                  disabled={submittingRename}
                 >
                   取消
                 </button>
-                <button type="submit" className="primary">
-                  保存名称
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={submittingRename || !renameName.trim()}
+                >
+                  {submittingRename ? '正在保存…' : '保存'}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
-    </>
+    </div>
   )
 }

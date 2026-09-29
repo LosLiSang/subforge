@@ -32,6 +32,7 @@ export interface Item {
   title: string
   original_title?: string | null
   rj_code?: string | null
+  author?: string | null
   release_date?: string | null
   kind: string
   tags: string[]
@@ -67,6 +68,7 @@ export interface ItemDetailData {
     llm_profiles: any[]
     cached_models: string[]
     default_model: string
+    default_processing?: DefaultProcessingSettings
   }
 }
 
@@ -99,6 +101,9 @@ export interface SubtitleTask {
   item_title?: string | null
   item_id?: string | null
   profile_label?: string | null
+  range?: string | null
+  asr?: string | null
+  translation?: string | null
 }
 
 export interface DownloadTask {
@@ -113,6 +118,18 @@ export interface DownloadTask {
   auto_process_status?: string | null
 }
 
+export interface ProfileHealth {
+  status: 'online' | 'failed' | 'untested'
+  latency_ms?: number | null
+  tested_at?: string | null
+  message?: string | null
+}
+
+export interface ProfileUsage {
+  selected_count: number
+  last_used_at?: string | null
+}
+
 export interface ModelProfile {
   profile_id: string
   name: string
@@ -120,12 +137,39 @@ export interface ModelProfile {
   provider?: string
   model?: string
   api_base?: string
+  base_url?: string
+  protocol?: string
+  capabilities?: string[]
+  api_key_masked?: string
+  max_request_seconds?: number
   context_size?: number
   temperature?: number
+  reasoning_effort?: string
   prompt?: string
   has_key?: boolean
   compute_type?: string
   device?: string
+  proxy_url?: string
+  verify_tls?: boolean
+  health?: ProfileHealth
+  usage?: ProfileUsage
+}
+
+export interface DefaultCoverSettings {
+  mode: 'preset' | 'url' | 'upload'
+  preset: 'default' | 'headphones' | 'wave' | 'studio'
+  url: string
+  has_custom_file: boolean
+}
+
+export interface DefaultProcessingSettings {
+  asr_provider: string
+  asr_profile_id?: string
+  whisper_model?: string
+  llm_profile_id?: string
+  merge_profile_id?: string
+  scene?: string
+  asr_chunk_seconds?: number
 }
 
 export interface UiSettings {
@@ -138,6 +182,8 @@ export interface UiSettings {
   no_auth: boolean
   has_deepgram_key: boolean
   has_fixed_token: boolean
+  default_cover?: DefaultCoverSettings
+  default_processing?: DefaultProcessingSettings
 }
 
 export interface StatsData {

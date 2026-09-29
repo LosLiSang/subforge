@@ -1,51 +1,61 @@
-import React, { useState } from 'react'
-import { X, Upload, Folder, Music } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import { X, Upload, Folder, Check } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Creator } from '../../types'
 
 interface ImportModalProps {
   isOpen: boolean
   onClose: () => void
-  onSuccess: () => void
-  creators: Creator[]
+  onSuccess: (itemId?: string) => void
 }
 
-export function ImportModal({ isOpen, onClose, onSuccess, creators }: ImportModalProps) {
-  const [title, setTitle] = useState('')
-  const [originalTitle, setOriginalTitle] = useState('')
-  const [rjCode, setRjCode] = useState('')
-  const [tags, setTags] = useState('')
-  const [selectedCreatorIds, setSelectedCreatorIds] = useState<string[]>([])
+export function ImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
   const [selectionId, setSelectionId] = useState('')
-  const [selectedFileName, setSelectedFileName] = useState('')
-  const [coverSelectionId, setCoverSelectionId] = useState('')
-  const [coverFileName, setCoverFileName] = useState('')
-  const [autoProcess, setAutoProcess] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [filename, setFilename] = useState('')
+  const [title, setTitle] = useState('')
+  const [kind, setKind] = useState<'rj_work' | 'stream'>('rj_work')
+  const [rjCode, setRjCode] = useState('')
+  const [author] = useState('')
+  const [autoProcess, setAutoProcess] = useState(true)
+  const [creators, setCreators] = useState<Creator[]>([])
+  const [selectedCreatorIds, setSelectedCreatorIds] = useState<string[]>([])
+  const [submitting, setSubmitting] = useState(false)
+  const [picking, setPicking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (isOpen) {
+      api.get<any>('/api/creators/list')
+        .then((res) => {
+          const list = Array.isArray(res) ? res : (res.creators || res.all_creators || [])
+          setCreators(list)
+        })
+        .catch(() => {})
+    }
+  }, [isOpen])
 
   if (!isOpen) return null
 
-  const handlePickAudio = async () => {
+  const handlePickFile = async () => {
+    setPicking(true)
+    setError(null)
     try {
-      const res = await api.post<{ selection_id: string; filename: string }>('/picker/audio')
-      setSelectionId(res.selection_id)
-      setSelectedFileName(res.filename)
-      if (!title) {
-        setTitle(res.filename.replace(/\.[^/.]+$/, ''))
+      const res = await api.post<{ selection_id?: string; filename?: string; cancelled?: boolean }>('/picker/audio')
+      if (res.selection_id) {
+        setSelectionId(res.selection_id)
+        const fname = res.filename || '已选择音频'
+        setFilename(fname)
+        if (!title) {
+          const baseName = fname.replace(/\.[^/.]+$/, '')
+          setTitle(baseName)
+          const m = baseName.match(/(RJ\d{6,8})/i)
+          if (m) setRjCode(m[1].toUpperCase())
+        }
       }
     } catch (err: any) {
-      setError(err.message || '选择音频失败')
-    }
-  }
-
-  const handlePickCover = async () => {
-    try {
-      const res = await api.post<{ selection_id: string; filename: string }>('/picker/image')
-      setCoverSelectionId(res.selection_id)
-      setCoverFileName(res.filename)
-    } catch (err: any) {
-      setError(err.message || '选择封面失败')
+      setError('选择文件失败: ' + (err.message || '未知错误'))
+    } finally {
+      setPicking(false)
     }
   }
 
@@ -55,173 +65,167 @@ export function ImportModal({ isOpen, onClose, onSuccess, creators }: ImportModa
       setError('请先选择要导入的音频文件')
       return
     }
-    setLoading(true)
-    setError('')
+    setSubmitting(true)
+    setError(null)
     try {
-      await api.post('/items/import', {
-        selection_id: selectionId,
-        title: title.trim() || selectedFileName,
-        original_title: originalTitle.trim(),
-        rj_code: rjCode.trim(),
-        creator_ids: selectedCreatorIds,
-        tags: tags
-          .split(/[,，\s]+/)
-          .map((t) => t.trim())
-          .filter(Boolean),
-        cover_selection_id: coverSelectionId || undefined,
-        auto_process: autoProcess ? 'on' : undefined,
-      })
+      const formData = new FormData()
+      formData.append('selection_id', selectionId)
+      formData.append('title', title)
+      formData.append('kind', kind)
+      if (rjCode) formData.append('rj_code', rjCode)
+      if (author) formData.append('author', author)
+      if (autoProcess) formData.append('auto_process', 'on')
+      selectedCreatorIds.forEach((id) => formData.append('creator_ids', id))
+
+      await api.postForm('/items/import', formData)
       onSuccess()
       onClose()
     } catch (err: any) {
-      setError(err.message || '导入作品失败')
+      setError('导入失败: ' + (err.message || '未知错误'))
     } finally {
-      setLoading(false)
+      setSubmitting(false)
     }
   }
 
+  const toggleCreator = (id: string) => {
+    setSelectedCreatorIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    )
+  }
+
   return (
-    <div className="modal-backdrop">
-      <div className="modal-dialog">
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h3 className="modal-title flex items-center gap-2">
-            <Music size={18} className="text-accent" />
-            导入音频作品
-          </h3>
-          <button type="button" onClick={onClose} className="modal-close-btn">
+          <h3 className="modal-title">导入单个音频</h3>
+          <button type="button" className="btn btn-ghost btn-circle" onClick={onClose}>
             <X size={18} />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="modal-body space-y-4">
-          {error && <div className="p-3 bg-red-900/30 border border-red-800 rounded text-red-300 text-sm">{error}</div>}
+        <form onSubmit={handleSubmit}>
+          <div className="modal-body">
+            {error && (
+              <div style={{ color: 'var(--color-red)', background: 'rgba(239, 68, 68, 0.1)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+                {error}
+              </div>
+            )}
 
-          {/* Audio selection */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">音频文件 *</label>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={handlePickAudio}
-                className="btn btn-secondary flex items-center gap-1.5"
-              >
-                <Upload size={16} />
-                选择本地音频
-              </button>
-              <span className="text-sm text-fg-dim self-center truncate">
-                {selectedFileName || '未选择文件'}
-              </span>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                音频文件 *
+              </label>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handlePickFile}
+                  disabled={picking}
+                >
+                  <Folder size={15} />
+                  {picking ? '正在选择…' : '浏览文件'}
+                </button>
+                <span style={{ fontSize: 13, color: filename ? 'var(--fg-main)' : 'var(--fg-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {filename || '未选择音频文件'}
+                </span>
+              </div>
             </div>
-          </div>
 
-          {/* Title */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">作品标题</label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="为空时默认使用音频文件名"
-              className="input-text"
-            />
-          </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                作品类型
+              </label>
+              <div style={{ display: 'flex', gap: 16 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="kind"
+                    checked={kind === 'rj_work'}
+                    onChange={() => setKind('rj_work')}
+                  />
+                  RJ 同人音声
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="kind"
+                    checked={kind === 'stream'}
+                    onChange={() => setKind('stream')}
+                  />
+                  直播/其他音频
+                </label>
+              </div>
+            </div>
 
-          {/* RJ Code & Original Title */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-sm font-medium">RJ 号</label>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                标题 *
+              </label>
               <input
                 type="text"
-                value={rjCode}
-                onChange={(e) => setRjCode(e.target.value)}
-                placeholder="例: RJ123456"
-                className="input-text"
+                className="input-field"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="作品标题"
+                required
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">日文原名</label>
+
+            {kind === 'rj_work' && (
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                  RJ 号
+                </label>
+                <input
+                  type="text"
+                  className="input-field"
+                  value={rjCode}
+                  onChange={(e) => setRjCode(e.target.value.toUpperCase())}
+                  placeholder="例如: RJ123456"
+                />
+              </div>
+            )}
+
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                关联创作者
+              </label>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxHeight: 100, overflowY: 'auto' }}>
+                {creators.map((c) => {
+                  const active = selectedCreatorIds.includes(c.creator_id)
+                  return (
+                    <button
+                      key={c.creator_id}
+                      type="button"
+                      className={`chip ${active ? (c.kind === 'voice_actor' ? 'chip-creator' : 'chip-circle') : 'chip-tag'}`}
+                      onClick={() => toggleCreator(c.creator_id)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      {active && <Check size={12} />}
+                      {c.name}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
               <input
-                type="text"
-                value={originalTitle}
-                onChange={(e) => setOriginalTitle(e.target.value)}
-                placeholder="日文原版名称"
-                className="input-text"
+                type="checkbox"
+                checked={autoProcess}
+                onChange={(e) => setAutoProcess(e.target.checked)}
               />
-            </div>
+              导入后自动加入后台 ASR 识别与翻译队列
+            </label>
           </div>
-
-          {/* Creators */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">创作者 / 声优</label>
-            <select
-              multiple
-              value={selectedCreatorIds}
-              onChange={(e) => {
-                const options = Array.from(e.target.selectedOptions, (option) => option.value)
-                setSelectedCreatorIds(options)
-              }}
-              className="input-text h-24"
-            >
-              {creators.map((c) => (
-                <option key={c.creator_id} value={c.creator_id}>
-                  {c.name} ({c.kind === 'voice_actor' ? '声优' : '社团'})
-                </option>
-              ))}
-            </select>
-            <small className="text-xs text-fg-dim">按住 Ctrl 可多选</small>
-          </div>
-
-          {/* Tags */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">标签</label>
-            <input
-              type="text"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder="逗号或空格分隔，例: ASMR, 耳搔, 治愈"
-              className="input-text"
-            />
-          </div>
-
-          {/* Cover */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">封面图片 (可选)</label>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={handlePickCover}
-                className="btn btn-secondary flex items-center gap-1.5"
-              >
-                <Folder size={16} />
-                选择封面
-              </button>
-              <span className="text-sm text-fg-dim self-center truncate">
-                {coverFileName || '默认提取音频内置封面'}
-              </span>
-            </div>
-          </div>
-
-          {/* Auto process */}
-          <label className="flex items-center gap-2 cursor-pointer pt-1">
-            <input
-              type="checkbox"
-              checked={autoProcess}
-              onChange={(e) => setAutoProcess(e.target.checked)}
-              className="accent-accent"
-            />
-            <span className="text-sm">导入后自动加入字幕生成队列</span>
-          </label>
 
           <div className="modal-footer">
-            <button type="button" onClick={onClose} className="btn btn-secondary">
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={submitting}>
               取消
             </button>
-            <button
-              type="submit"
-              disabled={loading || !selectionId}
-              className="btn btn-primary"
-            >
-              {loading ? '正在导入...' : '确认导入'}
+            <button type="submit" className="btn btn-primary" disabled={submitting || !selectionId}>
+              <Upload size={14} />
+              {submitting ? '正在导入…' : '立即导入'}
             </button>
           </div>
         </form>

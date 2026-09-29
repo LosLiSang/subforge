@@ -339,7 +339,7 @@ export function LibraryPage() {
                 <th>标题 / RJ 号</th>
                 <th>创作者</th>
                 <th>字幕状态</th>
-                <th>大小</th>
+                <th style={{ width: 100 }}>大小</th>
                 <th style={{ textAlign: 'right', width: 140 }}>操作</th>
               </tr>
             </thead>
@@ -395,7 +395,7 @@ export function LibraryPage() {
                       <span className="sub-badge sub-none">未转写</span>
                     )}
                   </td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-dim)' }}>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-dim)', whiteSpace: 'nowrap' }}>
                     {formatBytes(item.total_size)}
                   </td>
                   <td style={{ textAlign: 'right' }}>

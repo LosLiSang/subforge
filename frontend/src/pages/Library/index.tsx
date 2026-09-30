@@ -38,6 +38,8 @@ export function LibraryPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCreator, setSelectedCreator] = useState(() => searchParams.get('creator') || searchParams.get('creator_id') || '')
   const [selectedTag, setSelectedTag] = useState(() => searchParams.get('tag') || '')
+  const [allTags, setAllTags] = useState<string[]>([])
+  const [tagCounts, setTagCounts] = useState<Record<string, number>>({})
   const [subFilter, setSubFilter] = useState<'all' | 'bilingual' | 'zh' | 'jp' | 'none'>('all')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [page, setPage] = useState(1)
@@ -72,10 +74,14 @@ export function LibraryPage() {
         total: number
         page: number
         pages: number
+        all_tags?: string[]
+        tag_counts?: Record<string, number>
       }>(`/api/library/items?${params.toString()}`)
       setItems(res.items || [])
       setTotalPages(res.pages || 1)
       setTotalCount(res.total || 0)
+      if (res.all_tags) setAllTags(res.all_tags)
+      if (res.tag_counts) setTagCounts(res.tag_counts)
     } catch (err) {
       console.error('Failed to load library items:', err)
     } finally {
@@ -237,7 +243,7 @@ export function LibraryPage() {
               type="text"
               className="input-field"
               style={{ paddingLeft: 32 }}
-              placeholder="搜索标题、RJ 号、原名…"
+              placeholder="搜索标题、RJ 号、声优、社团、标签(#tag)…"
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value)
@@ -259,6 +265,22 @@ export function LibraryPage() {
               <option key={c.creator_id} value={c.creator_id}>
                 {c.kind === 'voice_actor' ? '🎙️ ' : '🏢 '}
                 {c.name} {c.item_count ? `(${c.item_count})` : ''}
+              </option>
+            ))}
+          </select>
+
+          <select
+            className="select-field"
+            value={selectedTag}
+            onChange={(e) => {
+              setSelectedTag(e.target.value)
+              setPage(1)
+            }}
+          >
+            <option value="">全部标签 ({allTags.length})</option>
+            {allTags.map((tag) => (
+              <option key={tag} value={tag}>
+                🏷️ {tag} {tagCounts[tag] ? `(${tagCounts[tag]})` : ''}
               </option>
             ))}
           </select>

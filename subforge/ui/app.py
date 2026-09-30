@@ -874,6 +874,49 @@ def create_app(deps: UiDependencies) -> Starlette:
         if runtime.selections.get(selection_id) is source:
             runtime.selections.pop(selection_id, None)
             _cleanup_upload_selection(runtime, selection_id, source)
+        if result.created and kind == ItemKind.RJ_WORK and form.get("rj_code"):
+            try:
+                rj = form.get("rj_code", "").strip()
+                proxy = deps.settings.get_proxy_url()
+                from subforge.dlsite import fetch_dlsite_metadata, fetch_dlsite_cover
+                meta = await asyncio.to_thread(fetch_dlsite_metadata, rj, proxy=proxy)
+                if meta:
+                    item = library.get_item(result.item_id)
+                    c_ids = list(item.creator_ids)
+                    if meta.circle:
+                        c = library.find_or_create_creator(meta.circle, CreatorKind.CIRCLE)
+                        if c.creator_id not in c_ids:
+                            c_ids.append(c.creator_id)
+                    for va in meta.voice_actors:
+                        v = library.find_or_create_creator(va, CreatorKind.VOICE_ACTOR)
+                        if v.creator_id not in c_ids:
+                            c_ids.append(v.creator_id)
+                    resolved_title = item.title if item.title and item.title != rj else meta.title
+                    orig_title = meta.title if resolved_title != meta.title else item.original_title
+                    merged_tags = list(dict.fromkeys([*item.tags, *meta.tags]))
+                    library.update_item(
+                        result.item_id,
+                        title=resolved_title,
+                        kind=item.kind,
+                        rj_code=item.rj_code,
+                        creator_ids=c_ids,
+                        tags=merged_tags,
+                        original_title=orig_title,
+                        release_date=meta.release_date or item.release_date,
+                    )
+                    if meta.cover_url:
+                        cover_bytes = await asyncio.to_thread(fetch_dlsite_cover, meta.cover_url, proxy=proxy)
+                        if cover_bytes:
+                            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_c:
+                                tmp_c.write(cover_bytes)
+                                tmp_cover_path = Path(tmp_c.name)
+                            try:
+                                replace_cover(library.root, result.item_id, tmp_cover_path)
+                                library.set_cover_source(result.item_id, "dlsite")
+                            finally:
+                                tmp_cover_path.unlink(missing_ok=True)
+            except Exception as meta_exc:
+                logger.warning("Auto-fetch DLsite metadata on single import failed: %s", meta_exc)
         if form.get("auto_process") == "on" and result.created and runtime.tasks is not None:
             snapshot = _automatic_processing_snapshot(deps)
             if snapshot is not None:
@@ -943,6 +986,87 @@ def create_app(deps: UiDependencies) -> Starlette:
         proxy = deps.settings.get_proxy_url()
         info = await asyncio.to_thread(_fetch_video_info, url, proxy=proxy)
         return JSONResponse(info)
+
+    async def api_dlsite_lookup(request: Request) -> Response:
+        rj_code = request.path_params.get("rj_code", "").strip()
+        if not rj_code:
+            return JSONResponse({"ok": False, "error": "RJ 号不能为空"}, status_code=400)
+        proxy = deps.settings.get_proxy_url()
+        from subforge.dlsite import fetch_dlsite_metadata
+        meta = await asyncio.to_thread(fetch_dlsite_metadata, rj_code, proxy=proxy)
+        if not meta:
+            return JSONResponse({"ok": False, "error": f"未能从 DLsite 获取到 {rj_code} 的信息"}, status_code=404)
+        return JSONResponse({
+            "ok": True,
+            "data": {
+                "rj_code": meta.rj_code,
+                "title": meta.title,
+                "circle": meta.circle,
+                "voice_actors": meta.voice_actors,
+                "tags": meta.tags,
+                "cover_url": meta.cover_url,
+                "release_date": meta.release_date,
+            }
+        })
+
+    async def api_sync_item_dlsite(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse({"ok": False, "error": "Library is not configured"}, status_code=409)
+        item_id = request.path_params["item_id"]
+        try:
+            item = library.get_item(item_id)
+        except KeyError:
+            return JSONResponse({"ok": False, "error": "Item not found"}, status_code=404)
+        if not item.rj_code:
+            return JSONResponse({"ok": False, "error": "该作品没有配置 RJ 号"}, status_code=400)
+        proxy = deps.settings.get_proxy_url()
+        from subforge.dlsite import fetch_dlsite_metadata, fetch_dlsite_cover
+        meta = await asyncio.to_thread(fetch_dlsite_metadata, item.rj_code, proxy=proxy)
+        if not meta:
+            return JSONResponse({"ok": False, "error": f"未能从 DLsite 获取到 {item.rj_code} 的信息"}, status_code=502)
+
+        creator_ids = list(item.creator_ids)
+        if meta.circle:
+            circle_creator = library.find_or_create_creator(meta.circle, CreatorKind.CIRCLE)
+            if circle_creator.creator_id not in creator_ids:
+                creator_ids.append(circle_creator.creator_id)
+        for va in meta.voice_actors:
+            va_creator = library.find_or_create_creator(va, CreatorKind.VOICE_ACTOR)
+            if va_creator.creator_id not in creator_ids:
+                creator_ids.append(va_creator.creator_id)
+
+        merged_tags = list(dict.fromkeys([*item.tags, *meta.tags]))
+        new_title = meta.title if (not item.title or item.title == item.rj_code) else item.title
+        orig_title = meta.title if new_title != meta.title else item.original_title
+
+        library.update_item(
+            item_id,
+            title=new_title,
+            kind=item.kind,
+            rj_code=item.rj_code,
+            creator_ids=creator_ids,
+            tags=merged_tags,
+            original_title=orig_title,
+            release_date=meta.release_date or item.release_date,
+        )
+
+        if meta.cover_url:
+            cover_data = await asyncio.to_thread(fetch_dlsite_cover, meta.cover_url, proxy=proxy)
+            if cover_data:
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    tmp.write(cover_data)
+                    tmp_path = Path(tmp.name)
+                try:
+                    replace_cover(library.root, item_id, tmp_path)
+                    library.set_cover_source(item_id, "dlsite")
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+
+        return JSONResponse({"ok": True, "message": "已成功同步 DLsite 元数据与封面"})
 
     async def preview_folder_import(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
@@ -1162,13 +1286,25 @@ def create_app(deps: UiDependencies) -> Starlette:
             if selection_id and selected is None:
                 raise ValueError("Invalid or expired cover selection")
             original = library.get_item(item_id)
-            kind = ItemKind(values.get("kind", [""])[-1])
+            kind_val = values.get("kind", [""])[-1]
+            kind = ItemKind(kind_val) if kind_val else original.kind
+            tags_raw = values.get("tags", [""])[-1]
+            parsed_tags = None
+            if tags_raw:
+                parsed_tags = [t.strip().lstrip("#") for t in re.split(r"[,/、，\n]+", tags_raw) if t.strip().lstrip("#")]
+            elif "tags" in values:
+                parsed_tags = []
+            orig_title = values.get("original_title", [""])[-1] or None
+            rel_date = values.get("release_date", [""])[-1] or None
             library.update_item(
                 item_id,
                 title=values.get("title", [""])[-1],
                 kind=kind,
                 rj_code=values.get("rj_code", [""])[-1] or None,
                 creator_ids=_creator_ids_from_form(library, values, kind),
+                tags=parsed_tags,
+                original_title=orig_title,
+                release_date=rel_date,
             )
             if selection_id and selected is not None:
                 runtime.selections.pop(selection_id, None)
@@ -2567,18 +2703,33 @@ def create_app(deps: UiDependencies) -> Starlette:
         items = library.list_items(selected_creator_ids if selected_creator_ids else None)
         search_query = request.query_params.get("q", "").strip()
         if search_query:
-            needle = search_query.casefold()
-            items = [
-                item for item in items
-                if needle in " ".join([
-                    item.title,
-                    item.rj_code or "",
-                    *(creator_by_id[cid].name for cid in item.creator_ids if cid in creator_by_id),
-                ]).casefold()
-            ]
+            tag_prefix_match = re.match(r"^(?:#|tag:)(.+)$", search_query.strip(), re.IGNORECASE)
+            if tag_prefix_match:
+                tag_needle = tag_prefix_match.group(1).strip().casefold()
+                items = [
+                    item for item in items
+                    if any(tag_needle == t.casefold() or tag_needle in t.casefold() for t in _extract_item_tags(item))
+                ]
+            else:
+                tokens = search_query.casefold().split()
+                def _matches_item(it):
+                    it_tags = _extract_item_tags(it)
+                    creators_names = [creator_by_id[cid].name for cid in it.creator_ids if cid in creator_by_id]
+                    haystack = " ".join([
+                        it.title,
+                        getattr(it, "original_title", "") or "",
+                        it.rj_code or "",
+                        *creators_names,
+                        *it_tags,
+                    ]).casefold()
+                    return all(tok in haystack for tok in tokens)
+                items = [item for item in items if _matches_item(item)]
         tag_filter = request.query_params.get("tag", "").strip()
         if tag_filter:
-            items = [item for item in items if tag_filter in _extract_item_tags(item)]
+            items = [
+                item for item in items
+                if any(tag_filter.casefold() == t.casefold() for t in _extract_item_tags(item))
+            ]
         sort_by = request.query_params.get("sort", "created_desc")
         if sort_by == "created_asc":
             items.sort(key=lambda x: x.created_at or "")
@@ -2610,7 +2761,12 @@ def create_app(deps: UiDependencies) -> Starlette:
         item_size_by_id = await asyncio.to_thread(_item_directory_sizes, library.root, page_items)
 
         all_items = library.list_items()
-        all_tags = sorted({tag for it in all_items for tag in _extract_item_tags(it) if tag})
+        tag_counts: dict[str, int] = {}
+        for it in all_items:
+            for tag in _extract_item_tags(it):
+                if tag:
+                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        all_tags = sorted(tag_counts.keys())
         creator_item_counts: dict[str, int] = {}
         for it in all_items:
             for cid in it.creator_ids:
@@ -2666,7 +2822,9 @@ def create_app(deps: UiDependencies) -> Starlette:
             "page": page,
             "limit": limit,
             "total_pages": total_pages,
+            "pages": total_pages,
             "all_tags": all_tags,
+            "tag_counts": tag_counts,
             "all_creators": creators_list,
         })
 
@@ -3056,6 +3214,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/api/library/import", import_item, methods=["POST"]),
         Route("/api/video-info", video_info, methods=["GET", "POST"]),
         Route("/api/url-info", video_info, methods=["GET", "POST"]),
+        Route("/api/dlsite/{rj_code}", api_dlsite_lookup),
+        Route("/api/items/{item_id}/sync-dlsite", api_sync_item_dlsite, methods=["POST"]),
         Route("/items/import-url", import_item_url, methods=["POST"]),
         Route("/library/import-url", import_item_url, methods=["POST"]),
         Route("/api/library/import-url", import_item_url, methods=["POST"]),
@@ -3470,6 +3630,51 @@ async def _run_folder_import(
                 folder, rj_code=rj_code, title=title,
                 creator_ids=creator_ids, progress_callback=progress,
             )
+            if result.item_id and rj_code:
+                try:
+                    proxy = runtime.deps.settings.get_proxy_url()
+                    from subforge.dlsite import fetch_dlsite_metadata, fetch_dlsite_cover
+                    meta = fetch_dlsite_metadata(rj_code, proxy=proxy)
+                    if meta:
+                        item = library.get_item(result.item_id)
+                        c_ids = list(item.creator_ids)
+                        if meta.circle:
+                            c = library.find_or_create_creator(meta.circle, CreatorKind.CIRCLE)
+                            if c.creator_id not in c_ids:
+                                c_ids.append(c.creator_id)
+                        for va in meta.voice_actors:
+                            v = library.find_or_create_creator(va, CreatorKind.VOICE_ACTOR)
+                            if v.creator_id not in c_ids:
+                                c_ids.append(v.creator_id)
+                        resolved_title = item.title
+                        if not title or title.strip() == rj_code or title.strip() == folder.name:
+                            resolved_title = meta.title or item.title
+                        orig_title = meta.title if resolved_title != meta.title else item.original_title
+                        merged_tags = list(dict.fromkeys([*item.tags, *meta.tags]))
+                        library.update_item(
+                            result.item_id,
+                            title=resolved_title,
+                            kind=item.kind,
+                            rj_code=item.rj_code,
+                            creator_ids=c_ids,
+                            tags=merged_tags,
+                            original_title=orig_title,
+                            release_date=meta.release_date or item.release_date,
+                        )
+                        if meta.cover_url:
+                            cover_bytes = fetch_dlsite_cover(meta.cover_url, proxy=proxy)
+                            if cover_bytes:
+                                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_c:
+                                    tmp_c.write(cover_bytes)
+                                    tmp_cover_path = Path(tmp_c.name)
+                                try:
+                                    from subforge.ui.covers import replace_cover
+                                    replace_cover(library.root, result.item_id, tmp_cover_path)
+                                    library.set_cover_source(result.item_id, "dlsite")
+                                finally:
+                                    tmp_cover_path.unlink(missing_ok=True)
+                except Exception as meta_exc:
+                    logger.warning("Auto-fetch DLsite metadata failed: %s", meta_exc)
             if task:
                 task.update(
                     status="done" if result.status == "completed" else result.status,
@@ -4121,9 +4326,9 @@ def _item_directory_sizes(root: Path, items: list) -> dict[str, int]:
 
 
 def _extract_item_tags(it) -> list[str]:
-    explicit = list(getattr(it, "tags", []))
+    explicit = [str(t).strip().lstrip("#") for t in getattr(it, "tags", []) if str(t).strip()]
     if explicit:
-        return explicit
+        return sorted(set(explicit))
     tags = set()
     title_text = str(getattr(it, "title", "") or "")
     for m in re.findall(r'#([^\s#\[\]【】_]+)', title_text):

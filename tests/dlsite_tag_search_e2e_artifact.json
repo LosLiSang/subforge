@@ -1,0 +1,22 @@
+{
+  "test_name": "test_dlsite_metadata_and_tag_search_e2e",
+  "timestamp": "2026-09-30T11:47:14.153407+00:00",
+  "status": "passed",
+  "verified_features": [
+    "DLsite HTML parser (title, circle, CVs, tags, cover_url, release_date)",
+    "RJ code normalization and floor redirection",
+    "Folder import auto-pulling DLsite metadata & cover",
+    "Circle and Voice Actor creator mapping with CreatorKind",
+    "Tag keyword search, #tag syntax, and tag query param filter",
+    "Tag list and tag counts aggregation in api_list_items",
+    "On-demand DLsite sync endpoint (/api/items/{id}/sync-dlsite)",
+    "Manual tag and original title editing persistence",
+    "Frontend tag filter selector, DLsite sync button, and modal preview",
+    "Compiled bundle distribution synchronization"
+  ],
+  "test_counts": {
+    "items_imported": 3,
+    "creators_indexed": 5,
+    "total_tags_indexed": 6
+  }
+}

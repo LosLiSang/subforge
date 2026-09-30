@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { X, Folder, Upload, Check } from 'lucide-react'
+import { X, Folder, Upload, Check, Globe, Sparkles } from 'lucide-react'
 import { api } from '../../api/client'
-import type { Creator } from '../../types'
+import type { Creator, DlsiteMetadata } from '../../types'
 
 interface ImportFolderModalProps {
   isOpen: boolean
@@ -20,6 +20,27 @@ export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderMo
   const [picking, setPicking] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [dlsiteMeta, setDlsiteMeta] = useState<DlsiteMetadata | null>(null)
+  const [fetchingDlsite, setFetchingDlsite] = useState(false)
+
+  const fetchDlsiteInfo = async (targetRj?: string) => {
+    const code = (targetRj || rjCode).trim().toUpperCase()
+    if (!code) return
+    setFetchingDlsite(true)
+    try {
+      const res = await api.get<{ ok: boolean; data: DlsiteMetadata }>(`/api/dlsite/${code}`)
+      if (res.ok && res.data) {
+        setDlsiteMeta(res.data)
+        if (res.data.title && (!title || title === folderName || title === code)) {
+          setTitle(res.data.title)
+        }
+      }
+    } catch {
+      // Non-blocking
+    } finally {
+      setFetchingDlsite(false)
+    }
+  }
 
   useEffect(() => {
     if (isOpen) {
@@ -46,6 +67,7 @@ export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderMo
         const m = name.match(/RJ\d{6,8}/i)
         if (m && !rjCode) {
           setRjCode(m[0].toUpperCase())
+          fetchDlsiteInfo(m[0].toUpperCase())
         }
         if (!title) {
           setTitle(name)
@@ -138,18 +160,78 @@ export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderMo
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                RJ 号 *
-              </label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <label style={{ fontSize: 12, color: 'var(--fg-dim)' }}>
+                  RJ 号 *
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: 11, padding: '2px 8px', height: 'auto', color: 'var(--accent-base)' }}
+                  onClick={() => fetchDlsiteInfo()}
+                  disabled={fetchingDlsite || !rjCode.trim()}
+                >
+                  <Globe size={12} />
+                  {fetchingDlsite ? '正在抓取…' : '从 DLsite 获取信息'}
+                </button>
+              </div>
               <input
                 type="text"
                 className="input-field"
                 value={rjCode}
                 onChange={(e) => setRjCode(e.target.value.toUpperCase())}
+                onBlur={() => {
+                  if (rjCode.trim() && !dlsiteMeta) {
+                    fetchDlsiteInfo(rjCode.trim())
+                  }
+                }}
                 placeholder="例如: RJ01499022"
                 required
               />
             </div>
+
+            {dlsiteMeta && (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 12,
+                  padding: 10,
+                  background: 'rgba(255, 255, 255, 0.04)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: 12,
+                }}
+              >
+                {dlsiteMeta.cover_url && (
+                  <img
+                    src={dlsiteMeta.cover_url}
+                    alt=""
+                    style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+                  />
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <span className="chip chip-rj" style={{ fontSize: 10 }}>DLsite</span>
+                    {dlsiteMeta.circle && (
+                      <span className="chip chip-circle" style={{ fontSize: 10 }}>🏢 {dlsiteMeta.circle}</span>
+                    )}
+                    {dlsiteMeta.voice_actors.map((va) => (
+                      <span key={va} className="chip chip-creator" style={{ fontSize: 10 }}>🎙️ {va}</span>
+                    ))}
+                  </div>
+                  {dlsiteMeta.tags && dlsiteMeta.tags.length > 0 && (
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      {dlsiteMeta.tags.slice(0, 6).map((t, idx) => (
+                        <span key={idx} className="chip chip-tag" style={{ fontSize: 10 }}>#{t}</span>
+                      ))}
+                    </div>
+                  )}
+                  {dlsiteMeta.release_date && (
+                    <span style={{ color: 'var(--fg-faint)', fontSize: 11 }}>发售日: {dlsiteMeta.release_date}</span>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div>
               <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>

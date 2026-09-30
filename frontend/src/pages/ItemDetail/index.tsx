@@ -14,6 +14,8 @@ import {
   Check,
   X,
   RotateCcw,
+  RefreshCw,
+  Globe,
 } from 'lucide-react'
 import { api } from '../../api/client'
 import type { ItemDetailData, Track, Creator } from '../../types'
@@ -167,6 +169,7 @@ export function ItemDetailPage() {
   const [editCreatorIds, setEditCreatorIds] = useState<string[]>([])
   const [allCreators, setAllCreators] = useState<Creator[]>([])
   const [submittingEdit, setSubmittingEdit] = useState(false)
+  const [syncingDlsite, setSyncingDlsite] = useState(false)
 
   // Process form state
   const [selectedAsr, setSelectedAsr] = useState('')
@@ -377,6 +380,23 @@ export function ItemDetailPage() {
     }
   }
 
+  const handleSyncDlsite = async () => {
+    if (!item?.rj_code) return
+    setSyncingDlsite(true)
+    try {
+      const res = await api.post<{ ok: boolean; message?: string; error?: string }>(`/api/items/${item.item_id}/sync-dlsite`)
+      if (res.ok) {
+        await loadItem()
+      } else {
+        alert(res.error || '同步 DLsite 信息失败')
+      }
+    } catch (err: any) {
+      alert('同步失败: ' + (err.message || '未知错误'))
+    } finally {
+      setSyncingDlsite(false)
+    }
+  }
+
   return (
     <div className="item-detail-container">
       {/* Back button */}
@@ -446,7 +466,13 @@ export function ItemDetailPage() {
               ) : null}
               {item.tags &&
                 item.tags.map((t, idx) => (
-                  <span key={idx} className="chip chip-tag">
+                  <span
+                    key={idx}
+                    className="chip chip-tag"
+                    style={{ cursor: 'pointer' }}
+                    title={`在作品库中筛选标签 #${t}`}
+                    onClick={() => navigate(`/library?tag=${encodeURIComponent(t)}`)}
+                  >
                     #{t}
                   </span>
                 ))}
@@ -495,6 +521,19 @@ export function ItemDetailPage() {
                 <Edit3 size={15} />
                 编辑作品
               </button>
+
+              {item.rj_code && (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={handleSyncDlsite}
+                  disabled={syncingDlsite}
+                  title="自动从 DLsite 获取社团、声优、标签、封面与发售日"
+                >
+                  <RefreshCw size={15} className={syncingDlsite ? 'spin' : ''} />
+                  {syncingDlsite ? '正在同步…' : '从 DLsite 同步'}
+                </button>
+              )}
 
               <button type="button" className="btn btn-ghost" onClick={handleChangeCover}>
                 <Image size={15} />
@@ -912,9 +951,29 @@ export function ItemDetailPage() {
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                    RJ 号
-                  </label>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <label style={{ fontSize: 12, color: 'var(--fg-dim)' }}>
+                      RJ 号
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: 11, padding: '2px 8px', height: 'auto', color: 'var(--accent-base)' }}
+                      onClick={async () => {
+                        if (!editRjCode.trim()) return
+                        try {
+                          const res = await api.get<{ ok: boolean; data: any }>(`/api/dlsite/${editRjCode.trim()}`)
+                          if (res.ok && res.data) {
+                            if (res.data.title && !editTitle) setEditTitle(res.data.title)
+                            if (res.data.tags && res.data.tags.length > 0) setEditTags(res.data.tags.join(', '))
+                          }
+                        } catch {}
+                      }}
+                    >
+                      <Globe size={12} />
+                      从 DLsite 填充
+                    </button>
+                  </div>
                   <input
                     type="text"
                     className="input-field"

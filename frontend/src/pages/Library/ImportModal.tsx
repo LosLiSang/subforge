@@ -173,9 +173,27 @@ export function ImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
 
             {kind === 'rj_work' && (
               <div>
-                <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                  RJ 号
-                </label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <label style={{ fontSize: 12, color: 'var(--fg-dim)' }}>
+                    RJ 号
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: 11, padding: '2px 8px', height: 'auto', color: 'var(--accent-base)' }}
+                    onClick={async () => {
+                      if (!rjCode.trim()) return
+                      try {
+                        const res = await api.get<{ ok: boolean; data: any }>(`/api/dlsite/${rjCode.trim()}`)
+                        if (res.ok && res.data && res.data.title) {
+                          setTitle(res.data.title)
+                        }
+                      } catch {}
+                    }}
+                  >
+                    从 DLsite 填充
+                  </button>
+                </div>
                 <input
                   type="text"
                   className="input-field"

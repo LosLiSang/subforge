@@ -129,8 +129,11 @@ class LibraryItem:
     item_id: str
     kind: ItemKind
     title: str
+    original_title: str | None = None
     rj_code: str | None = None
     author: str | None = None
+    release_date: str | None = None
+    tags: list[str] = field(default_factory=list)
     creator_ids: list[str] = field(default_factory=list)
     sources: list[ImportSource] = field(default_factory=list)
     cover_source: str | None = None
@@ -408,6 +411,9 @@ class LibraryStore:
                 return updated
         raise KeyError(creator_id)
 
+    def find_or_create_creator(self, name: str, kind: CreatorKind) -> Creator:
+        return self._find_or_create_creator(name, kind)
+
     def touch_creators(self, creator_ids: list[str]) -> None:
         selected = set(creator_ids)
         if not selected:
@@ -465,6 +471,9 @@ class LibraryStore:
         kind: ItemKind,
         rj_code: str | None,
         creator_ids: list[str],
+        tags: list[str] | None = None,
+        original_title: str | None = None,
+        release_date: str | None = None,
     ) -> LibraryItem:
         item = self.get_item(item_id)
         clean_title = title.strip()
@@ -497,6 +506,12 @@ class LibraryStore:
         item.rj_code = normalized_rj
         item.creator_ids = normalized_ids
         item.author = self._legacy_author(normalized_ids)
+        if tags is not None:
+            item.tags = list(dict.fromkeys(str(t).strip() for t in tags if str(t).strip()))
+        if original_title is not None:
+            item.original_title = original_title.strip() if original_title else None
+        if release_date is not None:
+            item.release_date = release_date.strip() if release_date else None
         self.touch_creators(normalized_ids)
         item.updated_at = _now()
         item_dir = self.root / item.directory
@@ -1045,8 +1060,11 @@ class LibraryStore:
             item_id=item_id,
             kind=request.kind,
             title=request.title.strip(),
+            original_title=None,
             rj_code=rj_code,
             author=self._legacy_author(creator_ids) or (request.author.strip() if request.author else None),
+            release_date=None,
+            tags=[],
             creator_ids=creator_ids,
             sources=sources,
             cover_source=None,
@@ -1096,8 +1114,11 @@ class LibraryStore:
             item_id=str(data["item_id"]),
             kind=ItemKind(data["kind"]),
             title=str(data["title"]),
+            original_title=data.get("original_title"),
             rj_code=data.get("rj_code"),
             author=author,
+            release_date=data.get("release_date"),
+            tags=list(data.get("tags", [])),
             creator_ids=creator_ids,
             sources=[ImportSource(**source) for source in data.get("sources", [])],
             cover_source=data.get("cover_source"),

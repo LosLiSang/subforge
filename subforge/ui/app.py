@@ -693,9 +693,16 @@ def create_app(deps: UiDependencies) -> Starlette:
         error = await _authorize_write(request, runtime)
         if error:
             return error
-        # tkinter 对话框必须在主线程运行（Tcl 非线程安全）
-        selected = deps.picker.choose_directory()
+        form = await _read_form(request) if request.headers.get("content-type", "").startswith(("application/x-www-form-urlencoded", "multipart/form-data")) else {}
+        selection_id = form.get("selection_id")
+        if selection_id and selection_id in runtime.selections:
+            selected = runtime.selections.pop(selection_id)
+        else:
+            # tkinter 对话框必须在主线程运行（Tcl 非线程安全）
+            selected = deps.picker.choose_directory()
         if selected is None:
+            if request.headers.get("accept", "").startswith("application/json"):
+                return JSONResponse({"cancelled": True})
             return RedirectResponse("/", status_code=303)
         if runtime.tasks is not None:
             await runtime.tasks.close()
@@ -716,6 +723,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             remote_asr_concurrency=deps.settings.get_remote_asr_concurrency(),
         )
         deps.settings.set_active_library(selected)
+        if request.headers.get("accept", "").startswith("application/json"):
+            return JSONResponse({"ok": True, "active_library": str(selected)})
         return RedirectResponse("/", status_code=303)
 
     async def choose_directory(request: Request) -> Response:
@@ -972,6 +981,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         if folder is None:
             return JSONResponse({"error": "Invalid or expired selection"}, status_code=400)
         rj_code = form.get("rj_code", "").strip()
+        if not rj_code:
+            match = re.search(r"RJ\d{6,8}", folder.name, re.IGNORECASE)
+            if match:
+                rj_code = match.group(0).upper()
         if not rj_code:
             return JSONResponse({"error": "RJ code is required"}, status_code=400)
         task_id = uuid4().hex
@@ -1380,6 +1393,8 @@ def create_app(deps: UiDependencies) -> Starlette:
                     deps.settings.set_direct_model_path(model, value)
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
+            if "application/json" in request.headers.get("accept", ""):
+                return JSONResponse({"ok": True})
             return RedirectResponse("/settings", status_code=303)
         public_profiles = deps.profiles.list_public()
         translation_profiles = [p for p in public_profiles if "translate" in p.get("capabilities", [])]
@@ -1580,6 +1595,8 @@ def create_app(deps: UiDependencies) -> Starlette:
                 return Response("Not found", status_code=404)
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
+            if "application/json" in request.headers.get("accept", ""):
+                return JSONResponse({"ok": True})
             return RedirectResponse("/profiles", status_code=303)
         return runtime.render("profiles.html", request, profiles=deps.profiles.list_public())
 
@@ -1872,6 +1889,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             return Response("Not found", status_code=404)
         except (ValueError, OSError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"ok": True, "item_id": item_id})
         return RedirectResponse(f"/items/{item_id}", status_code=303)
 
     async def get_default_cover_endpoint(request: Request) -> Response:
@@ -3027,6 +3046,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/library/rescan", rescan, methods=["POST"]),
         Route("/picker/audio", choose_audio, methods=["POST"]),
         Route("/picker/media-folder", choose_media_folder, methods=["POST"]),
+        Route("/picker/folder", choose_media_folder, methods=["POST"]),
         Route("/picker/image", choose_image, methods=["POST"]),
         Route("/api/upload-image", upload_image, methods=["POST"]),
         Route("/api/selections/{selection_id}/image", selected_image_preview),

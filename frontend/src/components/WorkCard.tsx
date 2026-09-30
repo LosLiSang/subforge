@@ -80,13 +80,19 @@ export function WorkCard({
         />
 
         {/* Top Left: RJ Code badge and Favorite button */}
-        {item.rj_code && (
+        {item.rj_code ? (
           <div className="asmr-card-top-left">
             <span className="asmr-card-badge-rj" title={`RJ号: ${item.rj_code}`}>
               {item.rj_code}
             </span>
           </div>
-        )}
+        ) : item.kind === 'stream_archive' ? (
+          <div className="asmr-card-top-left">
+            <span className="asmr-card-badge-live" title="录播作品">
+              录播
+            </span>
+          </div>
+        ) : null}
 
         {/* Bottom Right: Release Date */}
         {displayDate && (

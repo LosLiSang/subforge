@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { X, Upload, Folder, Check } from 'lucide-react'
+import { X, Upload, Folder, Check, Plus } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Creator } from '../../types'
 
@@ -19,6 +19,10 @@ export function ImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
   const [autoProcess, setAutoProcess] = useState(true)
   const [creators, setCreators] = useState<Creator[]>([])
   const [selectedCreatorIds, setSelectedCreatorIds] = useState<string[]>([])
+  const [showAddCreator, setShowAddCreator] = useState(false)
+  const [newCreatorName, setNewCreatorName] = useState('')
+  const [newCreatorKind, setNewCreatorKind] = useState<'voice_actor' | 'circle'>('voice_actor')
+  const [creatingCreator, setCreatingCreator] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -91,6 +95,28 @@ export function ImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
     setSelectedCreatorIds((prev) =>
       prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
     )
+  }
+
+  const handleCreateCreator = async () => {
+    const name = newCreatorName.trim()
+    if (!name) return
+    setCreatingCreator(true)
+    try {
+      const res = await api.post<Creator>('/api/creators', {
+        name,
+        kind: newCreatorKind,
+      })
+      if (res && res.creator_id) {
+        setCreators((prev) => [res, ...prev.filter((c) => c.creator_id !== res.creator_id)])
+        setSelectedCreatorIds((prev) => (prev.includes(res.creator_id) ? prev : [...prev, res.creator_id]))
+        setNewCreatorName('')
+        setShowAddCreator(false)
+      }
+    } catch (err: any) {
+      setError('创建创作者失败: ' + (err.message || '未知错误'))
+    } finally {
+      setCreatingCreator(false)
+    }
   }
 
   return (
@@ -205,9 +231,71 @@ export function ImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
             )}
 
             <div>
-              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                关联创作者
-              </label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <label style={{ fontSize: 12, color: 'var(--fg-dim)' }}>
+                  关联创作者 {selectedCreatorIds.length > 0 && `(已选 ${selectedCreatorIds.length})`}
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: 11, padding: '2px 8px', height: 'auto', color: 'var(--accent-base)' }}
+                  onClick={() => setShowAddCreator(!showAddCreator)}
+                >
+                  <Plus size={12} />
+                  {showAddCreator ? '收起新增' : '新增创作者'}
+                </button>
+              </div>
+
+              {showAddCreator && (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 8,
+                    alignItems: 'center',
+                    padding: '8px 10px',
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--radius-sm)',
+                    marginBottom: 10,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <input
+                    type="text"
+                    className="input-field"
+                    style={{ flex: 1, minWidth: 120, height: 30, fontSize: 12 }}
+                    placeholder="创作者/声优/社团名称…"
+                    value={newCreatorName}
+                    onChange={(e) => setNewCreatorName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        handleCreateCreator()
+                      }
+                    }}
+                  />
+                  <select
+                    className="select-field"
+                    style={{ height: 30, fontSize: 12, padding: '2px 8px' }}
+                    value={newCreatorKind}
+                    onChange={(e) => setNewCreatorKind(e.target.value as 'voice_actor' | 'circle')}
+                  >
+                    <option value="voice_actor">🎙️ 声优 (CV)</option>
+                    <option value="circle">🏢 社团 (Circle)</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    style={{ height: 30, padding: '0 10px', fontSize: 12 }}
+                    onClick={handleCreateCreator}
+                    disabled={creatingCreator || !newCreatorName.trim()}
+                  >
+                    <Plus size={13} />
+                    {creatingCreator ? '添加中…' : '添加'}
+                  </button>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxHeight: 100, overflowY: 'auto' }}>
                 {creators.map((c) => {
                   const active = selectedCreatorIds.includes(c.creator_id)
@@ -220,6 +308,7 @@ export function ImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
                       style={{ cursor: 'pointer' }}
                     >
                       {active && <Check size={12} />}
+                      {c.kind === 'voice_actor' ? '🎙️ ' : '🏢 '}
                       {c.name}
                     </button>
                   )

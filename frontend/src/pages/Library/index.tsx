@@ -41,6 +41,10 @@ export function LibraryPage() {
   const [allTags, setAllTags] = useState<string[]>([])
   const [tagCounts, setTagCounts] = useState<Record<string, number>>({})
   const [subFilter, setSubFilter] = useState<'all' | 'bilingual' | 'zh' | 'jp' | 'none'>('all')
+  const [kindFilter, setKindFilter] = useState<'all' | 'rj_work' | 'stream_archive'>(() => {
+    const k = searchParams.get('kind') || ''
+    return k === 'rj_work' || k === 'stream_archive' ? k : 'all'
+  })
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
@@ -68,6 +72,7 @@ export function LibraryPage() {
       if (searchQuery.trim()) params.set('q', searchQuery.trim())
       if (selectedCreator) params.set('creator', selectedCreator)
       if (selectedTag) params.set('tag', selectedTag)
+      if (kindFilter !== 'all') params.set('kind', kindFilter)
 
       const res = await api.get<{
         items: Item[]
@@ -91,13 +96,17 @@ export function LibraryPage() {
 
   useEffect(() => {
     loadItems()
-  }, [page, searchQuery, selectedCreator, selectedTag])
+  }, [page, searchQuery, selectedCreator, selectedTag, kindFilter])
 
   useEffect(() => {
     const c = searchParams.get('creator') || searchParams.get('creator_id') || ''
     if (c !== selectedCreator) setSelectedCreator(c)
     const t = searchParams.get('tag') || ''
     if (t !== selectedTag) setSelectedTag(t)
+    const k = searchParams.get('kind') || ''
+    if (k === 'rj_work' || k === 'stream_archive' || k === 'all') {
+      if (k !== kindFilter) setKindFilter(k as any)
+    }
     const q = searchParams.get('q') || searchParams.get('search') || ''
     if (q && q !== searchQuery) setSearchQuery(q)
   }, [searchParams])
@@ -122,9 +131,15 @@ export function LibraryPage() {
   }, [])
 
   const filteredItems = useMemo(() => {
-    if (subFilter === 'all') return items
-    return items.filter((item) => item.subtitle_status === subFilter)
-  }, [items, subFilter])
+    let result = items
+    if (kindFilter !== 'all') {
+      result = result.filter((item) => item.kind === kindFilter)
+    }
+    if (subFilter !== 'all') {
+      result = result.filter((item) => item.subtitle_status === subFilter)
+    }
+    return result
+  }, [items, kindFilter, subFilter])
 
   const handleQuickPlay = async (e: React.MouseEvent, item: Item) => {
     e.preventDefault()
@@ -242,7 +257,7 @@ export function LibraryPage() {
             <input
               type="text"
               className="input-field"
-              style={{ paddingLeft: 32 }}
+              style={{ paddingLeft: 32, paddingRight: searchQuery ? 28 : 10 }}
               placeholder="搜索标题、RJ 号、声优、社团、标签(#tag)…"
               value={searchQuery}
               onChange={(e) => {
@@ -250,6 +265,29 @@ export function LibraryPage() {
                 setPage(1)
               }}
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('')
+                  setPage(1)
+                }}
+                style={{
+                  position: 'absolute',
+                  right: 8,
+                  top: 9,
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--fg-faint)',
+                  padding: 0,
+                  display: 'flex',
+                }}
+                title="清除搜索"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
 
           <select
@@ -298,6 +336,37 @@ export function LibraryPage() {
         </div>
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          {/* Work kind pills (RJ作品 / 录播作品 / 全部) */}
+          <div
+            style={{
+              display: 'flex',
+              gap: 4,
+              background: 'rgba(255, 255, 255, 0.04)',
+              padding: 3,
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border-subtle)',
+            }}
+          >
+            {[
+              { key: 'all', label: '全部' },
+              { key: 'rj_work', label: 'RJ 作品' },
+              { key: 'stream_archive', label: '录播作品' },
+            ].map((k) => (
+              <button
+                key={k.key}
+                type="button"
+                className={`btn btn-sm ${kindFilter === k.key ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ padding: '4px 10px', height: 28, fontSize: 12 }}
+                onClick={() => {
+                  setKindFilter(k.key as any)
+                  setPage(1)
+                }}
+              >
+                {k.label}
+              </button>
+            ))}
+          </div>
+
           {/* Subtitle status pills */}
           <div style={{ display: 'flex', gap: 6 }}>
             {[
@@ -387,7 +456,20 @@ export function LibraryPage() {
                       >
                         {item.title}
                       </Link>
-                      {item.rj_code && <span className="chip chip-rj">{item.rj_code}</span>}
+                      {item.rj_code ? (
+                        <span className="chip chip-rj">{item.rj_code}</span>
+                      ) : item.kind === 'stream_archive' ? (
+                        <span
+                          className="chip"
+                          style={{
+                            background: 'rgba(14, 42, 71, 0.85)',
+                            color: '#38bdf8',
+                            borderColor: 'rgba(56, 189, 248, 0.3)',
+                          }}
+                        >
+                          录播
+                        </span>
+                      ) : null}
                     </div>
                   </td>
                   <td>

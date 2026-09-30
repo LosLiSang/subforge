@@ -854,7 +854,10 @@ def create_app(deps: UiDependencies) -> Starlette:
             return JSONResponse({"error": "This selection is already being imported"}, status_code=409)
         runtime.pending_selections.add(selection_id)
         try:
-            kind = ItemKind(form.get("kind", ""))
+            kind_str = form.get("kind", "").strip()
+            if kind_str == "stream":
+                kind_str = "stream_archive"
+            kind = ItemKind(kind_str)
             title = (form.get("title") or "").strip() or source.stem
             result = await asyncio.to_thread(
                 library.import_audio,
@@ -1631,14 +1634,17 @@ def create_app(deps: UiDependencies) -> Starlette:
             return JSONResponse({"error": "Library is not configured"}, status_code=409)
         form = await _read_form(request)
         try:
-            creator = library.create_creator(form.get("name", ""), CreatorKind(form.get("kind", "")))
+            name = (form.get("name") or "").strip()
+            kind_str = (form.get("kind") or "").strip().lower() or CreatorKind.VOICE_ACTOR.value
+            kind = CreatorKind(kind_str)
+            creator = library.find_or_create_creator(name, kind)
             library.touch_creators([creator.creator_id])
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({
             "creator_id": creator.creator_id,
             "name": creator.name,
-            "kind": creator.kind.value,
+            "kind": creator.kind.value if hasattr(creator.kind, "value") else str(creator.kind),
         }, status_code=201)
 
     async def creators_page(request: Request) -> Response:
@@ -2718,12 +2724,18 @@ def create_app(deps: UiDependencies) -> Starlette:
                 def _matches_item(it):
                     it_tags = _extract_item_tags(it)
                     creators_names = [creator_by_id[cid].name for cid in it.creator_ids if cid in creator_by_id]
+                    track_titles = [t.title for t in it.tracks if getattr(t, "title", None)]
+                    kind_val = it.kind.value if hasattr(it.kind, "value") else str(it.kind)
+                    kind_labels = "rj作品 rj" if kind_val == "rj_work" else "录播作品 录播 直播 直播归档"
                     haystack = " ".join([
                         it.title,
                         getattr(it, "original_title", "") or "",
                         it.rj_code or "",
+                        getattr(it, "author", "") or "",
+                        kind_labels,
                         *creators_names,
                         *it_tags,
+                        *track_titles,
                     ]).casefold()
                     return all(tok in haystack for tok in tokens)
                 items = [item for item in items if _matches_item(item)]
@@ -2732,6 +2744,17 @@ def create_app(deps: UiDependencies) -> Starlette:
             items = [
                 item for item in items
                 if any(tag_filter.casefold() == t.casefold() for t in _extract_item_tags(item))
+            ]
+        kind_filter = request.query_params.get("kind", "").strip().lower()
+        if kind_filter in ("stream", "stream_archive"):
+            items = [
+                item for item in items
+                if (item.kind.value if hasattr(item.kind, "value") else str(item.kind)) == ItemKind.STREAM_ARCHIVE.value
+            ]
+        elif kind_filter in ("rj", "rj_work"):
+            items = [
+                item for item in items
+                if (item.kind.value if hasattr(item.kind, "value") else str(item.kind)) == ItemKind.RJ_WORK.value
             ]
         sort_by = request.query_params.get("sort", "created_desc")
         if sort_by == "created_asc":
@@ -2895,13 +2918,16 @@ def create_app(deps: UiDependencies) -> Starlette:
                 "status": track.status,
                 "source_language": track.source_language,
                 "target_language": track.target_language,
-                "has_media": has_media,
-                "has_source_sub": has_source_sub,
-                "has_target_sub": has_target_sub,
-                "latest_task": latest_task_info,
-            })
+               "has_media": has_media,
+               "has_source_sub": has_source_sub,
+               "has_target_sub": has_target_sub,
+               "latest_task": latest_task_info,
+           })
 
         cached = cached_models(deps.settings.get_models_dir(), ["medium", "large-v3"])
+        has_jp = any(t.get("has_source_sub") for t in tracks_payload)
+        has_zh = any(t.get("has_target_sub") for t in tracks_payload)
+        sub_status = "bilingual" if (has_jp and has_zh) else ("zh" if has_zh else ("jp" if has_jp else "none"))
         item_payload = {
             "item_id": item.item_id,
             "title": item.title,
@@ -2921,6 +2947,11 @@ def create_app(deps: UiDependencies) -> Starlette:
             ],
             "cover_url": _cover_url_for_item(item),
             "cover_source": item.cover_source,
+            "track_count": len(item.tracks),
+            "total_duration": total_seconds,
+            "total_duration_label": _format_duration(total_seconds) if total_seconds else "--:--",
+            "total_size": total_size,
+            "subtitle_status": sub_status,
             "created_at": item.created_at,
             "updated_at": item.updated_at,
         }
@@ -4375,6 +4406,19 @@ def _track_duration_seconds(library: LibraryStore, track) -> float:
             continue
         if entries:
             return max(entry.end for entry in entries)
+    try:
+        media_path = library.track_media_path(track.track_id)
+        if media_path.is_file():
+            try:
+                import av
+                with av.open(str(media_path)) as container:
+                    if container.duration:
+                        return float(container.duration) / 1000000.0
+            except Exception:
+                pass
+            return _audio_duration_seconds(media_path)
+    except Exception:
+        pass
     return 0.0
 
 

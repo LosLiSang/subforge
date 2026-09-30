@@ -26,6 +26,15 @@ SYSTEM FAILURE MODES (Documented upfront as required by AGENTS.md):
 5. FM5: Cover Image Ingestion & Referer Protection:
    - DLsite image CDNs (img.dlsite.jp) reject requests without proper Referer/User-Agent.
    - Image downloader must provide valid headers, validate payload, and set cover_source="dlsite".
+
+6. FM6: Kind Filtering & Segmented Work Type Discovery (RJ vs Stream):
+   - Filtering by kind=rj_work must exclude stream archives.
+   - Filtering by kind=stream_archive must exclude RJ works.
+   - Searching for kind keywords ("录播", "RJ作品") or streamer authors must match appropriately.
+
+7. FM7: Dynamic Creator Creation & Deduplication Safeguards:
+   - POST /api/creators must dynamically add voice actors or circles.
+   - Re-adding existing creator names must safely return the existing creator without duplicating.
 """
 
 import asyncio
@@ -284,6 +293,45 @@ async def test_dlsite_metadata_and_tag_search_e2e(tmp_path: Path):
         assert tag_filter_json["total"] == 1
         assert tag_filter_json["items"][0]["title"] == "普通的日常直播录音"
 
+        # 5e. Kind filtering: RJ 作品 vs 录播作品 (FM6)
+        res_rj_kind = await client.get("/api/library/items?kind=rj_work", headers=headers)
+        assert res_rj_kind.status_code == 200
+        rj_items = res_rj_kind.json()["items"]
+        assert all(it["kind"] == "rj_work" for it in rj_items)
+        assert any(it["rj_code"] == "RJ01306764" for it in rj_items)
+        assert not any(it["title"] == "普通的日常直播录音" for it in rj_items)
+
+        res_stream_kind = await client.get("/api/library/items?kind=stream_archive", headers=headers)
+        assert res_stream_kind.status_code == 200
+        stream_items = res_stream_kind.json()["items"]
+        assert all(it["kind"] == "stream_archive" for it in stream_items)
+        assert any(it["title"] == "普通的日常直播录音" for it in stream_items)
+        assert not any(it.get("rj_code") == "RJ01306764" for it in stream_items)
+
+        # 5f. Enhanced search by kind keyword ("录播")
+        res_search_stream = await client.get("/api/library/items?q=录播", headers=headers)
+        assert any(it["title"] == "普通的日常直播录音" for it in res_search_stream.json()["items"])
+
+        # 5g. Dynamic Creator Creation & Deduplication (FM7)
+        res_new_creator = await client.post(
+            "/api/creators",
+            json={"name": "新创作者小花衣", "kind": "voice_actor"},
+            headers=headers,
+        )
+        assert res_new_creator.status_code == 201
+        creator_data = res_new_creator.json()
+        assert creator_data["name"] == "新创作者小花衣"
+        first_cid = creator_data["creator_id"]
+
+        # Re-creating same creator should safely deduplicate
+        res_dup_creator = await client.post(
+            "/api/creators",
+            json={"name": "新创作者小花衣", "kind": "voice_actor"},
+            headers=headers,
+        )
+        assert res_dup_creator.status_code == 201
+        assert res_dup_creator.json()["creator_id"] == first_cid
+
         # -------------------------------------------------------------------------
         # Step 6: Verify On-Demand Sync: POST /api/items/{id}/sync-dlsite (FM1, FM4)
         # -------------------------------------------------------------------------
@@ -348,10 +396,16 @@ async def test_dlsite_metadata_and_tag_search_e2e(tmp_path: Path):
         assert "allTags" in library_page_src
         assert "全部标签" in library_page_src
         assert "tagCounts" in library_page_src
+        assert "kindFilter" in library_page_src
+        assert "RJ 作品" in library_page_src
+        assert "录播作品" in library_page_src
 
         item_detail_src = (FRONTEND_SRC / "pages" / "ItemDetail" / "index.tsx").read_text(encoding="utf-8")
         assert "sync-dlsite" in item_detail_src
         assert "从 DLsite 同步" in item_detail_src
+        assert "editTagsList" in item_detail_src
+        assert "showAddCreator" in item_detail_src
+        assert "availableQuickTags" in item_detail_src
 
         import_folder_src = (FRONTEND_SRC / "pages" / "Library" / "ImportFolderModal.tsx").read_text(encoding="utf-8")
         assert "从 DLsite 获取信息" in import_folder_src
@@ -395,6 +449,9 @@ async def test_dlsite_metadata_and_tag_search_e2e(tmp_path: Path):
             "Circle and Voice Actor creator mapping with CreatorKind",
             "Tag keyword search, #tag syntax, and tag query param filter",
             "Tag list and tag counts aggregation in api_list_items",
+            "RJ vs Stream archive kind filtering in backend and UI pills",
+            "Dynamic creator creation and automatic deduplication",
+            "Interactive tag chips management with remove and library quick-add",
             "On-demand DLsite sync endpoint (/api/items/{id}/sync-dlsite)",
             "Manual tag and original title editing persistence",
             "Frontend tag filter selector, DLsite sync button, and modal preview",

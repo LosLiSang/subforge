@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -13,6 +13,7 @@ import {
   FileText,
   Check,
   X,
+  Plus,
   RotateCcw,
   RefreshCw,
   Globe,
@@ -171,6 +172,19 @@ export function ItemDetailPage() {
   const [submittingEdit, setSubmittingEdit] = useState(false)
   const [syncingDlsite, setSyncingDlsite] = useState(false)
 
+  // Enhanced Tag Editing State
+  const [editTagsList, setEditTagsList] = useState<string[]>([])
+  const [newTagInput, setNewTagInput] = useState('')
+  const [libraryTags, setLibraryTags] = useState<string[]>([])
+  const [rawTagMode, setRawTagMode] = useState(false)
+
+  // Enhanced Creator Adding State
+  const [showAddCreator, setShowAddCreator] = useState(false)
+  const [newCreatorName, setNewCreatorName] = useState('')
+  const [newCreatorKind, setNewCreatorKind] = useState<'voice_actor' | 'circle'>('voice_actor')
+  const [creatingCreator, setCreatingCreator] = useState(false)
+  const [creatorFilterText, setCreatorFilterText] = useState('')
+
   // Process form state
   const [selectedAsr, setSelectedAsr] = useState('')
   const [selectedLlm, setSelectedLlm] = useState('')
@@ -188,6 +202,7 @@ export function ItemDetailPage() {
       setEditOrigTitle(res.item.original_title || '')
       setEditRjCode(res.item.rj_code || '')
       setEditTags((res.item.tags || []).join(', '))
+      setEditTagsList(res.item.tags || [])
       setEditCreatorIds(res.item.creator_ids || [])
       if (res.available_profiles) {
         const defProc = res.available_profiles.default_processing
@@ -230,6 +245,11 @@ export function ItemDetailPage() {
         setAllCreators(list)
       })
       .catch(() => {})
+    api.get<{ all_tags?: string[] }>('/api/library/items?limit=1')
+      .then((res) => {
+        if (res.all_tags) setLibraryTags(res.all_tags)
+      })
+      .catch(() => {})
   }, [id])
 
   if (loading) {
@@ -257,7 +277,7 @@ export function ItemDetailPage() {
   const coverUrl = rawCoverUrl.includes('?v=')
     ? rawCoverUrl
     : `${rawCoverUrl}${item.updated_at ? (rawCoverUrl.includes('?') ? `&v=${encodeURIComponent(item.updated_at)}` : `?v=${encodeURIComponent(item.updated_at)}`) : ''}`
-  const completedSubTracks = tracks.filter((t) => t.has_target_sub).length
+  const completedSubTracks = tracks.filter((t) => t.has_source_sub && t.has_target_sub).length
   const subPercent = tracks.length > 0 ? Math.round((completedSubTracks / tracks.length) * 100) : 0
   const defProc = data.available_profiles?.default_processing
   const isDefaultAsr = (val: string) => {
@@ -362,6 +382,67 @@ export function ItemDetailPage() {
     }
   }
 
+  const availableQuickTags = useMemo(() => {
+    const existing = new Set(editTagsList.map((t) => t.toLowerCase()))
+    return libraryTags.filter((t) => !existing.has(t.toLowerCase()))
+  }, [libraryTags, editTagsList])
+
+  const filteredCreators = useMemo(() => {
+    if (!creatorFilterText.trim()) return allCreators
+    const q = creatorFilterText.trim().toLowerCase()
+    return allCreators.filter((c) => c.name.toLowerCase().includes(q))
+  }, [allCreators, creatorFilterText])
+
+  const handleAddTag = (raw: string) => {
+    if (!raw.trim()) return
+    const parts = raw.split(/[,/、，\n]+/).map((s) => s.trim().replace(/^#/, '')).filter(Boolean)
+    if (parts.length === 0) return
+    setEditTagsList((prev) => {
+      const set = new Set(prev.map((t) => t.toLowerCase()))
+      const next = [...prev]
+      for (const p of parts) {
+        if (!set.has(p.toLowerCase())) {
+          set.add(p.toLowerCase())
+          next.push(p)
+        }
+      }
+      return next
+    })
+    setNewTagInput('')
+  }
+
+  const handleRemoveTag = (tagToRemove: string) => {
+    setEditTagsList((prev) => prev.filter((t) => t.toLowerCase() !== tagToRemove.toLowerCase()))
+  }
+
+  const handleCreateCreator = async () => {
+    const name = newCreatorName.trim()
+    if (!name) return
+    setCreatingCreator(true)
+    try {
+      const res = await api.post<Creator>('/api/creators', {
+        name,
+        kind: newCreatorKind,
+      })
+      if (res && res.creator_id) {
+        setAllCreators((prev) => {
+          if (prev.some((c) => c.creator_id === res.creator_id)) return prev
+          return [res, ...prev]
+        })
+        setEditCreatorIds((prev) => {
+          if (prev.includes(res.creator_id)) return prev
+          return [...prev, res.creator_id]
+        })
+        setNewCreatorName('')
+        setShowAddCreator(false)
+      }
+    } catch (err: any) {
+      alert('添加创作者失败: ' + (err.message || '未知错误'))
+    } finally {
+      setCreatingCreator(false)
+    }
+  }
+
   const handleSubmitEdit = async (e: React.FormEvent) => {
     e.preventDefault()
     setSubmittingEdit(true)
@@ -370,7 +451,17 @@ export function ItemDetailPage() {
       formData.append('title', editTitle)
       formData.append('original_title', editOrigTitle)
       formData.append('rj_code', editRjCode)
-      formData.append('tags', editTags)
+
+      let finalTags = [...editTagsList]
+      if (!rawTagMode && newTagInput.trim()) {
+        const parts = newTagInput.split(/[,/、，\n]+/).map((s) => s.trim().replace(/^#/, '')).filter(Boolean)
+        for (const p of parts) {
+          if (!finalTags.some((t) => t.toLowerCase() === p.toLowerCase())) {
+            finalTags.push(p)
+          }
+        }
+      }
+      formData.append('tags', rawTagMode ? editTags : finalTags.join(', '))
       editCreatorIds.forEach((cid) => formData.append('creator_ids', cid))
 
       await api.postForm(`/items/${item.item_id}/edit`, formData)
@@ -441,10 +532,10 @@ export function ItemDetailPage() {
                 </a>
               )}
               <span className="chip" style={{ background: 'rgba(255, 255, 255, 0.08)' }}>
-                {tracks.length} 音轨
+                {overview?.track_count ?? tracks.length} 音轨
               </span>
               <span className="chip" style={{ background: 'rgba(255, 255, 255, 0.08)' }}>
-                {item.total_duration_label || '00:00'}
+                {overview?.total_duration_label || item.total_duration_label || '00:00'}
               </span>
             </div>
 
@@ -520,7 +611,23 @@ export function ItemDetailPage() {
                 </button>
               )}
 
-              <button type="button" className="btn btn-ghost" onClick={() => setEditOpen(true)}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => {
+                  setEditTitle(item.title || '')
+                  setEditOrigTitle(item.original_title || '')
+                  setEditRjCode(item.rj_code || '')
+                  const curTags = item.tags || []
+                  setEditTagsList(curTags)
+                  setEditTags(curTags.join(', '))
+                  setEditCreatorIds(item.creator_ids || [])
+                  setNewTagInput('')
+                  setShowAddCreator(false)
+                  setNewCreatorName('')
+                  setEditOpen(true)
+                }}
+              >
                 <Edit3 size={15} />
                 编辑作品
               </button>
@@ -555,15 +662,17 @@ export function ItemDetailPage() {
       {/* Overview Stats Grid */}
       <div className="card-grid" style={{ marginBottom: 32 }}>
         <div className="stat-card">
-          <span className="stat-value">{tracks.length}</span>
+          <span className="stat-value">{overview?.track_count ?? tracks.length}</span>
           <span className="stat-label">总音轨数</span>
         </div>
         <div className="stat-card">
-          <span className="stat-value">{item.total_duration_label || '00:00'}</span>
+          <span className="stat-value">{overview?.total_duration_label || item.total_duration_label || '00:00'}</span>
           <span className="stat-label">总播放时长</span>
         </div>
         <div className="stat-card">
-          <span className="stat-value">{formatBytes(item.total_size)}</span>
+          <span className="stat-value">
+            {formatBytes(overview?.total_size ?? item.total_size ?? tracks.reduce((acc, t) => acc + (t.size || 0), 0))}
+          </span>
           <span className="stat-label">媒体总体积</span>
         </div>
         <div className="stat-card">
@@ -724,10 +833,12 @@ export function ItemDetailPage() {
                     </td>
                     <td style={{ textAlign: 'center' }}>
                       <div style={{ display: 'flex', justifyContent: 'center' }}>
-                        {track.has_target_sub ? (
+                        {track.has_source_sub && track.has_target_sub ? (
                           <span className="sub-badge sub-bilingual">双语 ✓</span>
                         ) : track.has_source_sub ? (
                           <span className="sub-badge sub-jp">仅日文</span>
+                        ) : track.has_target_sub ? (
+                          <span className="sub-badge sub-zh">仅中字</span>
                         ) : (
                           <span className="sub-badge sub-none">未转写</span>
                         )}
@@ -968,7 +1079,38 @@ export function ItemDetailPage() {
                           const res = await api.get<{ ok: boolean; data: any }>(`/api/dlsite/${editRjCode.trim()}`)
                           if (res.ok && res.data) {
                             if (res.data.title && !editTitle) setEditTitle(res.data.title)
-                            if (res.data.tags && res.data.tags.length > 0) setEditTags(res.data.tags.join(', '))
+                            if (res.data.tags && res.data.tags.length > 0) {
+                              setEditTagsList(res.data.tags)
+                              setEditTags(res.data.tags.join(', '))
+                            }
+                            const newCreatorIds = [...editCreatorIds]
+                            if (res.data.circle) {
+                              let circle = allCreators.find((c) => c.kind === 'circle' && c.name.toLowerCase() === res.data.circle.toLowerCase())
+                              if (!circle) {
+                                try {
+                                  circle = await api.post<Creator>('/api/creators', { name: res.data.circle, kind: 'circle' })
+                                  if (circle) setAllCreators((prev) => [circle!, ...prev])
+                                } catch {}
+                              }
+                              if (circle && !newCreatorIds.includes(circle.creator_id)) {
+                                newCreatorIds.push(circle.creator_id)
+                              }
+                            }
+                            if (Array.isArray(res.data.voice_actors)) {
+                              for (const va of res.data.voice_actors) {
+                                let vaCreator = allCreators.find((c) => c.kind === 'voice_actor' && c.name.toLowerCase() === va.toLowerCase())
+                                if (!vaCreator) {
+                                  try {
+                                    vaCreator = await api.post<Creator>('/api/creators', { name: va, kind: 'voice_actor' })
+                                    if (vaCreator) setAllCreators((prev) => [vaCreator!, ...prev])
+                                  } catch {}
+                                }
+                                if (vaCreator && !newCreatorIds.includes(vaCreator.creator_id)) {
+                                  newCreatorIds.push(vaCreator.creator_id)
+                                }
+                              }
+                            }
+                            setEditCreatorIds(newCreatorIds)
                           }
                         } catch {}
                       }}
@@ -986,24 +1128,236 @@ export function ItemDetailPage() {
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                    标签（逗号分隔）
-                  </label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    value={editTags}
-                    onChange={(e) => setEditTags(e.target.value)}
-                    placeholder="如: 耳かき, 添い寝, 囁き"
-                  />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <label style={{ fontSize: 12, color: 'var(--fg-dim)' }}>
+                      标签 {editTagsList.length > 0 && `(已选 ${editTagsList.length})`}
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: 11, padding: '2px 6px', height: 'auto', color: 'var(--fg-dim)' }}
+                      onClick={() => {
+                        if (!rawTagMode) {
+                          setEditTags(editTagsList.join(', '))
+                        } else {
+                          const parts = editTags.split(/[,/、，\n]+/).map((s) => s.trim().replace(/^#/, '')).filter(Boolean)
+                          setEditTagsList(Array.from(new Set(parts)))
+                        }
+                        setRawTagMode(!rawTagMode)
+                      }}
+                    >
+                      {rawTagMode ? '切回标签徽章' : '纯文本模式'}
+                    </button>
+                  </div>
+
+                  {!rawTagMode ? (
+                    <div>
+                      {/* Current selected tags chips */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: 6,
+                          padding: '6px 8px',
+                          background: 'rgba(255, 255, 255, 0.03)',
+                          border: '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--radius-sm)',
+                          minHeight: 38,
+                          marginBottom: 8,
+                          alignItems: 'center',
+                        }}
+                      >
+                        {editTagsList.length === 0 ? (
+                          <span style={{ fontSize: 12, color: 'var(--fg-faint)' }}>暂无标签，可输入或在下方点击快速添加</span>
+                        ) : (
+                          editTagsList.map((tag) => (
+                            <span
+                              key={tag}
+                              className="chip chip-tag"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                padding: '2px 7px',
+                                fontSize: 12,
+                              }}
+                            >
+                              🏷️ {tag}
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveTag(tag)}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  padding: 0,
+                                  cursor: 'pointer',
+                                  color: 'inherit',
+                                  opacity: 0.7,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                }}
+                                title="删除标签"
+                              >
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))
+                        )}
+                      </div>
+
+                      {/* Add new tag input bar */}
+                      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                        <input
+                          type="text"
+                          className="input-field"
+                          style={{ flex: 1, height: 30, fontSize: 12 }}
+                          value={newTagInput}
+                          onChange={(e) => setNewTagInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              handleAddTag(newTagInput)
+                            }
+                          }}
+                          placeholder="输入标签名（回车或逗号分隔批量添加）…"
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ height: 30, padding: '0 10px', fontSize: 12 }}
+                          onClick={() => handleAddTag(newTagInput)}
+                        >
+                          <Plus size={13} />
+                          添加标签
+                        </button>
+                      </div>
+
+                      {/* Quick-add suggestions from existing library tags */}
+                      {availableQuickTags.length > 0 && (
+                        <div style={{ marginBottom: 4 }}>
+                          <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginBottom: 4 }}>
+                            作品库已有标签（点击添加）：
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 68, overflowY: 'auto' }}>
+                            {availableQuickTags.slice(0, 30).map((t: string) => (
+                              <button
+                                key={t}
+                                type="button"
+                                className="chip"
+                                style={{
+                                  cursor: 'pointer',
+                                  background: 'rgba(255, 255, 255, 0.05)',
+                                  fontSize: 11,
+                                  padding: '1px 6px',
+                                  lineHeight: '18px',
+                                }}
+                                onClick={() => handleAddTag(t)}
+                              >
+                                + {t}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      className="input-field"
+                      value={editTags}
+                      onChange={(e) => {
+                        setEditTags(e.target.value)
+                        const parts = e.target.value.split(/[,/、，\n]+/).map((s) => s.trim().replace(/^#/, '')).filter(Boolean)
+                        setEditTagsList(Array.from(new Set(parts)))
+                      }}
+                      placeholder="如: 耳かき, 添い寝, 囁き"
+                    />
+                  )}
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                    关联创作者
-                  </label>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <label style={{ fontSize: 12, color: 'var(--fg-dim)' }}>
+                      关联创作者 {editCreatorIds.length > 0 && `(已选 ${editCreatorIds.length})`}
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: 11, padding: '2px 8px', height: 'auto', color: 'var(--accent-base)' }}
+                      onClick={() => setShowAddCreator(!showAddCreator)}
+                    >
+                      <Plus size={12} />
+                      {showAddCreator ? '收起新增' : '新增创作者'}
+                    </button>
+                  </div>
+
+                  {/* Inline Add Creator Form */}
+                  {showAddCreator && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: 8,
+                        alignItems: 'center',
+                        padding: '8px 10px',
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-sm)',
+                        marginBottom: 10,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <input
+                        type="text"
+                        className="input-field"
+                        style={{ flex: 1, minWidth: 130, height: 30, fontSize: 12 }}
+                        placeholder="创作者/声优/社团名称…"
+                        value={newCreatorName}
+                        onChange={(e) => setNewCreatorName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            handleCreateCreator()
+                          }
+                        }}
+                      />
+                      <select
+                        className="select-field"
+                        style={{ height: 30, fontSize: 12, padding: '2px 8px' }}
+                        value={newCreatorKind}
+                        onChange={(e) => setNewCreatorKind(e.target.value as 'voice_actor' | 'circle')}
+                      >
+                        <option value="voice_actor">🎙️ 声优 (CV)</option>
+                        <option value="circle">🏢 社团 (Circle)</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ height: 30, padding: '0 10px', fontSize: 12 }}
+                        onClick={handleCreateCreator}
+                        disabled={creatingCreator || !newCreatorName.trim()}
+                      >
+                        <Plus size={13} />
+                        {creatingCreator ? '添加中…' : '添加'}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Search/filter existing creators if list is long */}
+                  {allCreators.length > 8 && (
+                    <div style={{ marginBottom: 6 }}>
+                      <input
+                        type="text"
+                        className="input-field"
+                        style={{ height: 26, fontSize: 11, padding: '2px 8px' }}
+                        placeholder="筛选已有创作者…"
+                        value={creatorFilterText}
+                        onChange={(e) => setCreatorFilterText(e.target.value)}
+                      />
+                    </div>
+                  )}
+
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxHeight: 120, overflowY: 'auto' }}>
-                    {allCreators.map((c) => {
+                    {filteredCreators.map((c: Creator) => {
                       const active = editCreatorIds.includes(c.creator_id)
                       return (
                         <button
@@ -1020,6 +1374,7 @@ export function ItemDetailPage() {
                           style={{ cursor: 'pointer' }}
                         >
                           {active && <Check size={12} />}
+                          {c.kind === 'voice_actor' ? '🎙️ ' : '🏢 '}
                           {c.name}
                         </button>
                       )

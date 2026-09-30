@@ -185,6 +185,17 @@ export function ItemDetailPage() {
   const [creatingCreator, setCreatingCreator] = useState(false)
   const [creatorFilterText, setCreatorFilterText] = useState('')
 
+  const availableQuickTags = useMemo(() => {
+    const existing = new Set(editTagsList.map((t) => t.toLowerCase()))
+    return libraryTags.filter((t) => !existing.has(t.toLowerCase()))
+  }, [libraryTags, editTagsList])
+
+  const filteredCreators = useMemo(() => {
+    if (!creatorFilterText.trim()) return allCreators
+    const q = creatorFilterText.trim().toLowerCase()
+    return allCreators.filter((c) => c.name.toLowerCase().includes(q))
+  }, [allCreators, creatorFilterText])
+
   // Process form state
   const [selectedAsr, setSelectedAsr] = useState('')
   const [selectedLlm, setSelectedLlm] = useState('')
@@ -381,17 +392,6 @@ export function ItemDetailPage() {
       setSubmittingProcess(false)
     }
   }
-
-  const availableQuickTags = useMemo(() => {
-    const existing = new Set(editTagsList.map((t) => t.toLowerCase()))
-    return libraryTags.filter((t) => !existing.has(t.toLowerCase()))
-  }, [libraryTags, editTagsList])
-
-  const filteredCreators = useMemo(() => {
-    if (!creatorFilterText.trim()) return allCreators
-    const q = creatorFilterText.trim().toLowerCase()
-    return allCreators.filter((c) => c.name.toLowerCase().includes(q))
-  }, [allCreators, creatorFilterText])
 
   const handleAddTag = (raw: string) => {
     if (!raw.trim()) return
@@ -599,7 +599,7 @@ export function ItemDetailPage() {
                 开始播放
               </button>
 
-              {overview.actionable_incomplete_count > 0 && (
+              {(overview?.actionable_incomplete_count ?? 0) > 0 && (
                 <button
                   type="button"
                   className="btn"

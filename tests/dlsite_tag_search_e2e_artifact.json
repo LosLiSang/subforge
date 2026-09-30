@@ -1,6 +1,6 @@
 {
   "test_name": "test_dlsite_metadata_and_tag_search_e2e",
-  "timestamp": "2026-09-30T12:52:15.576729+00:00",
+  "timestamp": "2026-09-30T13:08:14.448427+00:00",
   "status": "passed",
   "verified_features": [
     "DLsite HTML parser (title, circle, CVs, tags, cover_url, release_date)",

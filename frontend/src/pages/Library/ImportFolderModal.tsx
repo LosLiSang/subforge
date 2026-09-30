@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
-import { X, Folder, Upload } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import { X, Folder, Upload, Check } from 'lucide-react'
 import { api } from '../../api/client'
+import type { Creator } from '../../types'
 
 interface ImportFolderModalProps {
   isOpen: boolean
@@ -11,10 +12,25 @@ interface ImportFolderModalProps {
 export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderModalProps) {
   const [selectionId, setSelectionId] = useState('')
   const [folderName, setFolderName] = useState('')
+  const [rjCode, setRjCode] = useState('')
+  const [title, setTitle] = useState('')
   const [autoProcess, setAutoProcess] = useState(true)
+  const [creators, setCreators] = useState<Creator[]>([])
+  const [selectedCreatorIds, setSelectedCreatorIds] = useState<string[]>([])
   const [picking, setPicking] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (isOpen) {
+      api.get<any>('/api/creators/list')
+        .then((res) => {
+          const list = Array.isArray(res) ? res : (res.creators || res.all_creators || [])
+          setCreators(list)
+        })
+        .catch(() => {})
+    }
+  }, [isOpen])
 
   if (!isOpen) return null
 
@@ -25,7 +41,15 @@ export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderMo
       const res = await api.post<{ selection_id?: string; name?: string; cancelled?: boolean }>('/picker/folder')
       if (res.selection_id) {
         setSelectionId(res.selection_id)
-        setFolderName(res.name || '已选文件夹')
+        const name = res.name || '已选文件夹'
+        setFolderName(name)
+        const m = name.match(/RJ\d{6,8}/i)
+        if (m && !rjCode) {
+          setRjCode(m[0].toUpperCase())
+        }
+        if (!title) {
+          setTitle(name)
+        }
       }
     } catch (err: any) {
       setError('选择文件夹失败: ' + (err.message || '未知错误'))
@@ -34,10 +58,21 @@ export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderMo
     }
   }
 
+  const toggleCreator = (id: string) => {
+    setSelectedCreatorIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    )
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectionId) {
       setError('请先选择要导入的作品文件夹')
+      return
+    }
+    const finalRj = rjCode.trim() || (folderName.match(/RJ\d{6,8}/i)?.[0] ?? '')
+    if (!finalRj) {
+      setError('请输入或从目录中提取有效的 RJ 号（例如: RJ01499022）')
       return
     }
     setSubmitting(true)
@@ -45,7 +80,10 @@ export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderMo
     try {
       const formData = new FormData()
       formData.append('selection_id', selectionId)
+      formData.append('rj_code', finalRj.toUpperCase())
+      if (title.trim()) formData.append('title', title.trim())
       if (autoProcess) formData.append('auto_process', 'on')
+      selectedCreatorIds.forEach((id) => formData.append('creator_ids', id))
 
       await api.postForm('/items/import-folder', formData)
       onSuccess()
@@ -98,6 +136,58 @@ export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderMo
                 </span>
               </div>
             </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                RJ 号 *
+              </label>
+              <input
+                type="text"
+                className="input-field"
+                value={rjCode}
+                onChange={(e) => setRjCode(e.target.value.toUpperCase())}
+                placeholder="例如: RJ01499022"
+                required
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                作品标题
+              </label>
+              <input
+                type="text"
+                className="input-field"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="留空使用 RJ 号或目录名"
+              />
+            </div>
+
+            {creators.length > 0 && (
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                  关联创作者
+                </label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxHeight: 100, overflowY: 'auto' }}>
+                  {creators.map((c) => {
+                    const active = selectedCreatorIds.includes(c.creator_id)
+                    return (
+                      <button
+                        key={c.creator_id}
+                        type="button"
+                        className={`chip ${active ? (c.kind === 'voice_actor' ? 'chip-creator' : 'chip-circle') : 'chip-tag'}`}
+                        onClick={() => toggleCreator(c.creator_id)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        {active && <Check size={12} />}
+                        {c.name}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, marginTop: 4 }}>
               <input

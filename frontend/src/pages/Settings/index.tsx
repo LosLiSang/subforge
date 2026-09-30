@@ -116,7 +116,7 @@ export function SettingsPage() {
 
   const handleSelectFolder = async () => {
     try {
-      const res = await api.post<{ selection_id?: string; cancelled?: boolean }>('/picker/media-folder')
+      const res = await api.post<{ selection_id?: string; cancelled?: boolean }>('/picker/directory')
       if (res.selection_id) {
         const formData = new FormData()
         formData.append('selection_id', res.selection_id)

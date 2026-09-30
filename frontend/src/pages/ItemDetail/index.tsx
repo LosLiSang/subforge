@@ -253,7 +253,10 @@ export function ItemDetailPage() {
   }
 
   const { item, tracks, overview } = data
-  const coverUrl = item.cover_url || `/covers/${item.item_id}`
+  const rawCoverUrl = item.cover_url || `/covers/${item.item_id}`
+  const coverUrl = rawCoverUrl.includes('?v=')
+    ? rawCoverUrl
+    : `${rawCoverUrl}${item.updated_at ? (rawCoverUrl.includes('?') ? `&v=${encodeURIComponent(item.updated_at)}` : `?v=${encodeURIComponent(item.updated_at)}`) : ''}`
   const completedSubTracks = tracks.filter((t) => t.has_target_sub).length
   const subPercent = tracks.length > 0 ? Math.round((completedSubTracks / tracks.length) * 100) : 0
   const defProc = data.available_profiles?.default_processing

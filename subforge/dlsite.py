@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import re
 import urllib.error
@@ -47,7 +48,7 @@ def _format_date(val: str) -> str:
 
 def _clean_text(html_fragment: str) -> str:
     clean = re.sub(r"<[^>]+>", " ", html_fragment)
-    return " ".join(clean.split()).strip()
+    return html.unescape(" ".join(clean.split())).strip()
 
 
 def _create_opener(proxy: str = "") -> urllib.request.OpenerDirector:
@@ -65,7 +66,7 @@ def parse_dlsite_html(html: str, rj_code: str) -> DlsiteMetadata:
     if not title:
         og_title = re.search(r'<meta property=["\']og:title["\'] content=["\']([^"\']+)["\']', html, re.IGNORECASE)
         if og_title:
-            title = og_title.group(1).split("|")[0].split(" - ")[0].strip()
+            title = _clean_text(og_title.group(1).split("|")[0].split(" - ")[0])
     if not title:
         title = rj_code
 

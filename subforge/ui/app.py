@@ -2131,7 +2131,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         if cover_path is not None and item.cover_source is None:
             library.set_cover_source(item.item_id, "embedded")
         if cover_path is None:
-            return await get_default_cover_endpoint(request)
+            resp = await get_default_cover_endpoint(request)
+            resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            resp.headers["Pragma"] = "no-cache"
+            return resp
         stat = cover_path.stat()
         etag = f'"{int(stat.st_mtime)}-{stat.st_size}"'
         if request.headers.get("if-none-match") == etag:
@@ -2257,7 +2260,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             "rj_code": item.rj_code,
             "kind": item.kind.value if hasattr(item.kind, "value") else str(item.kind),
             "tags": _extract_item_tags(item),
-            "cover_url": f"/covers/{item.item_id}",
+            "cover_url": _cover_url_for_item(item),
         }
         return JSONResponse({"track": track_payload, "item": item_payload})
 
@@ -2805,7 +2808,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                     }
                     for cid in it.creator_ids if cid in creator_by_id
                 ],
-                "cover_url": f"/covers/{it.item_id}",
+                "cover_url": _cover_url_for_item(it),
                 "cover_source": it.cover_source,
                 "track_count": len(it.tracks),
                 "total_duration": tot_dur,
@@ -2916,7 +2919,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                 }
                 for cid in item.creator_ids if cid in creator_by_id
             ],
-            "cover_url": f"/covers/{item.item_id}",
+            "cover_url": _cover_url_for_item(item),
             "cover_source": item.cover_source,
             "created_at": item.created_at,
             "updated_at": item.updated_at,
@@ -4323,6 +4326,15 @@ def _item_directory_sizes(root: Path, items: list) -> dict[str, int]:
         except OSError:
             sizes[item.item_id] = sum(track.size for track in item.tracks)
     return sizes
+
+
+def _cover_url_for_item(it) -> str:
+    base = f"/covers/{it.item_id}"
+    v = getattr(it, "updated_at", None)
+    if v:
+        clean_v = re.sub(r"[^0-9a-zA-Z]", "", str(v))
+        return f"{base}?v={clean_v}"
+    return base
 
 
 def _extract_item_tags(it) -> list[str]:

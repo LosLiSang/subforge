@@ -186,7 +186,7 @@ export function LibraryPage() {
         <div className="continue-card" onClick={handleResumeRecent} style={{ cursor: 'pointer' }}>
           <div className="continue-cover">
             <img
-              src={recentTrack.item.cover_url || '/covers/default'}
+              src={recentTrack.item.cover_url ? `${recentTrack.item.cover_url}${recentTrack.item.updated_at ? (recentTrack.item.cover_url.includes('?') ? `&v=${encodeURIComponent(recentTrack.item.updated_at)}` : `?v=${encodeURIComponent(recentTrack.item.updated_at)}`) : ''}` : '/covers/default'}
               alt=""
               onError={(e) => ((e.target as HTMLElement).style.opacity = '0.3')}
             />
@@ -371,7 +371,7 @@ export function LibraryPage() {
                   <td>
                     <Link to={`/items/${item.item_id}`} style={{ display: 'block', width: 44, height: 44, borderRadius: 6, overflow: 'hidden' }}>
                       <img
-                        src={item.cover_url || '/covers/default'}
+                        src={item.cover_url ? `${item.cover_url}${item.updated_at ? (item.cover_url.includes('?') ? `&v=${encodeURIComponent(item.updated_at)}` : `?v=${encodeURIComponent(item.updated_at)}`) : ''}` : '/covers/default'}
                         alt=""
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         onError={(e) => ((e.target as HTMLElement).style.opacity = '0.3')}

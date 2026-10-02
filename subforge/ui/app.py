@@ -1693,6 +1693,50 @@ def create_app(deps: UiDependencies) -> Starlette:
             "creators.html", request, creators=creators, creator_rows=creator_rows,
         )
 
+    async def tags_page(request: Request) -> Response:
+        if request.method == "GET" and _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
+        library = runtime.open_active_library()
+        if library is None:
+            if request.method == "GET":
+                return RedirectResponse("/", status_code=303)
+            return JSONResponse({"error": "Library is not configured"}, status_code=409)
+        if request.method == "POST":
+            error = await _authorize_write(request, runtime)
+            if error:
+                return error
+            form = await _read_form(request)
+            action = form.get("action", "")
+            try:
+                if action == "create" or (not action and form.get("name")):
+                    name = form.get("name", "").strip().lstrip("#")
+                    tag = library.create_tag(name)
+                    return JSONResponse({"ok": True, "action": "create", "name": tag.name}, status_code=201)
+                elif action == "rename":
+                    old_name = form.get("old_name", form.get("name", ""))
+                    new_name = form.get("new_name", "")
+                    tag = library.rename_tag(old_name, new_name)
+                    return JSONResponse({"ok": True, "action": "rename", "name": tag.name})
+                elif action == "delete":
+                    name = form.get("name", "")
+                    library.delete_tag(name, remove_from_items=True)
+                    return JSONResponse({"ok": True, "action": "delete", "name": name})
+                elif action == "merge":
+                    source = form.get("source", "")
+                    target = form.get("target", "")
+                    tag = library.merge_tags(source, target)
+                    return JSONResponse({"ok": True, "action": "merge", "name": tag.name})
+                else:
+                    raise ValueError(f"unsupported tag action: {action}")
+            except KeyError:
+                return Response("Not found", status_code=404)
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            if "application/json" in request.headers.get("accept", "").lower():
+                return JSONResponse({"ok": True, "action": action})
+            return RedirectResponse("/tags", status_code=303)
+        return FileResponse(FRONTEND_DIST / "index.html") if (FRONTEND_DIST / "index.html").is_file() else RedirectResponse("/", status_code=303)
+
     async def profiles_page(request: Request) -> Response:
         if request.method == "GET" and _should_serve_spa(request):
             return FileResponse(FRONTEND_DIST / "index.html")
@@ -3194,6 +3238,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         library = runtime.open_active_library()
         if library is None:
             return JSONResponse([])
+        try:
+            library.deduplicate_creators()
+        except Exception:
+            pass
         creators = library.list_creators()
         items = library.list_items()
         counts: dict[str, int] = {}
@@ -3210,6 +3258,27 @@ def create_app(deps: UiDependencies) -> Starlette:
             for c in creators
         ])
 
+    async def api_tags(request: Request) -> Response:
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse([])
+        tags = library.list_tags()
+        items = library.list_items()
+        tag_counts: dict[str, int] = {}
+        for it in items:
+            for tag in _extract_item_tags(it):
+                if tag:
+                    tag_counts[tag.casefold()] = tag_counts.get(tag.casefold(), 0) + 1
+        return JSONResponse([
+            {
+                "name": t.name,
+                "item_count": tag_counts.get(t.name.casefold(), 0),
+                "created_at": t.created_at,
+                "last_used_at": t.last_used_at,
+            }
+            for t in tags
+        ])
+
     routes = [
         Mount("/static", StaticFiles(packages=[("subforge.ui", "static")]), name="static"),
         Route("/api/library/items", api_list_items),
@@ -3221,6 +3290,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/api/settings", api_get_settings),
         Route("/api/stats", api_stats),
         Route("/api/creators/list", api_creators),
+        Route("/api/tags/list", api_tags),
+        Route("/api/tags", tags_page, methods=["GET", "POST"]),
         Route("/api/tracks/{track_id}/media", track_media),
         Route("/api/tracks/{track_id}/subtitles", track_subtitles_both),
         Route("/api/tracks/{track_id}", api_track_detail),
@@ -3276,6 +3347,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/downloads", downloads_page),
         Route("/about", about_page),
         Route("/creators", creators_page, methods=["GET", "POST"]),
+        Route("/tags", tags_page, methods=["GET", "POST"]),
         Route("/profiles", profiles_page, methods=["GET", "POST"]),
         Route("/audio-models", save_audio_model, methods=["POST"]),
         Route("/audio-models/{profile_id}/test", test_audio_model, methods=["POST"]),

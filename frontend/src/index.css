@@ -1108,12 +1108,23 @@ button, input, select, textarea {
   overflow: hidden;
   max-height: 90vh;
 }
+.modal-content.modal-content-lg {
+  max-width: 640px;
+}
+.modal-content form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
 .modal-header {
   padding: 16px 20px;
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
 }
 .modal-title {
   font-size: 16px;
@@ -1127,6 +1138,8 @@ button, input, select, textarea {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  flex: 1;
+  min-height: 0;
 }
 .modal-footer {
   padding: 14px 20px;
@@ -1136,6 +1149,7 @@ button, input, select, textarea {
   justify-content: flex-end;
   gap: 10px;
   background: rgba(0, 0, 0, 0.15);
+  flex-shrink: 0;
 }
 
 /* Chips & Badges */

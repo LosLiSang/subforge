@@ -5,6 +5,13 @@ export interface Creator {
   item_count?: number
 }
 
+export interface TagItem {
+  name: string
+  item_count: number
+  created_at?: string | null
+  last_used_at?: string | null
+}
+
 export interface DlsiteMetadata {
   rj_code: string
   title: string

@@ -11,6 +11,7 @@ import { PlayerPage } from './pages/Player'
 import { TasksPage } from './pages/Tasks'
 import { ProfilesPage } from './pages/Profiles'
 import { CreatorsPage } from './pages/Creators'
+import { TagsPage } from './pages/Tags'
 import { SettingsPage } from './pages/Settings'
 import { StatsPage } from './pages/Stats'
 import { AboutPage } from './pages/About'
@@ -31,6 +32,7 @@ function App() {
               <Route path="downloads" element={<TasksPage />} />
               <Route path="profiles" element={<ProfilesPage />} />
               <Route path="creators" element={<CreatorsPage />} />
+              <Route path="tags" element={<TagsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="stats" element={<StatsPage />} />
               <Route path="about" element={<AboutPage />} />

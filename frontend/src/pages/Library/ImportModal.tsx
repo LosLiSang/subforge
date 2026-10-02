@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { X, Upload, Folder, Check, Plus } from 'lucide-react'
+import { X, Upload, Folder, Check, Plus, User, Users } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Creator } from '../../types'
 
@@ -280,8 +280,8 @@ export function ImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
                     value={newCreatorKind}
                     onChange={(e) => setNewCreatorKind(e.target.value as 'voice_actor' | 'circle')}
                   >
-                    <option value="voice_actor">🎙️ 声优 (CV)</option>
-                    <option value="circle">🏢 社团 (Circle)</option>
+                    <option value="voice_actor">声优 (CV)</option>
+                    <option value="circle">社团 (Circle)</option>
                   </select>
                   <button
                     type="button"
@@ -305,11 +305,10 @@ export function ImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
                       type="button"
                       className={`chip ${active ? (c.kind === 'voice_actor' ? 'chip-creator' : 'chip-circle') : 'chip-tag'}`}
                       onClick={() => toggleCreator(c.creator_id)}
-                      style={{ cursor: 'pointer' }}
+                      style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}
                     >
                       {active && <Check size={12} />}
-                      {c.kind === 'voice_actor' ? '🎙️ ' : '🏢 '}
-                      {c.name}
+                      <span>{c.name}</span>
                     </button>
                   )
                 })}

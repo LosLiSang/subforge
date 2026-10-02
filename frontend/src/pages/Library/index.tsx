@@ -301,8 +301,7 @@ export function LibraryPage() {
             <option value="">全部创作者 ({creators.length})</option>
             {creators.map((c) => (
               <option key={c.creator_id} value={c.creator_id}>
-                {c.kind === 'voice_actor' ? '🎙️ ' : '🏢 '}
-                {c.name} {c.item_count ? `(${c.item_count})` : ''}
+                {c.name} {c.kind === 'voice_actor' ? '(CV)' : '(社团)'} {c.item_count ? `(${c.item_count})` : ''}
               </option>
             ))}
           </select>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { X, Folder, Upload, Check, Globe, Sparkles } from 'lucide-react'
+import { X, Folder, Upload, Check, Globe, Sparkles, User, Users } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Creator, DlsiteMetadata } from '../../types'
 
@@ -213,10 +213,10 @@ export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderMo
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     <span className="chip chip-rj" style={{ fontSize: 10 }}>DLsite</span>
                     {dlsiteMeta.circle && (
-                      <span className="chip chip-circle" style={{ fontSize: 10 }}>🏢 {dlsiteMeta.circle}</span>
+                      <span className="chip chip-circle" style={{ fontSize: 10 }}>{dlsiteMeta.circle}</span>
                     )}
                     {dlsiteMeta.voice_actors.map((va) => (
-                      <span key={va} className="chip chip-creator" style={{ fontSize: 10 }}>🎙️ {va}</span>
+                      <span key={va} className="chip chip-creator" style={{ fontSize: 10 }}>{va}</span>
                     ))}
                   </div>
                   {dlsiteMeta.tags && dlsiteMeta.tags.length > 0 && (

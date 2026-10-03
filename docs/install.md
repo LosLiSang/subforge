@@ -7,6 +7,8 @@
 | Python 3.11 或更新 | 运行 SubForge | <https://www.python.org/downloads/> |
 | uv | 安装和运行 SubForge 的工具 | <https://docs.astral.sh/uv/getting-started/installation/> |
 | ffmpeg | 处理音频、从视频里提取音轨 | <https://ffmpeg.org/download.html>（装好后要能在终端里运行 `ffmpeg`） |
+| Node.js 20.19 / 22.12 或更新 | 构建图形界面（只在安装和更新时用到） | <https://nodejs.org/>（选 LTS 版本） |
+| Git | 下载源码 | <https://git-scm.com/downloads> |
 
 !!! tip "要不要显卡？"
 
@@ -17,27 +19,52 @@
 
 打开终端（Windows 上用 PowerShell 或 Windows Terminal），依次执行：
 
+**第 1 步：下载源码并构建界面**
+
+```bash
+git clone https://github.com/LosLiSang/subforge.git
+cd subforge/frontend
+npm install
+npm run build
+cd ..
+```
+
+`npm run build` 会把界面生成到 `subforge/ui/dist/`。这一步必须做，仓库里不附带构建好的界面。
+
+**第 2 步：安装 SubForge**
+
 === "装成全局命令（推荐）"
 
     ```bash
-    uv tool install git+https://github.com/LosLiSang/subforge.git
+    uv tool install .
     subforge ui
     ```
 
-    以后在任何目录输入 `subforge ui` 就能启动。更新时执行 `uv tool upgrade subforge`。
+    以后在任何目录输入 `subforge ui` 就能启动。
 
-=== "从源码运行"
+=== "直接在源码目录运行"
 
     ```bash
-    git clone https://github.com/LosLiSang/subforge.git
-    cd subforge
     uv sync
     uv run subforge ui
     ```
 
     以后在 `subforge` 目录里执行 `uv run subforge ui` 启动。
 
-不需要安装 Node.js，界面已经打包在里面了。
+!!! warning "不要直接用 `uv tool install git+https://…`"
+
+    这种方式不会构建界面，装好后打开的是旧版页面。请按上面的步骤先构建再安装。
+
+## 更新
+
+```bash
+cd subforge
+git pull
+cd frontend && npm install && npm run build && cd ..
+uv tool install . --reinstall    # 如果是直接在源码目录运行，改为 uv sync
+```
+
+每次更新都要重新构建界面，否则看到的还是旧界面。
 
 ## 第一次启动
 

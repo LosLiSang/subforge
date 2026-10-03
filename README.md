@@ -136,28 +136,27 @@ subforge audio.mp3
 - Python >= 3.11
 - [uv](https://docs.astral.sh/uv/)
 - [ffmpeg](https://ffmpeg.org/)（音频预处理和视频导入需要）
-
-### 从源码运行
+- [Node.js](https://nodejs.org/) 20.19 / 22.12 或更新（构建前端界面）
 
 ```bash
 git clone https://github.com/LosLiSang/subforge.git
 cd subforge
+
+# 1. 构建前端（产物输出到 subforge/ui/dist/，仓库不附带）
+cd frontend && npm install && npm run build && cd ..
+
+# 2a. 装成全局命令
+uv tool install .
+subforge ui
+
+# 2b. 或者直接在源码目录运行
 uv sync
 uv run subforge ui
 ```
 
-### 安装当前发布版
-
-```bash
-uv tool install .
-# 或通过远程 git 仓库安装：
-# uv tool install git+https://github.com/LosLiSang/subforge.git
-subforge ui
-```
-
 首次启动时选择本地归档根目录，浏览器打开 <http://127.0.0.1:8765>。之后在「翻译配置」页添加模型 Profile，在「设置」页调整代理、并发、缓存目录和默认封面。
 
-> 仓库已附带构建好的前端（`subforge/ui/dist/`），直接运行即可，无需安装 Node。
+> 仓库不附带构建好的前端：首次安装和每次 `git pull` 之后都要重新执行 `npm run build`。不要直接 `uv tool install git+https://…`，那样不会构建前端，打开的是旧版页面。
 
 ## CLI 批处理
 

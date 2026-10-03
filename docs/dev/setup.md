@@ -25,9 +25,13 @@ React 19 + TypeScript + Vite，源码在 `frontend/`：
 cd frontend
 npm install
 npm run dev                  # Vite 开发服务器，/api 代理到 127.0.0.1:8765
-npm run build                # 输出到 subforge/ui/dist/（随仓库提交，用户无需 Node）
+npm run build                # 输出到 subforge/ui/dist/（已 gitignore，不随仓库提交）
 npm run lint                 # oxlint
 ```
+
+`subforge/ui/dist/` 已加入 `.gitignore`，不随仓库提交。打包时 `pyproject.toml` 通过 hatch 的 `artifacts` 把本地已构建的 `dist/**` 收进 wheel，所以 `uv tool install .` 前必须先 `npm run build`；`uv tool install git+https://…` 会在干净副本上打包，拿不到 dist。
+
+没有 `dist/index.html` 时，后端（`_should_serve_spa`）会回退到旧版 Jinja 模板页面，不会报错——看到旧界面通常就是忘了构建前端。
 
 ## 文档站（Zensical）
 

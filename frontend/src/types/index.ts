@@ -5,6 +5,23 @@ export interface Creator {
   item_count?: number
 }
 
+export interface TagItem {
+  name: string
+  item_count: number
+  created_at?: string | null
+  last_used_at?: string | null
+}
+
+export interface DlsiteMetadata {
+  rj_code: string
+  title: string
+  circle?: string | null
+  voice_actors: string[]
+  tags: string[]
+  cover_url?: string | null
+  release_date?: string | null
+}
+
 export interface Track {
   track_id: string
   item_id: string

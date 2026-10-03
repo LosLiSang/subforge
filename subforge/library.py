@@ -42,6 +42,13 @@ class Creator:
 
 
 @dataclass(frozen=True)
+class Tag:
+    name: str
+    created_at: str | None = None
+    last_used_at: str | None = None
+
+
+@dataclass(frozen=True)
 class ImportSource:
     source_id: str
     url: str
@@ -129,8 +136,11 @@ class LibraryItem:
     item_id: str
     kind: ItemKind
     title: str
+    original_title: str | None = None
     rj_code: str | None = None
     author: str | None = None
+    release_date: str | None = None
+    tags: list[str] = field(default_factory=list)
     creator_ids: list[str] = field(default_factory=list)
     sources: list[ImportSource] = field(default_factory=list)
     cover_source: str | None = None
@@ -189,6 +199,7 @@ class LibraryStore:
         self._db_lock = threading.RLock()
         self._item_cache: dict[str, tuple[int, LibraryItem]] = {}
         self._creators_cache: tuple[int, list[Creator]] | None = None
+        self._tags_cache: tuple[int, list[Tag]] | None = None
 
     @classmethod
     def initialize(cls, root: Path) -> "LibraryStore":
@@ -400,6 +411,18 @@ class LibraryStore:
         if not clean_name:
             raise ValueError("creator name is required")
         creators = self.list_creators()
+        target_creator = next((c for c in creators if c.creator_id == creator_id), None)
+        if not target_creator:
+            raise KeyError(creator_id)
+
+        # Check if another creator already has the exact same name and kind -> auto-merge
+        duplicate = next(
+            (c for c in creators if c.creator_id != creator_id and c.kind == target_creator.kind and c.name.casefold() == clean_name.casefold()),
+            None
+        )
+        if duplicate:
+            return self.merge_creators(source_id=creator_id, target_id=duplicate.creator_id)
+
         for index, creator in enumerate(creators):
             if creator.creator_id == creator_id:
                 updated = Creator(creator.creator_id, clean_name, creator.kind, creator.last_used_at)
@@ -407,6 +430,24 @@ class LibraryStore:
                 self._write_creators(creators)
                 return updated
         raise KeyError(creator_id)
+
+    def deduplicate_creators(self) -> int:
+        """Automatically find and merge creators that share the exact same name and kind."""
+        creators = self.list_creators()
+        seen: dict[tuple[str, CreatorKind], Creator] = {}
+        merged_count = 0
+        for c in creators:
+            key = (c.name.strip().casefold(), c.kind)
+            if key in seen:
+                primary = seen[key]
+                self.merge_creators(source_id=c.creator_id, target_id=primary.creator_id)
+                merged_count += 1
+            else:
+                seen[key] = c
+        return merged_count
+
+    def find_or_create_creator(self, name: str, kind: CreatorKind) -> Creator:
+        return self._find_or_create_creator(name, kind)
 
     def touch_creators(self, creator_ids: list[str]) -> None:
         selected = set(creator_ids)
@@ -457,6 +498,157 @@ class LibraryStore:
         self._write_creators([creator for creator in creators.values() if creator.creator_id != source_id])
         return target
 
+    @property
+    def _tags_path(self) -> Path:
+        return self.root / ".subforge" / "tags.json"
+
+    def list_tags(self) -> list[Tag]:
+        tags_dict: dict[str, Tag] = {}
+        mtime_ns = 0
+        if self._tags_path.exists():
+            try:
+                mtime_ns = self._tags_path.stat().st_mtime_ns
+            except OSError:
+                mtime_ns = 0
+            if getattr(self, "_tags_cache", None) is not None:
+                cached_mtime, cached_tags = self._tags_cache
+                if cached_mtime == mtime_ns:
+                    tags_dict = {t.name.casefold(): t for t in cached_tags}
+            if not tags_dict:
+                try:
+                    data = json.loads(self._tags_path.read_text(encoding="utf-8"))
+                    for entry in data.get("tags", []):
+                        name = str(entry.get("name", "")).strip().lstrip("#")
+                        if name:
+                            tags_dict[name.casefold()] = Tag(
+                                name=name,
+                                created_at=entry.get("created_at"),
+                                last_used_at=entry.get("last_used_at"),
+                            )
+                except Exception:
+                    pass
+
+        dirty = False
+        now = _now()
+        for it in self.list_items():
+            for t in getattr(it, "tags", []):
+                clean_t = str(t).strip().lstrip("#")
+                if clean_t and clean_t.casefold() not in tags_dict:
+                    tags_dict[clean_t.casefold()] = Tag(name=clean_t, created_at=now, last_used_at=now)
+                    dirty = True
+
+        tag_list = list(tags_dict.values())
+        tag_list.sort(key=lambda t: t.name.casefold())
+
+        if dirty or (not self._tags_path.exists() and tag_list):
+            self._write_tags(tag_list)
+        elif mtime_ns > 0:
+            self._tags_cache = (mtime_ns, list(tag_list))
+
+        return tag_list
+
+    def _write_tags(self, tags: list[Tag]) -> None:
+        self._tags_cache = None
+        _atomic_json(self._tags_path, {
+            "tags": [
+                {
+                    "name": tag.name,
+                    "created_at": tag.created_at,
+                    "last_used_at": tag.last_used_at,
+                }
+                for tag in tags
+            ]
+        })
+
+    def create_tag(self, name: str) -> Tag:
+        clean_name = name.strip().lstrip("#")
+        if not clean_name:
+            raise ValueError("tag name is required")
+        tags = self.list_tags()
+        for t in tags:
+            if t.name.casefold() == clean_name.casefold():
+                return t
+        new_tag = Tag(name=clean_name, created_at=_now(), last_used_at=_now())
+        tags.append(new_tag)
+        tags.sort(key=lambda t: t.name.casefold())
+        self._write_tags(tags)
+        return new_tag
+
+    def rename_tag(self, old_name: str, new_name: str) -> Tag:
+        clean_old = old_name.strip().lstrip("#")
+        clean_new = new_name.strip().lstrip("#")
+        if not clean_old:
+            raise ValueError("old tag name is required")
+        if not clean_new:
+            raise ValueError("new tag name is required")
+        if clean_old.casefold() == clean_new.casefold() and clean_old == clean_new:
+            for t in self.list_tags():
+                if t.name == clean_old:
+                    return t
+            return Tag(clean_new)
+
+        tags = self.list_tags()
+        found = False
+        new_tags: list[Tag] = []
+        for t in tags:
+            if t.name.casefold() == clean_old.casefold():
+                found = True
+                new_tags.append(Tag(name=clean_new, created_at=t.created_at or _now(), last_used_at=_now()))
+            elif t.name.casefold() == clean_new.casefold():
+                pass
+            else:
+                new_tags.append(t)
+
+        if not found:
+            new_tags.append(Tag(name=clean_new, created_at=_now(), last_used_at=_now()))
+
+        seen: set[str] = set()
+        deduped: list[Tag] = []
+        for t in new_tags:
+            k = t.name.casefold()
+            if k not in seen:
+                seen.add(k)
+                deduped.append(t)
+        deduped.sort(key=lambda t: t.name.casefold())
+        self._write_tags(deduped)
+
+        # 级联同步更新所有关联作品
+        for it in self.list_items():
+            if any(t.casefold() == clean_old.casefold() for t in it.tags):
+                updated_tags: list[str] = []
+                for t in it.tags:
+                    if t.casefold() == clean_old.casefold():
+                        if not any(x.casefold() == clean_new.casefold() for x in updated_tags):
+                            updated_tags.append(clean_new)
+                    else:
+                        if not any(x.casefold() == t.casefold() for x in updated_tags):
+                            updated_tags.append(t)
+                it.tags = updated_tags
+                it.updated_at = _now()
+                item_dir = self.root / it.directory
+                self._write_item(item_dir, it)
+
+        return Tag(clean_new, created_at=_now(), last_used_at=_now())
+
+    def delete_tag(self, name: str, remove_from_items: bool = True) -> None:
+        clean_name = name.strip().lstrip("#")
+        if not clean_name:
+            raise ValueError("tag name is required")
+        tags = self.list_tags()
+        remaining = [t for t in tags if t.name.casefold() != clean_name.casefold()]
+        self._write_tags(remaining)
+
+        if remove_from_items:
+            for it in self.list_items():
+                if any(t.casefold() == clean_name.casefold() for t in it.tags):
+                    it.tags = [t for t in it.tags if t.casefold() != clean_name.casefold()]
+                    it.updated_at = _now()
+                    item_dir = self.root / it.directory
+                    self._write_item(item_dir, it)
+
+    def merge_tags(self, source_name: str, target_name: str) -> Tag:
+        return self.rename_tag(source_name, target_name)
+
     def update_item(
         self,
         item_id: str,
@@ -465,6 +657,9 @@ class LibraryStore:
         kind: ItemKind,
         rj_code: str | None,
         creator_ids: list[str],
+        tags: list[str] | None = None,
+        original_title: str | None = None,
+        release_date: str | None = None,
     ) -> LibraryItem:
         item = self.get_item(item_id)
         clean_title = title.strip()
@@ -497,11 +692,22 @@ class LibraryStore:
         item.rj_code = normalized_rj
         item.creator_ids = normalized_ids
         item.author = self._legacy_author(normalized_ids)
+        clean_tags: list[str] | None = None
+        if tags is not None:
+            clean_tags = list(dict.fromkeys(str(t).strip().lstrip("#") for t in tags if str(t).strip().lstrip("#")))
+            item.tags = clean_tags
+        if original_title is not None:
+            item.original_title = original_title.strip() if original_title else None
+        if release_date is not None:
+            item.release_date = release_date.strip() if release_date else None
         self.touch_creators(normalized_ids)
         item.updated_at = _now()
         item_dir = self.root / item.directory
         self._write_item(item_dir, item)
         self._index_item(item, item_dir / "metadata.json")
+        if clean_tags is not None:
+            for t in clean_tags:
+                self.create_tag(t)
         return item
 
     def _write_creators(self, creators: list[Creator]) -> None:
@@ -1045,8 +1251,11 @@ class LibraryStore:
             item_id=item_id,
             kind=request.kind,
             title=request.title.strip(),
+            original_title=None,
             rj_code=rj_code,
             author=self._legacy_author(creator_ids) or (request.author.strip() if request.author else None),
+            release_date=None,
+            tags=[],
             creator_ids=creator_ids,
             sources=sources,
             cover_source=None,
@@ -1096,8 +1305,11 @@ class LibraryStore:
             item_id=str(data["item_id"]),
             kind=ItemKind(data["kind"]),
             title=str(data["title"]),
+            original_title=data.get("original_title"),
             rj_code=data.get("rj_code"),
             author=author,
+            release_date=data.get("release_date"),
+            tags=list(data.get("tags", [])),
             creator_ids=creator_ids,
             sources=[ImportSource(**source) for source in data.get("sources", [])],
             cover_source=data.get("cover_source"),

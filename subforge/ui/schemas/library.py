@@ -53,7 +53,9 @@ class ItemListResponse(BaseModel):
     page: int
     limit: int
     total_pages: int
+    pages: int = 1
     all_tags: list[str] = Field(default_factory=list)
+    tag_counts: dict[str, int] = Field(default_factory=dict)
     all_creators: list[CreatorInfo] = Field(default_factory=list)
 
 

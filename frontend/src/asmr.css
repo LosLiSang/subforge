@@ -57,6 +57,19 @@
   letter-spacing: 0.3px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
+.asmr-card-badge-live {
+  background: rgba(14, 42, 71, 0.85);
+  backdrop-filter: blur(6px);
+  color: #38bdf8;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
 .asmr-card-btn-fav {
   width: 30px;
   height: 30px;

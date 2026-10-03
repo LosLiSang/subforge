@@ -35,6 +35,10 @@ export function WorkCard({
   const navigate = useNavigate()
   const [imgError, setImgError] = useState(false)
 
+  React.useEffect(() => {
+    setImgError(false)
+  }, [item.cover_url, item.updated_at])
+
   const handlePlayClick = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -47,6 +51,11 @@ export function WorkCard({
   const voiceActors = item.creators?.filter((c) => c.kind === 'voice_actor') || []
   const durationText = formatDuration(item.total_duration, item.total_duration_label)
   const displayDate = item.release_date || (item.created_at ? item.created_at.slice(0, 10) : null)
+  const coverSrc = imgError || !item.cover_url
+    ? '/covers/default'
+    : (item.cover_url.includes('?v=')
+        ? item.cover_url
+        : `${item.cover_url}${item.updated_at ? (item.cover_url.includes('?') ? `&v=${encodeURIComponent(item.updated_at)}` : `?v=${encodeURIComponent(item.updated_at)}`) : ''}`)
 
   return (
     <Link
@@ -58,7 +67,7 @@ export function WorkCard({
       <div className="asmr-card-cover-wrap">
         <img
           className="asmr-card-cover-img"
-          src={imgError || !item.cover_url ? '/covers/default' : item.cover_url}
+          src={coverSrc}
           alt={item.title}
           loading="lazy"
           onError={(e) => {
@@ -71,13 +80,19 @@ export function WorkCard({
         />
 
         {/* Top Left: RJ Code badge and Favorite button */}
-        {item.rj_code && (
+        {item.rj_code ? (
           <div className="asmr-card-top-left">
             <span className="asmr-card-badge-rj" title={`RJ号: ${item.rj_code}`}>
               {item.rj_code}
             </span>
           </div>
-        )}
+        ) : item.kind === 'stream_archive' ? (
+          <div className="asmr-card-top-left">
+            <span className="asmr-card-badge-live" title="录播作品">
+              录播
+            </span>
+          </div>
+        ) : null}
 
         {/* Bottom Right: Release Date */}
         {displayDate && (

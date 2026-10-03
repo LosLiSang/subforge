@@ -451,3 +451,27 @@ async def test_gemini_adapter_progress_callback_reports_chunks_and_concurrency(t
     assert reports[-1]["completed"] == 2
     assert reports[-1]["total"] == 2
     assert reports[-1]["ratio"] == 1.0
+
+
+def test_clean_reasoning_and_prompt_leak_unit():
+    """纯逻辑单测：从大模型输出中清理思维链（CoT）与 Prompt 泄漏残留。"""
+    raw_mixed = (
+        "- The user wants transcription of a Japanese audio clip.\n"
+        "- Constraints: - Output ONLY valid JSON starting with `{` and ending with `}`.\n"
+        "Audio analysis: 0:00 - 0:02: \"たくさん舐められた後だよ\"\n"
+        "Output JSON format cleanly.\n"
+        "たくさん舐められた後だよ"
+    )
+    cleaned = GeminiAudioAdapter._clean_reasoning_and_prompt_leak(raw_mixed)
+    assert "The user wants" not in cleaned
+    assert "Audio analysis" not in cleaned
+    assert "たくさん舐められた後だよ" in cleaned
+
+    # 纯英文无日语语音时清空
+    pure_cot = (
+        "- The user wants transcription.\n"
+        "Audio analysis: Only breathing and ASMR noises detected. No human speech."
+    )
+    cleaned_empty = GeminiAudioAdapter._clean_reasoning_and_prompt_leak(pure_cot)
+    assert cleaned_empty == ""
+

@@ -854,7 +854,10 @@ def create_app(deps: UiDependencies) -> Starlette:
             return JSONResponse({"error": "This selection is already being imported"}, status_code=409)
         runtime.pending_selections.add(selection_id)
         try:
-            kind = ItemKind(form.get("kind", ""))
+            kind_str = form.get("kind", "").strip()
+            if kind_str == "stream":
+                kind_str = "stream_archive"
+            kind = ItemKind(kind_str)
             title = (form.get("title") or "").strip() or source.stem
             result = await asyncio.to_thread(
                 library.import_audio,
@@ -874,6 +877,49 @@ def create_app(deps: UiDependencies) -> Starlette:
         if runtime.selections.get(selection_id) is source:
             runtime.selections.pop(selection_id, None)
             _cleanup_upload_selection(runtime, selection_id, source)
+        if result.created and kind == ItemKind.RJ_WORK and form.get("rj_code"):
+            try:
+                rj = form.get("rj_code", "").strip()
+                proxy = deps.settings.get_proxy_url()
+                from subforge.dlsite import fetch_dlsite_metadata, fetch_dlsite_cover
+                meta = await asyncio.to_thread(fetch_dlsite_metadata, rj, proxy=proxy)
+                if meta:
+                    item = library.get_item(result.item_id)
+                    c_ids = list(item.creator_ids)
+                    if meta.circle:
+                        c = library.find_or_create_creator(meta.circle, CreatorKind.CIRCLE)
+                        if c.creator_id not in c_ids:
+                            c_ids.append(c.creator_id)
+                    for va in meta.voice_actors:
+                        v = library.find_or_create_creator(va, CreatorKind.VOICE_ACTOR)
+                        if v.creator_id not in c_ids:
+                            c_ids.append(v.creator_id)
+                    resolved_title = item.title if item.title and item.title != rj else meta.title
+                    orig_title = meta.title if resolved_title != meta.title else item.original_title
+                    merged_tags = list(dict.fromkeys([*item.tags, *meta.tags]))
+                    library.update_item(
+                        result.item_id,
+                        title=resolved_title,
+                        kind=item.kind,
+                        rj_code=item.rj_code,
+                        creator_ids=c_ids,
+                        tags=merged_tags,
+                        original_title=orig_title,
+                        release_date=meta.release_date or item.release_date,
+                    )
+                    if meta.cover_url:
+                        cover_bytes = await asyncio.to_thread(fetch_dlsite_cover, meta.cover_url, proxy=proxy)
+                        if cover_bytes:
+                            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_c:
+                                tmp_c.write(cover_bytes)
+                                tmp_cover_path = Path(tmp_c.name)
+                            try:
+                                replace_cover(library.root, result.item_id, tmp_cover_path)
+                                library.set_cover_source(result.item_id, "dlsite")
+                            finally:
+                                tmp_cover_path.unlink(missing_ok=True)
+            except Exception as meta_exc:
+                logger.warning("Auto-fetch DLsite metadata on single import failed: %s", meta_exc)
         if form.get("auto_process") == "on" and result.created and runtime.tasks is not None:
             snapshot = _automatic_processing_snapshot(deps)
             if snapshot is not None:
@@ -943,6 +989,87 @@ def create_app(deps: UiDependencies) -> Starlette:
         proxy = deps.settings.get_proxy_url()
         info = await asyncio.to_thread(_fetch_video_info, url, proxy=proxy)
         return JSONResponse(info)
+
+    async def api_dlsite_lookup(request: Request) -> Response:
+        rj_code = request.path_params.get("rj_code", "").strip()
+        if not rj_code:
+            return JSONResponse({"ok": False, "error": "RJ 号不能为空"}, status_code=400)
+        proxy = deps.settings.get_proxy_url()
+        from subforge.dlsite import fetch_dlsite_metadata
+        meta = await asyncio.to_thread(fetch_dlsite_metadata, rj_code, proxy=proxy)
+        if not meta:
+            return JSONResponse({"ok": False, "error": f"未能从 DLsite 获取到 {rj_code} 的信息"}, status_code=404)
+        return JSONResponse({
+            "ok": True,
+            "data": {
+                "rj_code": meta.rj_code,
+                "title": meta.title,
+                "circle": meta.circle,
+                "voice_actors": meta.voice_actors,
+                "tags": meta.tags,
+                "cover_url": meta.cover_url,
+                "release_date": meta.release_date,
+            }
+        })
+
+    async def api_sync_item_dlsite(request: Request) -> Response:
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse({"ok": False, "error": "Library is not configured"}, status_code=409)
+        item_id = request.path_params["item_id"]
+        try:
+            item = library.get_item(item_id)
+        except KeyError:
+            return JSONResponse({"ok": False, "error": "Item not found"}, status_code=404)
+        if not item.rj_code:
+            return JSONResponse({"ok": False, "error": "该作品没有配置 RJ 号"}, status_code=400)
+        proxy = deps.settings.get_proxy_url()
+        from subforge.dlsite import fetch_dlsite_metadata, fetch_dlsite_cover
+        meta = await asyncio.to_thread(fetch_dlsite_metadata, item.rj_code, proxy=proxy)
+        if not meta:
+            return JSONResponse({"ok": False, "error": f"未能从 DLsite 获取到 {item.rj_code} 的信息"}, status_code=502)
+
+        creator_ids = list(item.creator_ids)
+        if meta.circle:
+            circle_creator = library.find_or_create_creator(meta.circle, CreatorKind.CIRCLE)
+            if circle_creator.creator_id not in creator_ids:
+                creator_ids.append(circle_creator.creator_id)
+        for va in meta.voice_actors:
+            va_creator = library.find_or_create_creator(va, CreatorKind.VOICE_ACTOR)
+            if va_creator.creator_id not in creator_ids:
+                creator_ids.append(va_creator.creator_id)
+
+        merged_tags = list(dict.fromkeys([*item.tags, *meta.tags]))
+        new_title = meta.title if (not item.title or item.title == item.rj_code) else item.title
+        orig_title = meta.title if new_title != meta.title else item.original_title
+
+        library.update_item(
+            item_id,
+            title=new_title,
+            kind=item.kind,
+            rj_code=item.rj_code,
+            creator_ids=creator_ids,
+            tags=merged_tags,
+            original_title=orig_title,
+            release_date=meta.release_date or item.release_date,
+        )
+
+        if meta.cover_url:
+            cover_data = await asyncio.to_thread(fetch_dlsite_cover, meta.cover_url, proxy=proxy)
+            if cover_data:
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    tmp.write(cover_data)
+                    tmp_path = Path(tmp.name)
+                try:
+                    replace_cover(library.root, item_id, tmp_path)
+                    library.set_cover_source(item_id, "dlsite")
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+
+        return JSONResponse({"ok": True, "message": "已成功同步 DLsite 元数据与封面"})
 
     async def preview_folder_import(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
@@ -1162,13 +1289,25 @@ def create_app(deps: UiDependencies) -> Starlette:
             if selection_id and selected is None:
                 raise ValueError("Invalid or expired cover selection")
             original = library.get_item(item_id)
-            kind = ItemKind(values.get("kind", [""])[-1])
+            kind_val = values.get("kind", [""])[-1]
+            kind = ItemKind(kind_val) if kind_val else original.kind
+            tags_raw = values.get("tags", [""])[-1]
+            parsed_tags = None
+            if tags_raw:
+                parsed_tags = [t.strip().lstrip("#") for t in re.split(r"[,/、，\n]+", tags_raw) if t.strip().lstrip("#")]
+            elif "tags" in values:
+                parsed_tags = []
+            orig_title = values.get("original_title", [""])[-1] or None
+            rel_date = values.get("release_date", [""])[-1] or None
             library.update_item(
                 item_id,
                 title=values.get("title", [""])[-1],
                 kind=kind,
                 rj_code=values.get("rj_code", [""])[-1] or None,
                 creator_ids=_creator_ids_from_form(library, values, kind),
+                tags=parsed_tags,
+                original_title=orig_title,
+                release_date=rel_date,
             )
             if selection_id and selected is not None:
                 runtime.selections.pop(selection_id, None)
@@ -1495,14 +1634,17 @@ def create_app(deps: UiDependencies) -> Starlette:
             return JSONResponse({"error": "Library is not configured"}, status_code=409)
         form = await _read_form(request)
         try:
-            creator = library.create_creator(form.get("name", ""), CreatorKind(form.get("kind", "")))
+            name = (form.get("name") or "").strip()
+            kind_str = (form.get("kind") or "").strip().lower() or CreatorKind.VOICE_ACTOR.value
+            kind = CreatorKind(kind_str)
+            creator = library.find_or_create_creator(name, kind)
             library.touch_creators([creator.creator_id])
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({
             "creator_id": creator.creator_id,
             "name": creator.name,
-            "kind": creator.kind.value,
+            "kind": creator.kind.value if hasattr(creator.kind, "value") else str(creator.kind),
         }, status_code=201)
 
     async def creators_page(request: Request) -> Response:
@@ -1550,6 +1692,50 @@ def create_app(deps: UiDependencies) -> Starlette:
         return runtime.render(
             "creators.html", request, creators=creators, creator_rows=creator_rows,
         )
+
+    async def tags_page(request: Request) -> Response:
+        if request.method == "GET" and _should_serve_spa(request):
+            return FileResponse(FRONTEND_DIST / "index.html")
+        library = runtime.open_active_library()
+        if library is None:
+            if request.method == "GET":
+                return RedirectResponse("/", status_code=303)
+            return JSONResponse({"error": "Library is not configured"}, status_code=409)
+        if request.method == "POST":
+            error = await _authorize_write(request, runtime)
+            if error:
+                return error
+            form = await _read_form(request)
+            action = form.get("action", "")
+            try:
+                if action == "create" or (not action and form.get("name")):
+                    name = form.get("name", "").strip().lstrip("#")
+                    tag = library.create_tag(name)
+                    return JSONResponse({"ok": True, "action": "create", "name": tag.name}, status_code=201)
+                elif action == "rename":
+                    old_name = form.get("old_name", form.get("name", ""))
+                    new_name = form.get("new_name", "")
+                    tag = library.rename_tag(old_name, new_name)
+                    return JSONResponse({"ok": True, "action": "rename", "name": tag.name})
+                elif action == "delete":
+                    name = form.get("name", "")
+                    library.delete_tag(name, remove_from_items=True)
+                    return JSONResponse({"ok": True, "action": "delete", "name": name})
+                elif action == "merge":
+                    source = form.get("source", "")
+                    target = form.get("target", "")
+                    tag = library.merge_tags(source, target)
+                    return JSONResponse({"ok": True, "action": "merge", "name": tag.name})
+                else:
+                    raise ValueError(f"unsupported tag action: {action}")
+            except KeyError:
+                return Response("Not found", status_code=404)
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            if "application/json" in request.headers.get("accept", "").lower():
+                return JSONResponse({"ok": True, "action": action})
+            return RedirectResponse("/tags", status_code=303)
+        return FileResponse(FRONTEND_DIST / "index.html") if (FRONTEND_DIST / "index.html").is_file() else RedirectResponse("/", status_code=303)
 
     async def profiles_page(request: Request) -> Response:
         if request.method == "GET" and _should_serve_spa(request):
@@ -1995,7 +2181,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         if cover_path is not None and item.cover_source is None:
             library.set_cover_source(item.item_id, "embedded")
         if cover_path is None:
-            return await get_default_cover_endpoint(request)
+            resp = await get_default_cover_endpoint(request)
+            resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            resp.headers["Pragma"] = "no-cache"
+            return resp
         stat = cover_path.stat()
         etag = f'"{int(stat.st_mtime)}-{stat.st_size}"'
         if request.headers.get("if-none-match") == etag:
@@ -2121,7 +2310,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             "rj_code": item.rj_code,
             "kind": item.kind.value if hasattr(item.kind, "value") else str(item.kind),
             "tags": _extract_item_tags(item),
-            "cover_url": f"/covers/{item.item_id}",
+            "cover_url": _cover_url_for_item(item),
         }
         return JSONResponse({"track": track_payload, "item": item_payload})
 
@@ -2567,18 +2756,50 @@ def create_app(deps: UiDependencies) -> Starlette:
         items = library.list_items(selected_creator_ids if selected_creator_ids else None)
         search_query = request.query_params.get("q", "").strip()
         if search_query:
-            needle = search_query.casefold()
-            items = [
-                item for item in items
-                if needle in " ".join([
-                    item.title,
-                    item.rj_code or "",
-                    *(creator_by_id[cid].name for cid in item.creator_ids if cid in creator_by_id),
-                ]).casefold()
-            ]
+            tag_prefix_match = re.match(r"^(?:#|tag:)(.+)$", search_query.strip(), re.IGNORECASE)
+            if tag_prefix_match:
+                tag_needle = tag_prefix_match.group(1).strip().casefold()
+                items = [
+                    item for item in items
+                    if any(tag_needle == t.casefold() or tag_needle in t.casefold() for t in _extract_item_tags(item))
+                ]
+            else:
+                tokens = search_query.casefold().split()
+                def _matches_item(it):
+                    it_tags = _extract_item_tags(it)
+                    creators_names = [creator_by_id[cid].name for cid in it.creator_ids if cid in creator_by_id]
+                    track_titles = [t.title for t in it.tracks if getattr(t, "title", None)]
+                    kind_val = it.kind.value if hasattr(it.kind, "value") else str(it.kind)
+                    kind_labels = "rj作品 rj" if kind_val == "rj_work" else "录播作品 录播 直播 直播归档"
+                    haystack = " ".join([
+                        it.title,
+                        getattr(it, "original_title", "") or "",
+                        it.rj_code or "",
+                        getattr(it, "author", "") or "",
+                        kind_labels,
+                        *creators_names,
+                        *it_tags,
+                        *track_titles,
+                    ]).casefold()
+                    return all(tok in haystack for tok in tokens)
+                items = [item for item in items if _matches_item(item)]
         tag_filter = request.query_params.get("tag", "").strip()
         if tag_filter:
-            items = [item for item in items if tag_filter in _extract_item_tags(item)]
+            items = [
+                item for item in items
+                if any(tag_filter.casefold() == t.casefold() for t in _extract_item_tags(item))
+            ]
+        kind_filter = request.query_params.get("kind", "").strip().lower()
+        if kind_filter in ("stream", "stream_archive"):
+            items = [
+                item for item in items
+                if (item.kind.value if hasattr(item.kind, "value") else str(item.kind)) == ItemKind.STREAM_ARCHIVE.value
+            ]
+        elif kind_filter in ("rj", "rj_work"):
+            items = [
+                item for item in items
+                if (item.kind.value if hasattr(item.kind, "value") else str(item.kind)) == ItemKind.RJ_WORK.value
+            ]
         sort_by = request.query_params.get("sort", "created_desc")
         if sort_by == "created_asc":
             items.sort(key=lambda x: x.created_at or "")
@@ -2610,7 +2831,12 @@ def create_app(deps: UiDependencies) -> Starlette:
         item_size_by_id = await asyncio.to_thread(_item_directory_sizes, library.root, page_items)
 
         all_items = library.list_items()
-        all_tags = sorted({tag for it in all_items for tag in _extract_item_tags(it) if tag})
+        tag_counts: dict[str, int] = {}
+        for it in all_items:
+            for tag in _extract_item_tags(it):
+                if tag:
+                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        all_tags = sorted(tag_counts.keys())
         creator_item_counts: dict[str, int] = {}
         for it in all_items:
             for cid in it.creator_ids:
@@ -2649,7 +2875,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                     }
                     for cid in it.creator_ids if cid in creator_by_id
                 ],
-                "cover_url": f"/covers/{it.item_id}",
+                "cover_url": _cover_url_for_item(it),
                 "cover_source": it.cover_source,
                 "track_count": len(it.tracks),
                 "total_duration": tot_dur,
@@ -2666,7 +2892,9 @@ def create_app(deps: UiDependencies) -> Starlette:
             "page": page,
             "limit": limit,
             "total_pages": total_pages,
+            "pages": total_pages,
             "all_tags": all_tags,
+            "tag_counts": tag_counts,
             "all_creators": creators_list,
         })
 
@@ -2734,13 +2962,16 @@ def create_app(deps: UiDependencies) -> Starlette:
                 "status": track.status,
                 "source_language": track.source_language,
                 "target_language": track.target_language,
-                "has_media": has_media,
-                "has_source_sub": has_source_sub,
-                "has_target_sub": has_target_sub,
-                "latest_task": latest_task_info,
-            })
+               "has_media": has_media,
+               "has_source_sub": has_source_sub,
+               "has_target_sub": has_target_sub,
+               "latest_task": latest_task_info,
+           })
 
         cached = cached_models(deps.settings.get_models_dir(), ["medium", "large-v3"])
+        has_jp = any(t.get("has_source_sub") for t in tracks_payload)
+        has_zh = any(t.get("has_target_sub") for t in tracks_payload)
+        sub_status = "bilingual" if (has_jp and has_zh) else ("zh" if has_zh else ("jp" if has_jp else "none"))
         item_payload = {
             "item_id": item.item_id,
             "title": item.title,
@@ -2758,8 +2989,13 @@ def create_app(deps: UiDependencies) -> Starlette:
                 }
                 for cid in item.creator_ids if cid in creator_by_id
             ],
-            "cover_url": f"/covers/{item.item_id}",
+            "cover_url": _cover_url_for_item(item),
             "cover_source": item.cover_source,
+            "track_count": len(item.tracks),
+            "total_duration": total_seconds,
+            "total_duration_label": _format_duration(total_seconds) if total_seconds else "--:--",
+            "total_size": total_size,
+            "subtitle_status": sub_status,
             "created_at": item.created_at,
             "updated_at": item.updated_at,
         }
@@ -3002,6 +3238,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         library = runtime.open_active_library()
         if library is None:
             return JSONResponse([])
+        try:
+            library.deduplicate_creators()
+        except Exception:
+            pass
         creators = library.list_creators()
         items = library.list_items()
         counts: dict[str, int] = {}
@@ -3018,6 +3258,27 @@ def create_app(deps: UiDependencies) -> Starlette:
             for c in creators
         ])
 
+    async def api_tags(request: Request) -> Response:
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse([])
+        tags = library.list_tags()
+        items = library.list_items()
+        tag_counts: dict[str, int] = {}
+        for it in items:
+            for tag in _extract_item_tags(it):
+                if tag:
+                    tag_counts[tag.casefold()] = tag_counts.get(tag.casefold(), 0) + 1
+        return JSONResponse([
+            {
+                "name": t.name,
+                "item_count": tag_counts.get(t.name.casefold(), 0),
+                "created_at": t.created_at,
+                "last_used_at": t.last_used_at,
+            }
+            for t in tags
+        ])
+
     routes = [
         Mount("/static", StaticFiles(packages=[("subforge.ui", "static")]), name="static"),
         Route("/api/library/items", api_list_items),
@@ -3029,6 +3290,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/api/settings", api_get_settings),
         Route("/api/stats", api_stats),
         Route("/api/creators/list", api_creators),
+        Route("/api/tags/list", api_tags),
+        Route("/api/tags", tags_page, methods=["GET", "POST"]),
         Route("/api/tracks/{track_id}/media", track_media),
         Route("/api/tracks/{track_id}/subtitles", track_subtitles_both),
         Route("/api/tracks/{track_id}", api_track_detail),
@@ -3056,6 +3319,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/api/library/import", import_item, methods=["POST"]),
         Route("/api/video-info", video_info, methods=["GET", "POST"]),
         Route("/api/url-info", video_info, methods=["GET", "POST"]),
+        Route("/api/dlsite/{rj_code}", api_dlsite_lookup),
+        Route("/api/items/{item_id}/sync-dlsite", api_sync_item_dlsite, methods=["POST"]),
         Route("/items/import-url", import_item_url, methods=["POST"]),
         Route("/library/import-url", import_item_url, methods=["POST"]),
         Route("/api/library/import-url", import_item_url, methods=["POST"]),
@@ -3082,6 +3347,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/downloads", downloads_page),
         Route("/about", about_page),
         Route("/creators", creators_page, methods=["GET", "POST"]),
+        Route("/tags", tags_page, methods=["GET", "POST"]),
         Route("/profiles", profiles_page, methods=["GET", "POST"]),
         Route("/audio-models", save_audio_model, methods=["POST"]),
         Route("/audio-models/{profile_id}/test", test_audio_model, methods=["POST"]),
@@ -3470,6 +3736,51 @@ async def _run_folder_import(
                 folder, rj_code=rj_code, title=title,
                 creator_ids=creator_ids, progress_callback=progress,
             )
+            if result.item_id and rj_code:
+                try:
+                    proxy = runtime.deps.settings.get_proxy_url()
+                    from subforge.dlsite import fetch_dlsite_metadata, fetch_dlsite_cover
+                    meta = fetch_dlsite_metadata(rj_code, proxy=proxy)
+                    if meta:
+                        item = library.get_item(result.item_id)
+                        c_ids = list(item.creator_ids)
+                        if meta.circle:
+                            c = library.find_or_create_creator(meta.circle, CreatorKind.CIRCLE)
+                            if c.creator_id not in c_ids:
+                                c_ids.append(c.creator_id)
+                        for va in meta.voice_actors:
+                            v = library.find_or_create_creator(va, CreatorKind.VOICE_ACTOR)
+                            if v.creator_id not in c_ids:
+                                c_ids.append(v.creator_id)
+                        resolved_title = item.title
+                        if not title or title.strip() == rj_code or title.strip() == folder.name:
+                            resolved_title = meta.title or item.title
+                        orig_title = meta.title if resolved_title != meta.title else item.original_title
+                        merged_tags = list(dict.fromkeys([*item.tags, *meta.tags]))
+                        library.update_item(
+                            result.item_id,
+                            title=resolved_title,
+                            kind=item.kind,
+                            rj_code=item.rj_code,
+                            creator_ids=c_ids,
+                            tags=merged_tags,
+                            original_title=orig_title,
+                            release_date=meta.release_date or item.release_date,
+                        )
+                        if meta.cover_url:
+                            cover_bytes = fetch_dlsite_cover(meta.cover_url, proxy=proxy)
+                            if cover_bytes:
+                                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_c:
+                                    tmp_c.write(cover_bytes)
+                                    tmp_cover_path = Path(tmp_c.name)
+                                try:
+                                    from subforge.ui.covers import replace_cover
+                                    replace_cover(library.root, result.item_id, tmp_cover_path)
+                                    library.set_cover_source(result.item_id, "dlsite")
+                                finally:
+                                    tmp_cover_path.unlink(missing_ok=True)
+                except Exception as meta_exc:
+                    logger.warning("Auto-fetch DLsite metadata failed: %s", meta_exc)
             if task:
                 task.update(
                     status="done" if result.status == "completed" else result.status,
@@ -4120,10 +4431,19 @@ def _item_directory_sizes(root: Path, items: list) -> dict[str, int]:
     return sizes
 
 
+def _cover_url_for_item(it) -> str:
+    base = f"/covers/{it.item_id}"
+    v = getattr(it, "updated_at", None)
+    if v:
+        clean_v = re.sub(r"[^0-9a-zA-Z]", "", str(v))
+        return f"{base}?v={clean_v}"
+    return base
+
+
 def _extract_item_tags(it) -> list[str]:
-    explicit = list(getattr(it, "tags", []))
+    explicit = [str(t).strip().lstrip("#") for t in getattr(it, "tags", []) if str(t).strip()]
     if explicit:
-        return explicit
+        return sorted(set(explicit))
     tags = set()
     title_text = str(getattr(it, "title", "") or "")
     for m in re.findall(r'#([^\s#\[\]【】_]+)', title_text):
@@ -4158,6 +4478,19 @@ def _track_duration_seconds(library: LibraryStore, track) -> float:
             continue
         if entries:
             return max(entry.end for entry in entries)
+    try:
+        media_path = library.track_media_path(track.track_id)
+        if media_path.is_file():
+            try:
+                import av
+                with av.open(str(media_path)) as container:
+                    if container.duration:
+                        return float(container.duration) / 1000000.0
+            except Exception:
+                pass
+            return _audio_duration_seconds(media_path)
+    except Exception:
+        pass
     return 0.0
 
 

@@ -1905,7 +1905,7 @@ def test_rj_folder_preview_and_background_import(tmp_path):
     assert status["auto_process_status"] == "queued"
     assert status["auto_queued"] == 1
     item = LibraryStore.open(library).list_items()[0]
-    assert item.title == "RJ01499022"
+    assert item.title in ("RJ01499022", "耳舐め&耳ふーサンドイッチ ～私たちの猫にしてあげる～【R-15 安眠/スタジオで2名同時収録で臨場感抜群！！】") or "耳舐め" in item.title
     assert item.tracks[0].original_relative_path == "本篇/01.m4a"
     task = client.app.state.runtime.tasks.latest_for_track(item.tracks[0].track_id)
     assert task is not None

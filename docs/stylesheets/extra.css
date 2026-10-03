@@ -1,0 +1,10 @@
+/* 截图：圆角 + 细边框，弹窗类截图限制宽度并居中 */
+.md-typeset img.shot {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+}
+.md-typeset img.dialog {
+  display: block;
+  max-width: 420px;
+  margin: 0 auto;
+}

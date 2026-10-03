@@ -1,6 +1,9 @@
 site_name: SubForge 手册
 site_description: 面向同人音声（RJ 作品）的本地字幕翻译工具——ASR 识别日语，LLM 翻译成中文，输出双语 SRT
 copyright: MIT License
+site_url: https://loslisang.github.io/subforge/
+repo_url: https://github.com/LosLiSang/subforge
+repo_name: LosLiSang/subforge
 
 theme:
   name: material
@@ -32,11 +35,19 @@ plugins:
   - search:
       separator: "[\\s\\-\\.]+"
 
+extra_css:
+  - stylesheets/extra.css
+
 markdown_extensions:
   - admonition
+  - attr_list
+  - md_in_html
   - tables
   - toc:
       permalink: "#"
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
   - pymdownx.details
   - pymdownx.highlight
   - pymdownx.inlinehilite
@@ -49,19 +60,23 @@ markdown_extensions:
 nav:
   - 首页: index.md
   - 上手:
-      - 安装与配置: install.md
-      - CLI 批处理: cli.md
-      - Library 工作台: library-ui.md
+      - 安装与启动: install.md
+      - 5 分钟处理第一部作品: quickstart.md
   - 使用指南:
-      - 处理管线与 ASMR 预设: pipeline.md
-      - 模型配置（ASR / 翻译 / 合并）: model-profiles.md
-      - 片段重处理与候选评审: segment-reprocess.md
-      - 任务中心与任务状态: tasks.md
-      - 字幕校正: subtitle-revision.md
-  - 参考:
-      - 常见问题与排障: faq.md
-      - 架构决策记录:
-          - adr/index.md
-          - adr/0001-product-positioning.md
-          - adr/0002-library-filesystem-authority.md
-  - 术语表: glossary.md
+      - 作品库与播放: library-ui.md
+      - 模型配置: model-profiles.md
+      - 任务中心: tasks.md
+      - 字幕校对: subtitle-revision.md
+      - 片段重跑: segment-reprocess.md
+      - 命令行批处理: cli.md
+      - 常见问题: faq.md
+  - 开发者参考:
+      - dev/index.md
+      - 开发环境: dev/setup.md
+      - 处理管线: dev/pipeline.md
+      - 模型 Profile 内部机制: dev/model-profiles.md
+      - 任务系统: dev/tasks.md
+      - 字幕存储与校验: dev/subtitles.md
+      - 前端界面规范: dev/frontend-ui-spec.md
+      - 术语表: dev/glossary.md
+      - 架构决策记录: dev/adr/index.md

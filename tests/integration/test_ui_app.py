@@ -1220,6 +1220,23 @@ def test_process_item_with_scope_all_enqueues_playable_tracks(tmp_path):
     assert tasks.latest_for_track(first.track_id) is not None
     assert tasks.latest_for_track(completed.track_id) is not None
 
+    # 处理对话框只在选本地 Whisper 时显示场景；未发送 scene 时沿用设置页默认，而不是降级为 normal
+    UiSettingsStore(tmp_path / "ui.json").set_default_processing_snapshot({
+        "asr_provider": "local", "scene": "asmr", "whisper_model": "medium",
+        "llm_profile_id": profile.profile_id,
+    })
+    response = client.post(
+        f"/items/{first.item_id}/process",
+        headers=headers,
+        data={
+            "asr_provider": "local", "whisper_model": "medium",
+            "llm_profile_id": profile.profile_id, "scope": "all", "mode": "from_scratch",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert tasks.latest_for_track(first.track_id).config_snapshot["scene"] == "asmr"
+
 
 def test_track_rename_delete_and_subtitle_download_routes(tmp_path):
     library = tmp_path / "Library"

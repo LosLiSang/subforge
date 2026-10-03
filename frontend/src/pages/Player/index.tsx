@@ -60,6 +60,9 @@ export function PlayerPage() {
   const [llmProfiles, setLlmProfiles] = useState<any[]>([])
   const [selectedAsr, setSelectedAsr] = useState('')
   const [selectedLlm, setSelectedLlm] = useState('')
+  // selectedAsr: 'whisper:<model>' 表示本地 Whisper，否则为音频模型 Profile ID
+  const [selectedScene, setSelectedScene] = useState<'asmr' | 'normal'>('asmr')
+  const [defaultScene, setDefaultScene] = useState<'asmr' | 'normal'>('asmr')
   const [submittingReprocess, setSubmittingReprocess] = useState(false)
 
   const activeLineRef = useRef<HTMLDivElement | null>(null)
@@ -121,10 +124,17 @@ export function PlayerPage() {
         setAsrProfiles(res.asr_profiles || [])
         setLlmProfiles(res.llm_profiles || [])
         const defProc = sets?.default_processing
-        if (defProc?.asr_profile_id) {
+        const scene = defProc?.scene === 'normal' ? 'normal' : 'asmr'
+        setDefaultScene(scene)
+        setSelectedScene(scene)
+        if (defProc?.asr_provider === 'local') {
+          setSelectedAsr(`whisper:${defProc.whisper_model || 'large-v3'}`)
+        } else if (defProc?.asr_profile_id) {
           setSelectedAsr(defProc.asr_profile_id)
         } else if (res.asr_profiles?.length > 0) {
           setSelectedAsr(res.asr_profiles[0].profile_id)
+        } else {
+          setSelectedAsr('whisper:large-v3')
         }
         if (defProc?.llm_profile_id) {
           setSelectedLlm(defProc.llm_profile_id)
@@ -248,11 +258,13 @@ export function PlayerPage() {
       formData.append('end_time', String(reprocessEnd))
       formData.append('start_seconds', String(reprocessStart))
       formData.append('end_seconds', String(reprocessEnd))
-      if (selectedAsr) {
+      if (selectedAsr.startsWith('whisper:')) {
+        formData.append('processor', 'whisper')
+        formData.append('whisper_model', selectedAsr.replace('whisper:', ''))
+        formData.append('scene', selectedScene)
+      } else {
         formData.append('processor', 'gemini')
         formData.append('asr_profile_id', selectedAsr)
-      } else {
-        formData.append('processor', 'whisper')
       }
       if (selectedLlm) formData.append('llm_profile_id', selectedLlm)
 
@@ -664,13 +676,38 @@ export function PlayerPage() {
                     value={selectedAsr}
                     onChange={(e) => setSelectedAsr(e.target.value)}
                   >
-                    {asrProfiles.map((p) => (
-                      <option key={p.profile_id} value={p.profile_id}>
-                        {p.name} ({p.provider} - {p.model})
-                      </option>
-                    ))}
+                    <optgroup label="本地 Whisper">
+                      <option value="whisper:large-v3">本地 Faster-Whisper (large-v3)</option>
+                      <option value="whisper:medium">本地 Faster-Whisper (medium)</option>
+                    </optgroup>
+                    {asrProfiles.length > 0 && (
+                      <optgroup label="音频模型">
+                        {asrProfiles.map((p) => (
+                          <option key={p.profile_id} value={p.profile_id}>
+                            {p.name} ({p.model})
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </div>
+
+                {selectedAsr.startsWith('whisper:') && (
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                      场景识别优化（仅本地 Whisper）
+                    </label>
+                    <select
+                      className="select-field"
+                      style={{ width: '100%' }}
+                      value={selectedScene}
+                      onChange={(e) => setSelectedScene(e.target.value as 'asmr' | 'normal')}
+                    >
+                      <option value="asmr">ASMR 悄悄话强化（降低静音截断，保留呼吸声）{defaultScene === 'asmr' ? ' ★ [默认]' : ''}</option>
+                      <option value="normal">标准人声对话（普通播客/影视人声）{defaultScene === 'normal' ? ' ★ [默认]' : ''}</option>
+                    </select>
+                  </div>
+                )}
 
                 <div>
                   <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
@@ -684,7 +721,7 @@ export function PlayerPage() {
                   >
                     {llmProfiles.map((p) => (
                       <option key={p.profile_id} value={p.profile_id}>
-                        {p.name} ({p.provider} - {p.model})
+                        {p.name} ({p.model})
                       </option>
                     ))}
                   </select>

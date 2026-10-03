@@ -53,7 +53,7 @@ from subforge.gemini_audio import (
 )
 from subforge.library import CreatorKind, ImportRequest, ImportResult, ItemKind, LibraryStore
 from subforge.models import SubtitleEntry
-from subforge.presets import ASMR_PRESET
+from subforge.presets import ASMR_PRESET, resolve_scene
 from subforge.segment_processing import (
     SegmentProcessingError,
     SegmentProcessor,
@@ -423,7 +423,7 @@ async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, pay
     options = {
         "processor": processor_name,
         "whisper_model": value("whisper_model", "large-v3"),
-        "scene": value("scene", "asmr"),
+        "scene": resolve_scene(value("scene"), _default_scene(deps)),
         "llm_profile_id": value("llm_profile_id"),
         "asr_profile_id": value("asr_profile_id"),
         "processing_mode": processing_mode,
@@ -3488,6 +3488,12 @@ def _record_segment_selection(library, payload: dict) -> None:
         library.record_selection(scope, str(payload.get(field, "")))
 
 
+def _default_scene(deps: UiDependencies) -> str:
+    """设置页「默认模型」里保存的场景；未保存时由 resolve_scene 回退到 asmr。"""
+    saved = deps.settings.get_default_processing_snapshot() or deps.settings.get_last_processing_snapshot() or {}
+    return str(saved.get("scene", ""))
+
+
 def _snapshot_from_form(deps: UiDependencies, form: dict) -> ProcessingSnapshot:
     """从处理表单构建快照，并校验所选模型能力。"""
     llm_profile_id = form.get("llm_profile_id", "")
@@ -3523,7 +3529,7 @@ def _snapshot_from_form(deps: UiDependencies, form: dict) -> ProcessingSnapshot:
             raise ValueError("所选合并模型不支持文本合并")
     return ProcessingSnapshot(
         asr_provider=asr_provider,
-        scene=form.get("scene", "normal"),
+        scene=resolve_scene(form.get("scene"), _default_scene(deps)),
         whisper_model=form.get("whisper_model", "medium"),
         llm_profile_id=profile.profile_id,
         asr_profile_id=asr_profile_id,

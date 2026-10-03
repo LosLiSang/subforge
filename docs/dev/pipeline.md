@@ -1,4 +1,4 @@
-# 处理管线与 ASMR 预设
+# 处理管线
 
 ## 管线
 
@@ -14,7 +14,9 @@ Audio / Video → ASR → Timeline Fix → LLM Translate → .srt
 
 ## ASMR 预设（核心差异能力）
 
-`--asmr` / 场景选 ASMR 时启用整套耳语友好参数：
+`--asmr` / 场景选 ASMR 时启用整套耳语友好参数。**这些参数只作用于本地 faster-whisper**；Deepgram 与音频模型 Profile 不读取它们，因此 UI 只在选择本地 Whisper 时显示场景选项。表单未提交 `scene` 时，后端用 `presets.resolve_scene` 回退到设置页默认场景（再回退到 `asmr`）。
+
+
 
 | 参数 | 值 | 解决什么 |
 |------|-----|---------|

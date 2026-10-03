@@ -1,64 +1,72 @@
-# 模型配置（ASR / 翻译 / 合并）
+# 模型配置
 
-SubForge 用**一份统一的模型 Profile** 承担三类能力，靠能力标记区分，不再把 Gemini 单独归为一类：
+SubForge 处理一条音轨分两步，每一步都要用到模型：
 
-![SubForge 统一模型配置](assets/images/readme/model-profiles.png)
+1. **识别**：把日语语音转成日文文字（也叫 ASR、语音转写）；
+2. **翻译**：把日文翻译成中文。
 
-| 能力 | 含义 |
+这些模型在左侧「**翻译配置**」页统一管理。每个模型存成一份「配置」，填一次以后处理时直接选就行。
+
+![SubForge 模型配置](assets/images/readme/model-profiles.png){ .shot }
+
+## 识别用什么？
+
+| 选项 | 优点 | 缺点 |
+|------|------|------|
+| **本地 Whisper**（faster-whisper） | 免费、离线、隐私好 | 需要较好的显卡才快；首次使用要下载模型（几 GB） |
+| **在线音频模型**（Gemini 等） | 不吃本机配置，识别耳语效果好 | 需要 API Key，按用量计费 |
+| **Deepgram** | 速度很快 | 需要 API Key、收费；音频会上传到国外服务器 |
+
+!!! tip "推荐"
+
+    - 有 NVIDIA 显卡（显存 6GB 以上）：本地 Whisper `large-v3`；
+    - 没有好显卡：Gemini 这类在线音频模型。
+
+## 翻译用什么？
+
+任何兼容 OpenAI 接口的大模型都可以，例如 DeepSeek、通义千问、GPT、Gemini，也可以用本机的 Ollama、LM Studio。
+
+## 添加一份配置
+
+1. 「翻译配置」页右上角点「**新建配置**」。
+2. **配置类型**：翻译选「LLM 翻译模型」，识别选「ASR 语音识别」。
+3. 填写：
+
+    | 字段 | 怎么填 |
+    |------|--------|
+    | 配置显示名称 | 随便起，例如 `DeepSeek` |
+    | 引擎提供商 | 大多数服务选 `openai_compatible`；Google 官方接口选 `gemini` |
+    | 模型标识 | 服务商文档里的模型名，例如 `deepseek-chat` |
+    | API Base URL | 服务商提供的接口地址，例如 `https://api.deepseek.com/v1` |
+    | API Key | 服务商后台申请的密钥 |
+
+4. **模型适用流水线能力**：勾选这份配置能干什么——
+    - **台本翻译**：可以用来翻译；
+    - **语音转写**：可以用来识别（只有能听音频的模型才勾，如 Gemini）；
+    - **台本对齐合并**：识别完后再整理一遍文字（去重复、修标点），可选。
+
+    同一个模型能同时勾多项，例如 Gemini 可以既识别又翻译。
+
+5. 点「确认添加」，再点卡片右上角的 ⚡ 测试一下连接。
+
+![新建模型配置窗口](assets/images/guide/profile-new.png){ .shot .dialog }
+
+卡片上会显示连接状态、延迟和被任务调用过几次。
+
+!!! note "API Key 的安全"
+
+    Key 只保存在你自己的电脑上。编辑配置时 Key 那一栏留空，表示保持原来的 Key 不变。
+
+## 其他选项
+
+| 选项 | 说明 |
 |------|------|
-| `transcribe` | 音频 → 文本，可作为 ASR 模型 |
-| `translate` | 文本 → 文本，可作为翻译模型 |
-| `merge` | 文本层校对，可用于分片结果的合并 |
+| 温度 | 翻译的随机程度。想要稳定、一致的翻译就填低一点（0~0.3） |
+| 思考等级 | 对 DeepSeek-R1、Gemini 这类会“先思考”的模型，选「关闭思考」可以更快、更省钱，翻译质量一般影响不大 |
+| 分片上限 | 在线音频模型一次最多听多少秒，默认 60 秒。长音频会自动切成小段分别识别，再拼回去 |
 
-设置页「模型配置」里勾选能力即可；ASR、翻译、合并三个下拉按能力过滤同一份 Profile 集合。
+## 设置默认模型
 
-## 协议
+在「设置 → 默认模型」里选好默认的识别引擎和翻译模型（本地 Whisper 还可以选默认场景），以后处理时就不用每次选了。
 
-| 协议 | 说明 |
-|------|------|
-| `openai_compatible` | `/chat/completions`；文本翻译用 message，音频用 `input_audio` |
-| `google_native` | Google `generateContent`，inline audio |
-
-??? example "适合当 ASR 的配置示例"
-
-    - 名称：`GeminiAudio`（示例网关）
-    - 协议：`openai_compatible`
-    - 模型：`gemini-3.8-flash-high`
-    - 能力：转写 + 翻译
-    - 单次请求上限：按网关预算设定（默认 60 秒）
-
-## Gemini 类模型当 ASR：分片与合并
-
-Gemini flash 类模型**单次请求时长不宜过长**，因此以 Profile 的**单次请求上限**（`max_request_seconds`，默认 60 秒）控制：
-
-1. 用 ffmpeg `silencedetect` 找出语音区间
-2. 把语音区间**打包**成不超过上限的块，超长单段语音均匀切分
-3. 逐块送模型转写，时间戳由 SubForge 确定性映射回绝对时间轴
-4. 可选：交给**合并模型**做一次文本层校对
-
-!!! warning "时间轴所有权归 SubForge"
-
-    合并只做文本层工作：去掉分块边界重复、修标点断句、统一术语。**绝对时间轴由 SubForge 生成，合并模型不得重排时间戳**——实测 Gemini 直接产出时间轴会压缩/扭曲。
-
-### 兜底行为
-
-- 语音区间检测失败 → 退化为**等长分片**（仍遵守上限），绝不整段一次发送
-- 合并模型失败/解析失败 → 保留原文，绝不丢条目
-- ASR 结果写盘前钳制到媒体时长，丢弃完全越界的幻觉条目
-
-## 旧配置自动迁移
-
-旧的 `llm-profiles.json`（翻译）与 `gemini-audio-profiles.json`（Gemini 音频）在首次加载时自动合并为 `model-profiles.json`：
-
-- 旧翻译配置 → 仅 `translate`
-- 旧 Gemini 音频 → `transcribe` + `translate`，并继承单次上限与提示词模板
-
-## 能力与入口对应
-
-| 入口 | 过滤的能力 | 选择历史 scope |
-|------|-----------|----------------|
-| 作品处理 · ASR | `transcribe` | `full.asr_profile` |
-| 作品处理 · 翻译配置 | `translate` | `full.translation_profile` |
-| 作品处理 · 合并模型 | `merge` | `full.merge_profile` |
-| 播放页 · 片段重处理 · 音频模型 | `transcribe` | `segment.asr_profile` |
-| 播放页 · 片段重处理 · 翻译配置 | `translate` | `segment.translation_profile` |
+![设置 → 默认模型](assets/images/guide/settings-models.png){ .shot }

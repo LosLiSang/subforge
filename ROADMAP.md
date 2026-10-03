@@ -1,6 +1,6 @@
 # SubForge Roadmap
 
-> 定位与功能去留决策见 [ADR-0001](docs/adr/0001-product-positioning.md)，术语见 [CONTEXT.md](CONTEXT.md)。
+> 定位与功能去留决策见 [ADR-0001](docs/dev/adr/0001-product-positioning.md)，术语见 [CONTEXT.md](CONTEXT.md)。
 
 ## 定位
 

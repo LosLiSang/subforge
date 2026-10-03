@@ -34,10 +34,10 @@ jobs:
           # 仓库未提交 uv.lock（见 .gitignore），默认按 uv.lock 建缓存键
           # 会报 "No file matched"；文档构建很快，直接关闭缓存。
           enable-cache: false
-      - name: Install docs dependencies
-        run: uv sync --group docs
+      # Zensical（Material for MkDocs 团队的后继项目）直接读取 mkdocs.yml。
+      # --only-group docs：只装文档依赖，不安装项目本体及 ASR 重依赖。
       - name: Build docs (strict)
-        run: uv run mkdocs build --strict --site-dir site
+        run: uv run --only-group docs zensical build --strict
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:

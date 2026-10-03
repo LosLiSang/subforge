@@ -2,6 +2,19 @@
 
 本文件记录 SubForge 的显著变更。版本号遵循 [Semantic Versioning](https://semver.org/)，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### Added
+- **DLsite 元数据**：导入时按 RJ 号自动拉取标题、社团、声优、标签、发售日与封面；作品详情页可一键重新同步。
+- **标签管理页**：新建、级联重命名、合并、删除标签；作品库新增标签与作品类型（RJ / 录播）筛选。
+- **创作者同名去重**：同名创作者自动合并。
+- **React + FastAPI 前端**：重构为 React 19 + TypeScript；新增画中画桌面歌词、全局播放栏与睡眠定时。
+
+### Changed
+- 文档站由 MkDocs Material 迁移到 [Zensical](https://zensical.org/)（继续读取 `mkdocs.yml`），CI 改为 `uv run --only-group docs zensical build --strict`。
+- README 截图与功能介绍全面更新。
+- 测试收敛为作品库与处理流水线两条黄金旅程，纯逻辑改为单测。
+
 ## [0.5.0] - 2026-09-10
 
 ### Added

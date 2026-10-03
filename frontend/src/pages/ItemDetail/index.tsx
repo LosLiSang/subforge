@@ -219,6 +219,8 @@ export function ItemDetailPage() {
   // Process form state
   const [selectedAsr, setSelectedAsr] = useState('')
   const [selectedLlm, setSelectedLlm] = useState('')
+  // 场景（ASMR 预设）只对本地 Whisper 生效，其余引擎不显示也不发送
+  const [selectedScene, setSelectedScene] = useState<'asmr' | 'normal'>('asmr')
   const [processMode, setProcessMode] = useState<'from_scratch' | 'retranslate' | 'continue'>('from_scratch')
   const [submittingProcess, setSubmittingProcess] = useState(false)
 
@@ -245,6 +247,7 @@ export function ItemDetailPage() {
           } else {
             setSelectedAsr(`local:${defProc.whisper_model || 'large-v3'}`)
           }
+          setSelectedScene(defProc.scene === 'normal' ? 'normal' : 'asmr')
           if (defProc.llm_profile_id) {
             setSelectedLlm(defProc.llm_profile_id)
           } else if (res.available_profiles.llm_profiles?.length > 0) {
@@ -392,6 +395,7 @@ export function ItemDetailPage() {
       } else if (selectedAsr.startsWith('local:')) {
         formData.append('asr_provider', 'local')
         formData.append('whisper_model', selectedAsr.replace('local:', ''))
+        formData.append('scene', selectedScene)
       } else {
         formData.append('asr_provider', 'local')
       }
@@ -1096,6 +1100,23 @@ export function ItemDetailPage() {
                     </optgroup>
                   </select>
                 </div>
+
+                {selectedAsr.startsWith('local:') && (
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                      场景识别优化（仅本地 Whisper）
+                    </label>
+                    <select
+                      className="select-field"
+                      style={{ width: '100%' }}
+                      value={selectedScene}
+                      onChange={(e) => setSelectedScene(e.target.value as 'asmr' | 'normal')}
+                    >
+                      <option value="asmr">ASMR 悄悄话强化（降低静音截断，保留呼吸声）{defProc?.scene !== 'normal' ? ' ★ [默认]' : ''}</option>
+                      <option value="normal">标准人声对话（普通播客/影视人声）{defProc?.scene === 'normal' ? ' ★ [默认]' : ''}</option>
+                    </select>
+                  </div>
+                )}
 
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>

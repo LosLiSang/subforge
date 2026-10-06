@@ -68,6 +68,7 @@ from subforge.translate.srt_io import read_srt
 from subforge.ui.checks import check_model_configuration, test_profile_connection
 from subforge.ui.covers import cover_for_item, covers_dir, replace_cover, get_preset_cover_svg, is_valid_image_bytes, parse_multipart_data
 from subforge.ui.model_profiles import ModelProfileStore
+from subforge.ui.import_tasks import ImportTaskRegistry
 from subforge.ui.picker import FilePicker
 from subforge.ui.settings import UiSettingsStore
 from subforge.ui.tasks import ProcessingSnapshot, TaskManager, WorkerAdapter
@@ -97,7 +98,12 @@ class UiRuntime:
         self.selections: dict[str, Path] = {}
         self.uploaded_selections: set[str] = set()
         self.pending_selections: set[str] = set()
-        self.imports: dict[str, dict] = {}  # 后台 URL 下载导入任务状态
+        # 后台 URL 下载/文件夹导入任务状态：内存缓存 + 持久化到 Library 的 index.sqlite
+        self.imports = ImportTaskRegistry(
+            self.open_active_library,
+            max_count=deps.settings.get_download_history_max_count,
+            max_age_days=deps.settings.get_download_history_max_age_days,
+        )
         self.download_procs: dict[str, "subprocess.Popen"] = {}  # task_id -> yt-dlp 子进程（用于取消）
         self.segment_candidates: dict[str, dict] = {}  # 已废弃：候选改为任务结果持久化
         self.pending_auto_processing: dict[str, tuple[list[str], ProcessingSnapshot]] = {}
@@ -1530,6 +1536,10 @@ def create_app(deps: UiDependencies) -> Starlette:
                 if form.get("remote_asr_task_concurrency"):
                     deps.settings.set_remote_asr_task_concurrency(int(form["remote_asr_task_concurrency"]))
                 deps.settings.set_translate_workers(int(form.get("translate_workers", "20")))
+                if form.get("download_history_max_count"):
+                    deps.settings.set_download_history_max_count(int(form["download_history_max_count"]))
+                if form.get("download_history_max_age_days"):
+                    deps.settings.set_download_history_max_age_days(int(form["download_history_max_age_days"]))
                 deps.settings.set_translation_prompt(form.get("translation_prompt", ""))
                 deps.settings.set_proxy_url(form.get("proxy_url", ""))
                 models_dir = _resolve_selected_path(runtime, form, "models_dir")
@@ -1542,6 +1552,7 @@ def create_app(deps: UiDependencies) -> Starlette:
                 return JSONResponse({"error": str(exc)}, status_code=400)
             if runtime.tasks is not None:
                 runtime.tasks.wake()  # 并发容量调大后立即放行排队任务
+            runtime.imports.prune()  # 保留规则收紧后立即清理
             if "application/json" in request.headers.get("accept", ""):
                 return JSONResponse({"ok": True})
             return RedirectResponse("/settings", status_code=303)
@@ -3073,11 +3084,19 @@ def create_app(deps: UiDependencies) -> Starlette:
                     "translation": ctx.get("translation"),
                 })
         download_tasks = []
-        for tid, task in runtime.imports.items():
+        for tid, task in reversed(list(runtime.imports.items())):
+            item_id = task.get("item_id")
+            title = task.get("title") or ""
+            if not title and item_id and library is not None:
+                try:
+                    title = library.get_item(item_id).title
+                except Exception:
+                    title = ""
             download_tasks.append({
                 "task_id": tid,
-                "url": task.get("url", ""),
-                "title": task.get("title", ""),
+                "kind": task.get("kind"),
+                "url": task.get("url") or task.get("source_url") or "",
+                "title": title,
                 "status": task.get("status", "pending"),
                 "message": task.get("message", ""),
                 "error": task.get("error"),
@@ -3215,6 +3234,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             "remote_asr_concurrency": deps.settings.get_remote_asr_concurrency(),
             "remote_asr_task_concurrency": deps.settings.get_remote_asr_task_concurrency(),
             "translate_workers": deps.settings.get_translate_workers(),
+            "download_history_max_count": deps.settings.get_download_history_max_count(),
+            "download_history_max_age_days": deps.settings.get_download_history_max_age_days(),
             "translation_prompt": deps.settings.get_translation_prompt(),
             "no_auth": deps.no_auth or deps.settings.get_no_auth(),
             "has_deepgram_key": bool(deps.settings.get_deepgram_api_key()),

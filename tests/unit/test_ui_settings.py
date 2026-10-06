@@ -87,11 +87,17 @@ def test_ui_settings_persists_secret_and_distinct_processing_concurrency(tmp_pat
     store.set_deepgram_api_key("dg-secret-value-123")
     store.set_asr_concurrency(2)
     store.set_translate_workers(7)
+    assert store.get_download_history_max_count() == 200
+    assert store.get_download_history_max_age_days() == 30
+    store.set_download_history_max_count(50)
+    store.set_download_history_max_age_days(7)
 
     reopened = UiSettingsStore(tmp_path / "ui.json")
     assert reopened.get_deepgram_api_key() == "dg-secret-value-123"
     assert reopened.get_asr_concurrency() == 2
     assert reopened.get_translate_workers() == 7
+    assert reopened.get_download_history_max_count() == 50
+    assert reopened.get_download_history_max_age_days() == 7
 
 
 def test_ui_settings_persists_last_processing_snapshot(tmp_path):
@@ -130,7 +136,10 @@ def test_blank_secret_does_not_overwrite_and_delete_is_explicit(tmp_path):
 
 def test_processing_concurrency_values_must_be_positive(tmp_path):
     store = UiSettingsStore(tmp_path / "ui.json")
-    for setter in (store.set_asr_concurrency, store.set_translate_workers):
+    for setter in (
+        store.set_asr_concurrency, store.set_translate_workers,
+        store.set_download_history_max_count, store.set_download_history_max_age_days,
+    ):
         try:
             setter(0)
         except ValueError as exc:

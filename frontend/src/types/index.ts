@@ -125,6 +125,7 @@ export interface SubtitleTask {
 
 export interface DownloadTask {
   task_id: string
+  kind?: string | null
   url: string
   title: string
   status: string
@@ -196,6 +197,8 @@ export interface UiSettings {
   remote_asr_concurrency: number
   remote_asr_task_concurrency?: number
   translate_workers: number
+  download_history_max_count?: number
+  download_history_max_age_days?: number
   translation_prompt?: string | null
   no_auth: boolean
   has_deepgram_key: boolean

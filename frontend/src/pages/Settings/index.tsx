@@ -40,6 +40,8 @@ export function SettingsPage() {
   const [remoteAsrConcurrency, setRemoteAsrConcurrency] = useState(20)
   const [remoteAsrTaskConcurrency, setRemoteAsrTaskConcurrency] = useState(20)
   const [translateWorkers, setTranslateWorkers] = useState(20)
+  const [downloadHistoryMaxCount, setDownloadHistoryMaxCount] = useState(200)
+  const [downloadHistoryMaxAgeDays, setDownloadHistoryMaxAgeDays] = useState(30)
   const [translationPrompt, setTranslationPrompt] = useState('')
   const [noAuth, setNoAuth] = useState(false)
   const [fixedToken, setFixedToken] = useState('')
@@ -82,6 +84,8 @@ export function SettingsPage() {
       setRemoteAsrConcurrency(data.remote_asr_concurrency || 20)
       setRemoteAsrTaskConcurrency(data.remote_asr_task_concurrency || 20)
       setTranslateWorkers(data.translate_workers || 20)
+      setDownloadHistoryMaxCount(data.download_history_max_count || 200)
+      setDownloadHistoryMaxAgeDays(data.download_history_max_age_days || 30)
       setTranslationPrompt(data.translation_prompt || '')
       setNoAuth(!!data.no_auth)
       if (data.default_cover) {
@@ -144,6 +148,8 @@ export function SettingsPage() {
       formData.append('remote_asr_concurrency', String(remoteAsrConcurrency))
       formData.append('remote_asr_task_concurrency', String(remoteAsrTaskConcurrency))
       formData.append('translate_workers', String(translateWorkers))
+      formData.append('download_history_max_count', String(downloadHistoryMaxCount))
+      formData.append('download_history_max_age_days', String(downloadHistoryMaxAgeDays))
       if (translationPrompt) formData.append('translation_prompt', translationPrompt)
       if (noAuth) formData.append('no_auth', 'on')
       if (fixedToken) formData.append('fixed_token', fixedToken)
@@ -881,6 +887,39 @@ export function SettingsPage() {
               </div>
             </div>
           ))}
+        </div>
+        )}
+
+        {/* 4. Download History Retention */}
+        {activeTab === 'pipeline' && (
+        <div className="card-panel">
+          <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>下载任务历史</h3>
+          <p style={{ fontSize: 12, color: 'var(--fg-dim)', marginBottom: 16 }}>
+            下载/导入任务记录保存在媒体库数据库中，超出以下任一限制的记录会自动清理（进行中的任务不受影响）。保存后立即生效。
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
+            {[
+              { label: '最多保留条数', hint: '只保留最近的 N 条记录。', value: downloadHistoryMaxCount, set: setDownloadHistoryMaxCount, max: 10000 },
+              { label: '最长保留天数', hint: '超过 N 天的记录会被清理。', value: downloadHistoryMaxAgeDays, set: setDownloadHistoryMaxAgeDays, max: 3650 },
+            ].map((field) => (
+              <div key={field.label}>
+                <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                  {field.label}
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={field.max}
+                  className="input-field"
+                  value={field.value}
+                  onChange={(e) => field.set(Math.max(1, parseInt(e.target.value) || 1))}
+                />
+                <div style={{ fontSize: 11, color: 'var(--fg-dim)', marginTop: 6, lineHeight: 1.5 }}>
+                  {field.hint}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
         )}
 

@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import threading
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Callable
@@ -292,6 +292,14 @@ class LibraryStore:
                 created_at TEXT,
                 started_at TEXT,
                 finished_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS import_tasks (
+                task_id TEXT PRIMARY KEY,
+                kind TEXT,
+                status TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS selection_history (
                 scope TEXT NOT NULL,
@@ -1179,6 +1187,52 @@ class LibraryStore:
                      last_selected_at = excluded.last_selected_at""",
                 (scope, key, _now()),
             )
+
+    def save_import_task(self, task: dict) -> None:
+        """持久化下载/导入任务状态（整个 dict 存 JSON）。"""
+        task_id = str(task["task_id"])
+        now = _now()
+        data = json.dumps(task, ensure_ascii=False, default=str)
+        with self._db_lock, self._db:
+            self._db.execute(
+                """INSERT INTO import_tasks(task_id, kind, status, data_json, created_at, updated_at)
+                   VALUES(?,?,?,?,?,?)
+                   ON CONFLICT(task_id) DO UPDATE SET
+                     kind=excluded.kind, status=excluded.status,
+                     data_json=excluded.data_json, updated_at=excluded.updated_at""",
+                (task_id, task.get("kind"), str(task.get("status") or ""), data, now, now),
+            )
+
+    def get_import_task(self, task_id: str) -> dict | None:
+        with self._db_lock:
+            row = self._db.execute(
+                "SELECT data_json FROM import_tasks WHERE task_id=?", (task_id,),
+            ).fetchone()
+        return json.loads(row["data_json"]) if row else None
+
+    def list_import_tasks(self, limit: int = 200) -> list[dict]:
+        """按创建时间升序返回最近 limit 条下载/导入任务。"""
+        with self._db_lock:
+            rows = self._db.execute(
+                "SELECT data_json FROM import_tasks ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        return [json.loads(row["data_json"]) for row in reversed(rows)]
+
+    def prune_import_tasks(self, *, max_count: int, max_age_days: int, now: datetime | None = None) -> int:
+        """清理下载/导入任务历史：只保留最近 max_count 条且不超过 max_age_days 天；运行中的任务不删。"""
+        cutoff = ((now or datetime.now(UTC)) - timedelta(days=max_age_days)).isoformat().replace("+00:00", "Z")
+        with self._db_lock, self._db:
+            by_age = self._db.execute(
+                "DELETE FROM import_tasks WHERE status != 'running' AND created_at < ?", (cutoff,),
+            ).rowcount
+            by_count = self._db.execute(
+                """DELETE FROM import_tasks WHERE status != 'running' AND task_id NOT IN (
+                       SELECT task_id FROM import_tasks ORDER BY created_at DESC, rowid DESC LIMIT ?
+                   )""",
+                (int(max_count),),
+            ).rowcount
+        return by_age + by_count
 
     def selection_order(self, scope: str) -> list[str]:
         """返回某 scope 下按最近/最多使用排序的 option_key。"""

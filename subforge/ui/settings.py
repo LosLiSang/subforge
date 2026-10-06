@@ -218,6 +218,32 @@ class UiSettingsStore:
         data["translate_workers"] = value
         self._save(data)
 
+    def get_download_history_max_count(self) -> int:
+        try:
+            return max(1, int(self._load().get("download_history_max_count", 200)))
+        except (TypeError, ValueError):
+            return 200
+
+    def set_download_history_max_count(self, value: int) -> None:
+        if value < 1:
+            raise ValueError("download_history_max_count must be at least 1")
+        data = self._load()
+        data["download_history_max_count"] = value
+        self._save(data)
+
+    def get_download_history_max_age_days(self) -> int:
+        try:
+            return max(1, int(self._load().get("download_history_max_age_days", 30)))
+        except (TypeError, ValueError):
+            return 30
+
+    def set_download_history_max_age_days(self, value: int) -> None:
+        if value < 1:
+            raise ValueError("download_history_max_age_days must be at least 1")
+        data = self._load()
+        data["download_history_max_age_days"] = value
+        self._save(data)
+
     def get_translation_prompt(self) -> str:
         return str(self._load().get("translation_prompt", ""))
 

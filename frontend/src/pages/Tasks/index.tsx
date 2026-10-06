@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import {
   RefreshCw,
   RotateCcw,
@@ -78,6 +79,25 @@ export function TasksPage() {
       alert('发起重新转写失败: ' + err.message)
     } finally {
       setReprocessingId(null)
+    }
+  }
+
+  const handleCancelDownload = async (taskId: string) => {
+    if (!window.confirm('确定取消该下载任务吗？')) return
+    try {
+      await api.post(`/api/imports/${taskId}/cancel`)
+      loadTasks()
+    } catch (err: any) {
+      alert('取消下载失败: ' + err.message)
+    }
+  }
+
+  const handleRetryDownload = async (taskId: string) => {
+    try {
+      await api.post(`/api/imports/${taskId}/retry`)
+      loadTasks()
+    } catch (err: any) {
+      alert('重试下载失败: ' + err.message)
     }
   }
 
@@ -551,7 +571,7 @@ export function TasksPage() {
                 <th style={{ width: 110 }}>状态</th>
                 <th>下载标题 / 来源 URL</th>
                 <th style={{ width: 220 }}>进度与状态</th>
-                <th style={{ width: 100, textAlign: 'right' }}>操作</th>
+                <th style={{ width: 160, textAlign: 'right' }}>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -562,7 +582,18 @@ export function TasksPage() {
                   </td>
                 </tr>
               ) : (
-                downloads.map((dl) => (
+                downloads.map((dl) => {
+                  const isDone = dl.status === 'done' || dl.status === 'completed'
+                  const isPartial = dl.status === 'partial'
+                  const isError = dl.status === 'error' || dl.status === 'failed'
+                  const isCancelled = dl.status === 'cancelled'
+                  const isRunning = dl.status === 'running' || dl.status === 'downloading'
+                  const canRetry = isError && (dl.kind ?? 'download') === 'download'
+                  const label = isDone ? '已完成' : isPartial ? '部分完成' : isError ? '失败' : isCancelled ? '已取消' : isRunning ? '进行中' : dl.status
+                  const bg = isDone ? 'rgba(63, 185, 80, 0.15)' : isPartial ? 'rgba(245, 158, 11, 0.15)' : isError ? 'rgba(239, 68, 68, 0.15)' : isCancelled ? 'rgba(148, 163, 184, 0.15)' : 'var(--accent-soft)'
+                  const fg = isDone ? 'var(--color-green)' : isPartial ? 'var(--color-amber)' : isError ? 'var(--color-red)' : isCancelled ? 'var(--fg-dim)' : 'var(--accent-base)'
+                  const displayTitle = dl.title || dl.url || '未命名任务'
+                  return (
                   <tr key={dl.task_id}>
                     <td>
                       <span
@@ -575,28 +606,58 @@ export function TasksPage() {
                           fontWeight: 700,
                           padding: '3px 8px',
                           borderRadius: 'var(--radius-sm)',
-                          background: dl.status === 'completed' ? 'rgba(63, 185, 80, 0.15)' : 'var(--accent-soft)',
-                          color: dl.status === 'completed' ? 'var(--color-green)' : 'var(--accent-base)',
+                          background: bg,
+                          color: fg,
+                          whiteSpace: 'nowrap',
                         }}
                       >
-                        {dl.status === 'completed' ? <CheckCircle2 size={12} /> : <Download size={12} />}
-                        {dl.status === 'completed' ? '已完成' : dl.status === 'downloading' ? '下载中' : dl.status}
+                        {isDone ? <CheckCircle2 size={12} /> : isError ? <AlertCircle size={12} /> : isCancelled ? <XCircle size={12} /> : isRunning ? <Clock size={12} className="animate-spin" /> : <Download size={12} />}
+                        {label}
                       </span>
                     </td>
                     <td>
-                      <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--fg-main)' }}>{dl.title || dl.url}</div>
-                      <div style={{ fontSize: 11.5, color: 'var(--fg-dim)', marginTop: 2, wordBreak: 'break-all' }}>{dl.url}</div>
+                      <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--fg-main)', wordBreak: 'break-all' }} title={displayTitle}>
+                        {dl.item_id ? <Link to={`/items/${dl.item_id}`} style={{ color: 'inherit' }}>{displayTitle}</Link> : displayTitle}
+                      </div>
+                      {dl.url && dl.url !== displayTitle && (
+                        <div style={{ fontSize: 11.5, color: 'var(--fg-dim)', marginTop: 2, wordBreak: 'break-all' }}>
+                          {/^https?:\/\//.test(dl.url) ? <a href={dl.url} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>{dl.url}</a> : dl.url}
+                        </div>
+                      )}
                     </td>
                     <td>
-                      <div style={{ fontSize: 12, color: 'var(--fg-dim)' }}>
-                        {dl.message || (dl.status === 'completed' ? '下载完成' : '下载中…')}
+                      <div style={{ fontSize: 12, color: isError ? 'var(--color-red)' : 'var(--fg-dim)', wordBreak: 'break-all' }} title={dl.message || ''}>
+                        {dl.message || (isDone ? '下载完成' : isRunning ? '下载中…' : '-')}
                       </div>
                     </td>
                     <td style={{ textAlign: 'right' }}>
-                      <span style={{ color: 'var(--fg-faint)', fontSize: 12 }}>-</span>
+                      <div style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                        {isRunning && (
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleCancelDownload(dl.task_id)} title="取消下载">
+                            <XCircle size={13} />
+                            取消
+                          </button>
+                        )}
+                        {canRetry && (
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleRetryDownload(dl.task_id)} title="重试下载">
+                            <RotateCcw size={13} />
+                            重试
+                          </button>
+                        )}
+                        {dl.item_id && (
+                          <Link to={`/items/${dl.item_id}`} className="btn btn-sm btn-ghost" title="查看导入的作品">
+                            <Eye size={13} />
+                            查看
+                          </Link>
+                        )}
+                        {!isRunning && !canRetry && !dl.item_id && (
+                          <span style={{ color: 'var(--fg-faint)', fontSize: 12 }}>-</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
-                ))
+                  )
+                })
               )}
             </tbody>
           </table>

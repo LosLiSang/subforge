@@ -228,7 +228,7 @@ compute_type = "float16"
 [translate]
 target_lang = "zh"
 batch_size = 20
-workers = 8
+workers = 20
 
 [llm]
 api_key = ""

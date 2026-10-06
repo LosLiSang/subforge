@@ -7,8 +7,9 @@ class SettingsResponse(BaseModel):
     library_root: str | None = None
     proxy_url: str | None = None
     asr_concurrency: int = 1
-    remote_asr_concurrency: int = 1
-    translate_workers: int = 8
+    remote_asr_concurrency: int = 20
+    remote_asr_task_concurrency: int = 20
+    translate_workers: int = 20
     translation_prompt: str | None = None
     token_mode: bool = False
     no_auth: bool = False
@@ -20,6 +21,7 @@ class SettingsUpdateRequest(BaseModel):
     proxy_url: str | None = None
     asr_concurrency: int | None = None
     remote_asr_concurrency: int | None = None
+    remote_asr_task_concurrency: int | None = None
     translate_workers: int | None = None
     translation_prompt: str | None = None
     fixed_token: str | None = None

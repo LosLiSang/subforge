@@ -41,7 +41,8 @@ from starlette.staticfiles import StaticFiles
 FRONTEND_DIST = Path(__file__).resolve().parent / "dist"
 
 from subforge.asr.model_manager import cached_models
-from subforge.asr.remote_limiter import RemoteAsrRequestLimiter
+from subforge.asr.remote_limiter import LocalAsrModelLimiter, RemoteAsrRequestLimiter
+from subforge.concurrency import LOCAL_ASR_POOL_DIR, REMOTE_ASR_POOL_DIR
 from subforge.asr.engine import _audio_duration_seconds
 from subforge import __version__
 from subforge.config import Config, DEFAULT_MODELS_DIR
@@ -180,7 +181,8 @@ class UiRuntime:
                 self.library.close()
             self.library = LibraryStore.open(root)
             self.tasks = TaskManager(
-                self.library, self.deps.worker, self.deps.settings.get_asr_concurrency(),
+                self.library, self.deps.worker,
+                policy_resolver=self.deps.settings.concurrency_policy,
                 profile_resolver=self.deps.profiles.resolve,
                 deepgram_key_resolver=self.deps.settings.get_deepgram_api_key,
                 proxy_resolver=self.deps.settings.get_proxy_url,
@@ -190,7 +192,6 @@ class UiRuntime:
                 translate_workers_resolver=self.deps.settings.get_translate_workers,
                 translation_prompt_resolver=self.deps.settings.get_translation_prompt,
                 segment_runner=_make_segment_runner(self.deps, self),
-                remote_asr_concurrency=self.deps.settings.get_remote_asr_concurrency(),
             )
         return self.library
 
@@ -468,6 +469,10 @@ async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, pay
                 "local_files_only": bool(direct_model),
                 "device": "auto",
                 "compute_type": "auto",
+                "model_limiter": LocalAsrModelLimiter(
+                    library.root / ".subforge" / LOCAL_ASR_POOL_DIR,
+                    deps.settings.get_asr_concurrency(),
+                ),
             }
             if options["scene"] == "asmr":
                 asr_options.update(ASMR_PRESET)
@@ -479,7 +484,7 @@ async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, pay
             asr_profile = deps.profiles.resolve(asr_profile_id)
             gemini_profile = gemini_profile_from_mapping(asdict(asr_profile))
             remote_limiter = RemoteAsrRequestLimiter(
-                library.root / ".subforge" / "remote-asr-slots",
+                library.root / ".subforge" / REMOTE_ASR_POOL_DIR,
                 deps.settings.get_remote_asr_concurrency(),
             )
             transport = (
@@ -710,7 +715,8 @@ def create_app(deps: UiDependencies) -> Starlette:
             runtime.library.close()
         runtime.library = LibraryStore.initialize(selected)
         runtime.tasks = TaskManager(
-            runtime.library, deps.worker, deps.settings.get_asr_concurrency(),
+            runtime.library, deps.worker,
+            policy_resolver=deps.settings.concurrency_policy,
             profile_resolver=deps.profiles.resolve,
             deepgram_key_resolver=deps.settings.get_deepgram_api_key,
             proxy_resolver=deps.settings.get_proxy_url,
@@ -720,7 +726,6 @@ def create_app(deps: UiDependencies) -> Starlette:
             translate_workers_resolver=deps.settings.get_translate_workers,
             translation_prompt_resolver=deps.settings.get_translation_prompt,
             segment_runner=_make_segment_runner(deps, runtime),
-            remote_asr_concurrency=deps.settings.get_remote_asr_concurrency(),
         )
         deps.settings.set_active_library(selected)
         if request.headers.get("accept", "").startswith("application/json"):
@@ -1413,7 +1418,8 @@ def create_app(deps: UiDependencies) -> Starlette:
         else:
             worker_summary = {
                 "local_running": 0, "local_capacity": deps.settings.get_asr_concurrency(),
-                "remote_running": 0, "remote_capacity": deps.settings.get_remote_asr_concurrency(),
+                "remote_running": 0, "remote_capacity": deps.settings.get_remote_asr_task_concurrency(),
+                "remote_request_capacity": deps.settings.get_remote_asr_concurrency(),
                 "queued": 0,
             }
 
@@ -1520,8 +1526,10 @@ def create_app(deps: UiDependencies) -> Starlette:
                         "asr_chunk_seconds": form.get("default_asr_chunk_seconds", 60),
                     })
                 deps.settings.set_asr_concurrency(int(form.get("asr_concurrency", "1")))
-                deps.settings.set_remote_asr_concurrency(int(form.get("remote_asr_concurrency", "2")))
-                deps.settings.set_translate_workers(int(form.get("translate_workers", "8")))
+                deps.settings.set_remote_asr_concurrency(int(form.get("remote_asr_concurrency", "20")))
+                if form.get("remote_asr_task_concurrency"):
+                    deps.settings.set_remote_asr_task_concurrency(int(form["remote_asr_task_concurrency"]))
+                deps.settings.set_translate_workers(int(form.get("translate_workers", "20")))
                 deps.settings.set_translation_prompt(form.get("translation_prompt", ""))
                 deps.settings.set_proxy_url(form.get("proxy_url", ""))
                 models_dir = _resolve_selected_path(runtime, form, "models_dir")
@@ -1532,6 +1540,8 @@ def create_app(deps: UiDependencies) -> Starlette:
                     deps.settings.set_direct_model_path(model, value)
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
+            if runtime.tasks is not None:
+                runtime.tasks.wake()  # 并发容量调大后立即放行排队任务
             if "application/json" in request.headers.get("accept", ""):
                 return JSONResponse({"ok": True})
             return RedirectResponse("/settings", status_code=303)
@@ -1545,6 +1555,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             deepgram_key_deletable=deps.settings.has_stored_deepgram_api_key(),
             asr_concurrency=deps.settings.get_asr_concurrency(),
             remote_asr_concurrency=deps.settings.get_remote_asr_concurrency(),
+            remote_asr_task_concurrency=deps.settings.get_remote_asr_task_concurrency(),
             translate_workers=deps.settings.get_translate_workers(),
             translation_prompt=deps.settings.get_translation_prompt(),
             proxy_url=deps.settings.get_proxy_url(),
@@ -3202,6 +3213,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             "proxy_url": deps.settings.get_proxy_url(),
             "asr_concurrency": deps.settings.get_asr_concurrency(),
             "remote_asr_concurrency": deps.settings.get_remote_asr_concurrency(),
+            "remote_asr_task_concurrency": deps.settings.get_remote_asr_task_concurrency(),
             "translate_workers": deps.settings.get_translate_workers(),
             "translation_prompt": deps.settings.get_translation_prompt(),
             "no_auth": deps.no_auth or deps.settings.get_no_auth(),

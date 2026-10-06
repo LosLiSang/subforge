@@ -319,7 +319,8 @@ def transcribe_chunked(
             return index, start, offset_entries
 
     results: list[tuple[int, float, list[SubtitleEntry]]] = []
-    max_workers = min(len(chunks), max(1, (limiter.limit if limiter else 4)))
+    from subforge.concurrency import chunk_fanout
+    max_workers = chunk_fanout(len(chunks), limiter.limit if limiter else 4)
 
     def _report_dg(completed: int, total: int, ratio: float, msg: str) -> None:
         if not progress_callback:

@@ -117,8 +117,10 @@ async def test_asr_capacity_is_released_before_translation_finishes(tmp_path):
     class _StageWorker:
         def __init__(self):
             self.calls = 0
+            self.requests = []
 
         async def events(self, task, request):
+            self.requests.append(request)
             self.calls += 1
             is_first = self.calls == 1
             yield {"type": "asr_started", "stage": "asr"}
@@ -133,7 +135,11 @@ async def test_asr_capacity_is_released_before_translation_finishes(tmp_path):
             first_translation_gate.set()
 
     worker = _StageWorker()
-    manager = TaskManager(store, worker, asr_concurrency=1, remote_asr_concurrency=1)
+    # 作品准入 A=1，请求池 R=4：第二个任务必须等第一个离开 ASR 阶段
+    manager = TaskManager(
+        store, worker, asr_concurrency=1,
+        remote_asr_task_concurrency=1, remote_asr_concurrency=4,
+    )
     snapshot = ProcessingSnapshot(
         asr_provider="deepgram", scene="normal", whisper_model="medium", llm_profile_id="p"
     )
@@ -141,6 +147,12 @@ async def test_asr_capacity_is_released_before_translation_finishes(tmp_path):
     await _wait_until(lambda: manager.get_task(first.task_id).stage == "asr")
     second = await manager.enqueue(tracks[1], snapshot)
     await asyncio.wait_for(second_asr_started.wait(), timeout=2)
+
+    overrides = worker.requests[0]["config_overrides"]
+    assert overrides["remote_asr_global_workers"] == 4
+    assert overrides["remote_asr_limiter_dir"].endswith("remote-asr-slots")
+    assert overrides["local_asr_global_workers"] == 1
+    assert overrides["local_asr_limiter_dir"].endswith("local-asr-slots")
 
     first_translation_gate.set()
     await _wait_until(lambda: manager.get_task(first.task_id).status == "completed")
@@ -208,7 +220,7 @@ async def test_task_manager_persists_events_and_completes_track(tmp_path):
         {"type": EventType.TRANSLATION_PROGRESS.value, "stage": "translation", "completed": 1, "total": 2, "progress": 0.5},
         {"type": EventType.TASK_COMPLETED.value, "stage": "complete"},
     ])
-    manager = TaskManager(store, worker, media_concurrency=1)
+    manager = TaskManager(store, worker, asr_concurrency=1)
 
     task = await manager.enqueue(imported.track_id, ProcessingSnapshot(
         asr_provider="local", scene="asmr", whisper_model="medium", llm_profile_id="profile"
@@ -764,7 +776,8 @@ async def test_summary_splits_local_and_remote_worker_counts(tmp_path):
 
     manager = TaskManager(
         store, worker,
-        asr_concurrency=1, remote_asr_concurrency=2, segment_runner=runner,
+        asr_concurrency=1, remote_asr_task_concurrency=2, remote_asr_concurrency=5,
+        segment_runner=runner,
     )
     local_full = await manager.enqueue(tracks[0], ProcessingSnapshot(
         asr_provider="local", scene="normal", whisper_model="medium", llm_profile_id="p"))
@@ -793,6 +806,7 @@ async def test_summary_splits_local_and_remote_worker_counts(tmp_path):
     assert summary["local_capacity"] == 1
     assert summary["remote_running"] == 2
     assert summary["remote_capacity"] == 2
+    assert summary["remote_request_capacity"] == 5
     assert summary["queued"] == 1  # whisper 片段任务在等本地信号量
     worker.gate.set()
     await manager.close()

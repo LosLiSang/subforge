@@ -54,7 +54,7 @@ class TestLoadConfigDefaults:
         assert config.deepgram_model == "nova-3"
         assert config.deepgram_keyterms == []
         assert config.concurrency == 2
-        assert config.translate_workers == 8
+        assert config.translate_workers == 20
         assert config.log_level == "INFO"
         assert config.log_file == "subforge.log"
         assert config.output_dir is None

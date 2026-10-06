@@ -194,6 +194,7 @@ export interface UiSettings {
   proxy_url?: string | null
   asr_concurrency: number
   remote_asr_concurrency: number
+  remote_asr_task_concurrency?: number
   translate_workers: number
   translation_prompt?: string | null
   no_auth: boolean

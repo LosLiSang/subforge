@@ -16,7 +16,7 @@
     - Worker 以子进程运行，原生崩溃不拖垮 UI；崩溃现场写入 `<Library>/.subforge/logs/worker-<task_id>.log`
     - 失败自动重试：连续**无进展**失败累计 3 次才彻底 failed；翻译批次有进展即重置计数
     - 行内操作：排队/运行中可取消，失败可重试（复用同一 task_id，从断点继续）
-    - 按快照的 `asr_provider` 归入并发域：`local` 走本地 GPU 信号量，`deepgram` / `model`（Gemini）走网络 API 信号量，两域互不抢占
+    - 按快照的 `asr_provider` 归入并发域（见下文「并发模型」）
 
 === "片段重处理（segment_reprocess）"
 
@@ -30,7 +30,7 @@
     - 完成后转 `awaiting_review`，行内出现「查看候选 / 放弃候选」
     - 确认时才调用范围替换改动字幕；放弃只改任务状态
     - **失败或取消均可手动重试**：复用同一 task_id + 原 payload 重新入队，重试前校验引用的翻译/音频配置仍在（已删除则拒绝并提示）；不触碰音轨处理状态
-    - 按处理器归入并发域：`whisper` 走本地 GPU 信号量（与整轨本地任务互斥），`gemini` 走网络 API 信号量，两域互不抢占
+    - 按处理器归入并发域：`whisper` → 本地域，`gemini` → 网络域（见下文「并发模型」）
 
 ## 任务状态一览
 
@@ -71,13 +71,26 @@
 - **入队 / 开始时间**：本地时区「月-日 时:分」；`started_at` 在每次实际开始执行时写入，手动重试时重置
 - **Worker 摘要**（字幕 Tab 标题区）：`本地 ASR 运行/容量 · 网络 ASR 运行/容量 · 排队 N`
 
-## 并发域（本地 vs 网络 ASR）
+## 并发模型：准入 + 资源池
 
-本地 ASR（GPU/内存瓶颈）与网络 ASR（API 配额瓶颈）分属两个独立信号量：
+实现见 `subforge/concurrency.py`。两个概念、各管一件事：
 
-- **本地域**：整轨 `asr_provider=local` + 片段 `processor=whisper`；容量 = 设置页「同时加载 ASR 模型数」（`asr_concurrency`，默认 1）
-- **网络域**：整轨 `asr_provider=deepgram/model` + 片段 `processor=gemini`；容量 = 设置页「网络 ASR 并发数」（`remote_asr_concurrency`，默认 2）
-- 两域互不抢占：本地任务占满时网络任务照常运行，反之亦然；片段任务不再绕过信号量（此前多个本地 Whisper 片段可并发加载 large-v3 争抢显存）
+- **准入（Admission）**：`TaskManager` 内的 FIFO `AdmissionGate`，决定哪些「大任务」可以进入 ASR 阶段。任务离开 ASR 阶段（`asr_completed` / 进入翻译 / 终态）即归还；翻译阶段不占准入。
+- **资源池（Resource Pool）**：`<Library>/.subforge/*-slots/` 下的跨进程文件锁，只在使用稀缺资源的代码处持有，是唯一的硬上限。
+
+| 设置 | 默认 | 机制 | 限制对象 / 持有范围 |
+|---|---|---|---|
+| `asr_concurrency` (L) | 1 | 准入 + `local-asr-slots` | 同时加载的 Whisper 模型；持有「加载模型 → 转写结束」 |
+| `remote_asr_task_concurrency` (A) | 20 | 准入 | 同时处于网络 ASR 阶段的大任务数 |
+| `remote_asr_concurrency` (R) | 20 | `remote-asr-slots` | 全局在途 ASR HTTP 请求；持有一次请求，退避期间不持有 |
+| `translate_workers` (T) | 20 | `translation-slots` | 全局在途 LLM 请求；持有一次请求 |
+
+- **并发域**：整轨 `asr_provider=local` / 片段 `processor=whisper` → 本地域；其余 → 网络域。两域互不抢占。
+- **分片 fan-out** 不是配置项：`min(分片数, R)`，多开只会空等请求池。
+- **实时生效**：`TaskManager` 每次通过 `UiSettingsStore.concurrency_policy()` 读取策略；保存设置后调用 `wake()`，调大容量立即放行排队任务。
+- 文件锁不保证公平（轮询抢槽），顺序由准入层 FIFO 保证。
+
+不变式：任意时刻各池持有者 ≤ 容量（跨进程）；处于 ASR 阶段的任务数 ≤ 该域准入上限；进程崩溃由 OS 释放文件锁，不泄漏。
 
 ## 删除
 

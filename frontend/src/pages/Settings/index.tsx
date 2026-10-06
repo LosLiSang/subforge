@@ -37,8 +37,9 @@ export function SettingsPage() {
   const [libraryRoot, setLibraryRoot] = useState('')
   const [proxyUrl, setProxyUrl] = useState('')
   const [asrConcurrency, setAsrConcurrency] = useState(1)
-  const [remoteAsrConcurrency, setRemoteAsrConcurrency] = useState(1)
-  const [translateWorkers, setTranslateWorkers] = useState(8)
+  const [remoteAsrConcurrency, setRemoteAsrConcurrency] = useState(20)
+  const [remoteAsrTaskConcurrency, setRemoteAsrTaskConcurrency] = useState(20)
+  const [translateWorkers, setTranslateWorkers] = useState(20)
   const [translationPrompt, setTranslationPrompt] = useState('')
   const [noAuth, setNoAuth] = useState(false)
   const [fixedToken, setFixedToken] = useState('')
@@ -78,8 +79,9 @@ export function SettingsPage() {
       setLibraryRoot(data.library_root || '')
       setProxyUrl(data.proxy_url || '')
       setAsrConcurrency(data.asr_concurrency || 1)
-      setRemoteAsrConcurrency(data.remote_asr_concurrency || 1)
-      setTranslateWorkers(data.translate_workers || 8)
+      setRemoteAsrConcurrency(data.remote_asr_concurrency || 20)
+      setRemoteAsrTaskConcurrency(data.remote_asr_task_concurrency || 20)
+      setTranslateWorkers(data.translate_workers || 20)
       setTranslationPrompt(data.translation_prompt || '')
       setNoAuth(!!data.no_auth)
       if (data.default_cover) {
@@ -140,6 +142,7 @@ export function SettingsPage() {
       if (proxyUrl) formData.append('proxy_url', proxyUrl)
       formData.append('asr_concurrency', String(asrConcurrency))
       formData.append('remote_asr_concurrency', String(remoteAsrConcurrency))
+      formData.append('remote_asr_task_concurrency', String(remoteAsrTaskConcurrency))
       formData.append('translate_workers', String(translateWorkers))
       if (translationPrompt) formData.append('translation_prompt', translationPrompt)
       if (noAuth) formData.append('no_auth', 'on')
@@ -834,12 +837,25 @@ export function SettingsPage() {
             </div>
             <div>
               <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                远程 ASR 并发请求数
+                远程 ASR 同时处理作品数
               </label>
               <input
                 type="number"
                 min={1}
-                max={16}
+                max={64}
+                className="input-field"
+                value={remoteAsrTaskConcurrency}
+                onChange={(e) => setRemoteAsrTaskConcurrency(parseInt(e.target.value) || 1)}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                远程 ASR 全局并发请求数
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={64}
                 className="input-field"
                 value={remoteAsrConcurrency}
                 onChange={(e) => setRemoteAsrConcurrency(parseInt(e.target.value) || 1)}
@@ -852,10 +868,10 @@ export function SettingsPage() {
               <input
                 type="number"
                 min={1}
-                max={32}
+                max={64}
                 className="input-field"
                 value={translateWorkers}
-                onChange={(e) => setTranslateWorkers(parseInt(e.target.value) || 8)}
+                onChange={(e) => setTranslateWorkers(parseInt(e.target.value) || 20)}
               />
             </div>
           </div>

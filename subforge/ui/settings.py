@@ -116,9 +116,30 @@ class UiSettingsStore:
         data.pop("media_concurrency", None)
         self._save(data)
 
+    def get_remote_asr_task_concurrency(self) -> int:
+        """同时处于网络 ASR 阶段的大任务数（准入），默认 20。"""
+        value = int(self._load().get("remote_asr_task_concurrency", 20))
+        return max(1, value)
+
+    def set_remote_asr_task_concurrency(self, value: int) -> None:
+        if value < 1:
+            raise ValueError("remote_asr_task_concurrency must be at least 1")
+        data = self._load()
+        data["remote_asr_task_concurrency"] = value
+        self._save(data)
+
+    def concurrency_policy(self):
+        from subforge.concurrency import ConcurrencyPolicy
+        return ConcurrencyPolicy(
+            local_asr=self.get_asr_concurrency(),
+            remote_asr_tasks=self.get_remote_asr_task_concurrency(),
+            remote_asr_requests=self.get_remote_asr_concurrency(),
+            llm_requests=self.get_translate_workers(),
+        )
+
     def get_remote_asr_concurrency(self) -> int:
-        """网络 ASR（Deepgram / Gemini 等 API）并发上限；与本地 GPU 推理解耦。"""
-        value = int(self._load().get("remote_asr_concurrency", 2))
+        """全局在途网络 ASR HTTP 请求数（跨进程请求池）。"""
+        value = int(self._load().get("remote_asr_concurrency", 20))
         return max(1, value)
 
     def set_remote_asr_concurrency(self, value: int) -> None:
@@ -187,7 +208,7 @@ class UiSettingsStore:
         self._save(data)
 
     def get_translate_workers(self) -> int:
-        value = int(self._load().get("translate_workers", 8))
+        value = int(self._load().get("translate_workers", 20))
         return max(1, value)
 
     def set_translate_workers(self, value: int) -> None:

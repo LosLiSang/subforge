@@ -149,9 +149,12 @@ def test_fake_picker_returns_selected_server_side_paths(tmp_path):
 
 
 def test_remote_asr_concurrency_setting_roundtrip(tmp_path):
-    """网络 ASR 并发独立于本地 ASR 并发：默认 2、可配置、拒绝非法值。"""
+    """网络 ASR 并发独立于本地 ASR 并发：默认 20、可配置、拒绝非法值。"""
     store = UiSettingsStore(tmp_path / "ui.json")
-    assert store.get_remote_asr_concurrency() == 2
+    assert store.get_remote_asr_concurrency() == 20
+    assert store.get_remote_asr_task_concurrency() == 20
+    assert store.get_translate_workers() == 20
+    assert store.get_asr_concurrency() == 1
     store.set_remote_asr_concurrency(3)
     assert UiSettingsStore(tmp_path / "ui.json").get_remote_asr_concurrency() == 3
     with pytest.raises(ValueError):

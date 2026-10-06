@@ -37,8 +37,9 @@ export function SettingsPage() {
   const [libraryRoot, setLibraryRoot] = useState('')
   const [proxyUrl, setProxyUrl] = useState('')
   const [asrConcurrency, setAsrConcurrency] = useState(1)
-  const [remoteAsrConcurrency, setRemoteAsrConcurrency] = useState(1)
-  const [translateWorkers, setTranslateWorkers] = useState(8)
+  const [remoteAsrConcurrency, setRemoteAsrConcurrency] = useState(20)
+  const [remoteAsrTaskConcurrency, setRemoteAsrTaskConcurrency] = useState(20)
+  const [translateWorkers, setTranslateWorkers] = useState(20)
   const [translationPrompt, setTranslationPrompt] = useState('')
   const [noAuth, setNoAuth] = useState(false)
   const [fixedToken, setFixedToken] = useState('')
@@ -78,8 +79,9 @@ export function SettingsPage() {
       setLibraryRoot(data.library_root || '')
       setProxyUrl(data.proxy_url || '')
       setAsrConcurrency(data.asr_concurrency || 1)
-      setRemoteAsrConcurrency(data.remote_asr_concurrency || 1)
-      setTranslateWorkers(data.translate_workers || 8)
+      setRemoteAsrConcurrency(data.remote_asr_concurrency || 20)
+      setRemoteAsrTaskConcurrency(data.remote_asr_task_concurrency || 20)
+      setTranslateWorkers(data.translate_workers || 20)
       setTranslationPrompt(data.translation_prompt || '')
       setNoAuth(!!data.no_auth)
       if (data.default_cover) {
@@ -140,6 +142,7 @@ export function SettingsPage() {
       if (proxyUrl) formData.append('proxy_url', proxyUrl)
       formData.append('asr_concurrency', String(asrConcurrency))
       formData.append('remote_asr_concurrency', String(remoteAsrConcurrency))
+      formData.append('remote_asr_task_concurrency', String(remoteAsrTaskConcurrency))
       formData.append('translate_workers', String(translateWorkers))
       if (translationPrompt) formData.append('translation_prompt', translationPrompt)
       if (noAuth) formData.append('no_auth', 'on')
@@ -817,48 +820,67 @@ export function SettingsPage() {
         {/* 3. Concurrency Limits */}
         {activeTab === 'pipeline' && (
         <div className="card-panel">
-          <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>并发与性能流水线配置</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
-            <div>
-              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                本地 ASR 并发线程数 (显存防溢出)
-              </label>
-              <input
-                type="number"
-                min={1}
-                max={8}
-                className="input-field"
-                value={asrConcurrency}
-                onChange={(e) => setAsrConcurrency(parseInt(e.target.value) || 1)}
-              />
+          <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>并发控制</h3>
+          <p style={{ fontSize: 12, color: 'var(--fg-dim)', marginBottom: 16 }}>
+            「作品数」决定同时有几个作品在转写，其余按入队顺序排队；「请求数」是所有作品共享的 API 调用上限。保存后立即生效。
+          </p>
+          {([
+            {
+              group: '本地转写（Whisper）',
+              fields: [{
+                label: '同时加载模型数',
+                hint: '每个模型占一份显存/内存，也就是同时做本地转写的作品数。显存不足时保持 1。',
+                value: asrConcurrency, set: setAsrConcurrency, max: 8,
+              }],
+            },
+            {
+              group: '网络转写（Deepgram / 音频模型）',
+              fields: [
+                {
+                  label: '同时转写作品数',
+                  hint: '同时进入网络转写的作品（含片段重处理）。设为 1 时一个作品独占全部请求，先到先完成。',
+                  value: remoteAsrTaskConcurrency, set: setRemoteAsrTaskConcurrency, max: 64,
+                },
+                {
+                  label: '同时请求数',
+                  hint: '所有作品共享，同时发往转写服务的请求上限。频繁遇到 429 限流时调低。',
+                  value: remoteAsrConcurrency, set: setRemoteAsrConcurrency, max: 64,
+                },
+              ],
+            },
+            {
+              group: '翻译（LLM）',
+              fields: [{
+                label: '同时请求数',
+                hint: '所有作品共享，同时发往翻译模型的请求上限。频繁遇到 429 限流时调低。',
+                value: translateWorkers, set: setTranslateWorkers, max: 64,
+              }],
+            },
+          ] as const).map((section) => (
+            <div key={section.group} style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{section.group}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
+                {section.fields.map((field) => (
+                  <div key={field.label}>
+                    <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                      {field.label}
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={field.max}
+                      className="input-field"
+                      value={field.value}
+                      onChange={(e) => field.set(Math.max(1, parseInt(e.target.value) || 1))}
+                    />
+                    <div style={{ fontSize: 11, color: 'var(--fg-dim)', marginTop: 6, lineHeight: 1.5 }}>
+                      {field.hint}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div>
-              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                远程 ASR 并发请求数
-              </label>
-              <input
-                type="number"
-                min={1}
-                max={16}
-                className="input-field"
-                value={remoteAsrConcurrency}
-                onChange={(e) => setRemoteAsrConcurrency(parseInt(e.target.value) || 1)}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                LLM 翻译 Worker 并发数
-              </label>
-              <input
-                type="number"
-                min={1}
-                max={32}
-                className="input-field"
-                value={translateWorkers}
-                onChange={(e) => setTranslateWorkers(parseInt(e.target.value) || 8)}
-              />
-            </div>
-          </div>
+          ))}
         </div>
         )}
 

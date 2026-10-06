@@ -60,7 +60,7 @@ batch_size = 20
 # Surrounding entries sent to LLM for translation context
 context_size = 10
 # Max parallel LLM translation calls
-workers = 8
+workers = 20
 # Optional extra instructions appended to the default subtitle rules.
 prompt = ""
 
@@ -119,7 +119,7 @@ class Config:
     target_lang: str = "zh"
     batch_size: int = 20
     context_size: int = 10
-    translate_workers: int = 8
+    translate_workers: int = 20
     translation_prompt: str = ""
     translation_global_workers: int = 0
     translation_limiter_dir: Path | None = None
@@ -136,6 +136,9 @@ class Config:
     # Shared cross-process network ASR request pool
     remote_asr_global_workers: int = 0
     remote_asr_limiter_dir: Path | None = None
+    # Shared cross-process local Whisper model pool (0 = unlimited)
+    local_asr_global_workers: int = 0
+    local_asr_limiter_dir: Path | None = None
     # Deepgram ASR
     deepgram_api_key: str = ""
     deepgram_model: str = "nova-3"
@@ -227,7 +230,7 @@ def load_config(
     kwargs["target_lang"] = toml_data.get("translate", {}).get("target_lang", "zh")
     kwargs["batch_size"] = int(toml_data.get("translate", {}).get("batch_size", 20))
     kwargs["context_size"] = int(toml_data.get("translate", {}).get("context_size", 10))
-    kwargs["translate_workers"] = int(toml_data.get("translate", {}).get("workers", 8))
+    kwargs["translate_workers"] = int(toml_data.get("translate", {}).get("workers", 20))
     kwargs["translation_prompt"] = str(toml_data.get("translate", {}).get("prompt", ""))
     kwargs["translation_global_workers"] = 0
     kwargs["translation_limiter_dir"] = None
@@ -241,6 +244,8 @@ def load_config(
     kwargs["asr_chunk_seconds"] = 60
     kwargs["remote_asr_global_workers"] = 0
     kwargs["remote_asr_limiter_dir"] = None
+    kwargs["local_asr_global_workers"] = 0
+    kwargs["local_asr_limiter_dir"] = None
     kwargs["deepgram_api_key"] = toml_data.get("deepgram", {}).get("api_key", "")
     kwargs["deepgram_model"] = toml_data.get("deepgram", {}).get("model", "nova-3")
     keyterms = toml_data.get("deepgram", {}).get("keyterms", [])

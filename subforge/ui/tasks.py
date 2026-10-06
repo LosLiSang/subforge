@@ -7,13 +7,23 @@ import math
 import os
 import sys
 import tempfile
-from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import AsyncIterator, Protocol
 from uuid import uuid4
 
+from subforge.concurrency import (
+    LEAVES_ASR_PHASE_EVENTS,
+    LLM_POOL_DIR,
+    LOCAL,
+    LOCAL_ASR_POOL_DIR,
+    REMOTE,
+    REMOTE_ASR_POOL_DIR,
+    AdmissionGate,
+    ConcurrencyPolicy,
+    task_domain,
+)
 from subforge.library import LibraryStore
 from subforge.presets import ASMR_PRESET
 
@@ -22,15 +32,30 @@ logger = logging.getLogger(__name__)
 # 任务级自动重试：连续失败达此次数才彻底结束（任一次成功即重置/结束）。
 _TASK_MAX_CONSECUTIVE_RETRIES = 3
 
-@asynccontextmanager
-async def _maybe_acquire(semaphore: asyncio.Semaphore | None):
-    if semaphore is not None:
-        await semaphore.acquire()
-    try:
-        yield
-    finally:
-        if semaphore is not None:
-            semaphore.release()
+
+class _AsrAdmission:
+    """一次 ASR 阶段的准入凭证：幂等释放，离开 ASR 阶段或异常退出均可调用。"""
+
+    def __init__(self, gate: AdmissionGate, active: set[str], task_id: str) -> None:
+        self._gate = gate
+        self._active = active
+        self._task_id = task_id
+        self._held = False
+
+    async def __aenter__(self) -> "_AsrAdmission":
+        await self._gate.acquire()
+        self._held = True
+        self._active.add(self._task_id)
+        return self
+
+    def leave_asr_phase(self) -> None:
+        if self._held:
+            self._held = False
+            self._active.discard(self._task_id)
+            self._gate.release()
+
+    async def __aexit__(self, *_exc) -> None:
+        self.leave_asr_phase()
 
 
 
@@ -224,29 +249,30 @@ class TaskManager:
         proxy_resolver=None,
         models_dir_resolver=None,
         direct_model_resolver=None,
-        translate_workers: int = 8,
+        translate_workers: int = 20,
         translate_workers_resolver=None,
         translation_prompt_resolver=None,
-        media_concurrency: int | None = None,
         segment_runner=None,
-        remote_asr_concurrency: int = 2,
+        remote_asr_concurrency: int = 20,
+        remote_asr_task_concurrency: int = 20,
+        policy_resolver=None,
     ) -> None:
-        if media_concurrency is not None:
-            asr_concurrency = media_concurrency
-        if asr_concurrency < 1:
-            raise ValueError("asr_concurrency must be at least 1")
-        if remote_asr_concurrency < 1:
-            raise ValueError("remote_asr_concurrency must be at least 1")
         if translate_workers < 1:
             raise ValueError("translate_workers must be at least 1")
+        # 未提供 policy_resolver 时用构造参数组成静态策略（测试/脚本场景）。
+        static_policy = ConcurrencyPolicy(
+            local_asr=asr_concurrency,
+            remote_asr_tasks=remote_asr_task_concurrency,
+            remote_asr_requests=remote_asr_concurrency,
+            llm_requests=translate_workers,
+        )
+        self._policy_resolver = policy_resolver or (lambda: static_policy)
         self.library = library
         self.worker = worker
-        self._max_workers = media_concurrency if media_concurrency is not None else (asr_concurrency + remote_asr_concurrency)
-        self._worker_sem = asyncio.Semaphore(self._max_workers)
-        self._local_sem = asyncio.Semaphore(asr_concurrency)
-        self._remote_sem = asyncio.Semaphore(remote_asr_concurrency)
-        self._local_concurrency = asr_concurrency
-        self._remote_concurrency = remote_asr_concurrency
+        self._gates = {
+            domain: AdmissionGate(lambda d=domain: self.policy().admission_limit(d))
+            for domain in (LOCAL, REMOTE)
+        }
         self._translate_workers = translate_workers
         self._translate_workers_resolver = translate_workers_resolver
         self._translation_prompt_resolver = translation_prompt_resolver
@@ -337,15 +363,23 @@ class TaskManager:
         self._tasks[task.task_id] = asyncio.create_task(self._run(task))
         return task
 
-    def _task_domain(self, task: TaskRecord) -> str:
-        if task.kind == "segment_reprocess":
-            processor_name = str((task.payload or {}).get("processor", "whisper"))
-            return "remote" if processor_name == "gemini" else "local"
-        provider = str((task.config_snapshot or {}).get("asr_provider", "local"))
-        return "local" if provider == "local" else "remote"
+    def policy(self) -> ConcurrencyPolicy:
+        return self._policy_resolver()
 
-    def _semaphore_for(self, task: TaskRecord) -> asyncio.Semaphore:
-        return self._local_sem if self._task_domain(task) == "local" else self._remote_sem
+    def wake(self) -> None:
+        """设置变更后调用：容量调大时立即放行排队任务。"""
+        for gate in self._gates.values():
+            gate.wake()
+
+    def _task_domain(self, task: TaskRecord) -> str:
+        return task_domain(
+            task.kind,
+            asr_provider=str((task.config_snapshot or {}).get("asr_provider", "local")),
+            processor=str((task.payload or {}).get("processor", "whisper")),
+        )
+
+    def _admission(self, task: TaskRecord) -> _AsrAdmission:
+        return _AsrAdmission(self._gates[self._task_domain(task)], self._asr_active, task.task_id)
 
 
     async def enqueue_segment_reprocess(
@@ -375,12 +409,8 @@ class TaskManager:
         try:
             consecutive_failures = 0
             while True:
-                semaphore = self._semaphore_for(task)
-                if semaphore is not None:
-                    await semaphore.acquire()
-                asr_slot_held = semaphore is not None
-                self._asr_active.add(task.task_id)
-                try:
+                # 准入只覆盖 ASR 阶段；翻译阶段由跨进程 LLM 请求池限流。
+                async with self._admission(task) as admission:
                     task.status = "running"
                     task.stage = "queue"
                     task.started_at = _now()
@@ -394,14 +424,8 @@ class TaskManager:
                     request = self._build_request(task)
                     completed_at_start = task.completed
                     async for event in self.worker.events(task, request):
-                        if event.get("type") in {
-                            "asr_completed", "translation_started",
-                            "task_completed", "task_no_speech", "task_failed",
-                        }:
-                            self._asr_active.discard(task.task_id)
-                            if asr_slot_held and semaphore is not None:
-                                semaphore.release()
-                                asr_slot_held = False
+                        if event.get("type") in LEAVES_ASR_PHASE_EVENTS:
+                            admission.leave_asr_phase()
                         self._apply_event(task, event)
                         self._save(task)
                         self._publish(task.task_id, event)
@@ -425,10 +449,6 @@ class TaskManager:
                             f"任务失败，自动重试 ({consecutive_failures}/{_TASK_MAX_CONSECUTIVE_RETRIES})"
                         ),
                     })
-                finally:
-                    if asr_slot_held and semaphore is not None:
-                        semaphore.release()
-                    self._asr_active.discard(task.task_id)
         except asyncio.CancelledError:
             if task.status != "cancelled":
                 task.status = "interrupted"
@@ -451,9 +471,7 @@ class TaskManager:
             self._save(task)
             return
         try:
-            semaphore = self._semaphore_for(task)
-            async with _maybe_acquire(semaphore):
-                self._asr_active.add(task.task_id)
+            async with self._admission(task) as admission:
                 task.status = "running"
                 task.stage = "asr"
                 task.started_at = _now()
@@ -467,6 +485,8 @@ class TaskManager:
                     completed: int | None = None,
                     total: int | None = None,
                 ) -> None:
+                    if stage not in ("asr", "queue"):
+                        admission.leave_asr_phase()
                     task.stage = stage
                     if progress is not None:
                         task.progress = max(0.0, min(1.0, progress))
@@ -518,7 +538,6 @@ class TaskManager:
             task.message = str(exc)
             self._save(task)
         finally:
-            self._asr_active.discard(task.task_id)
             self._tasks.pop(task.task_id, None)
 
     def _build_request(self, task: TaskRecord) -> dict:
@@ -545,6 +564,8 @@ class TaskManager:
         )
         if not isinstance(translation_prompt, str):
             raise ValueError("translation_prompt must be a string")
+        policy = self.policy()
+        pools_root = (self.library.root / ".subforge").resolve()
         overrides = {
             "asr_provider": snapshot.get("asr_provider", "local"),
             "model": model_name,
@@ -563,13 +584,11 @@ class TaskManager:
             "translate_workers": translate_workers,
             "translation_global_workers": translate_workers,
             "translation_prompt": translation_prompt,
-            "translation_limiter_dir": str(
-                (self.library.root / ".subforge" / "translation-slots").resolve()
-            ),
-            "remote_asr_global_workers": self._remote_concurrency,
-            "remote_asr_limiter_dir": str(
-                (self.library.root / ".subforge" / "remote-asr-slots").resolve()
-            ),
+            "translation_limiter_dir": str(pools_root / LLM_POOL_DIR),
+            "local_asr_global_workers": policy.local_asr,
+            "local_asr_limiter_dir": str(pools_root / LOCAL_ASR_POOL_DIR),
+            "remote_asr_global_workers": policy.remote_asr_requests,
+            "remote_asr_limiter_dir": str(pools_root / REMOTE_ASR_POOL_DIR),
         }
         if snapshot.get("scene") == "asmr":
             overrides.update(ASMR_PRESET)
@@ -690,11 +709,13 @@ class TaskManager:
                 continue
             if task.status == "queued":
                 queued += 1
+        policy = self.policy()
         return {
             "local_running": local_running,
-            "local_capacity": self._local_concurrency,
+            "local_capacity": policy.local_asr,
             "remote_running": remote_running,
-            "remote_capacity": self._remote_concurrency,
+            "remote_capacity": policy.remote_asr_tasks,
+            "remote_request_capacity": policy.remote_asr_requests,
             "queued": queued,
         }
 

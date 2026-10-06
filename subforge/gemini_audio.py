@@ -19,6 +19,7 @@ from uuid import uuid4
 import httpx
 
 from subforge.asr.remote_limiter import RemoteAsrRequestLimiter
+from subforge.concurrency import chunk_fanout
 from subforge.models import SubtitleEntry
 from subforge.ui.profiles import mask_secret
 from subforge.segment_processing import (
@@ -578,15 +579,9 @@ class GeminiAudioAdapter:
             chunks, detection_failed = await self._plan_chunks(request, extracted)
             extra = request.recognition_prompt.strip() or self.profile.recognition_prompt
             context = f"\n可能出现的专有词或上下文：{extra}" if extra else ""
-            chunk_gate = asyncio.Semaphore(
-                max(1, self._remote_limiter.limit if self._remote_limiter is not None else self._chunk_concurrency)
-            )
-
+            # 分片 fan-out 只由 worker 数决定（见下方 concurrency_count）；
+            # 全局真实请求上限由 transport 上的跨进程请求池保证。
             async def process_chunk(chunk_index: int, chunk_start: float, chunk_end: float):
-                async with chunk_gate:
-                    return await _process_chunk(chunk_index, chunk_start, chunk_end)
-
-            async def _process_chunk(chunk_index: int, chunk_start: float, chunk_end: float):
                 if resume_state is not None:
                     cached = (resume_state.asr.get("completed_chunks") or {}).get(str(chunk_index))
                     if cached:
@@ -639,7 +634,10 @@ class GeminiAudioAdapter:
             for index, (start, end) in enumerate(chunks):
                 chunk_queue.put_nowait((index, start, end))
 
-            concurrency_count = min(self._chunk_concurrency, len(chunks))
+            concurrency_count = chunk_fanout(
+                len(chunks),
+                self._remote_limiter.limit if self._remote_limiter is not None else self._chunk_concurrency,
+            )
 
             def _report(completed: int, total: int, ratio: float, message: str | None = None) -> None:
                 if not self._progress:

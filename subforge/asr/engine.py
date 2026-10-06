@@ -193,7 +193,20 @@ def _audio_duration_seconds(input_path: Path) -> float:
         return 0.0
 
 
-def transcribe(
+def transcribe(*args, model_limiter=None, **kwargs) -> list[SubtitleEntry]:
+    """Transcribe with faster-whisper; see ``_transcribe_unlocked`` for parameters.
+
+    ``model_limiter`` (``LocalAsrModelLimiter``) bounds how many Whisper models
+    are loaded at once across all processes. The slot covers model load through
+    the end of transcription, i.e. the whole time the model occupies VRAM/RAM.
+    """
+    if model_limiter is None:
+        return _transcribe_unlocked(*args, **kwargs)
+    with model_limiter.sync_slot():
+        return _transcribe_unlocked(*args, **kwargs)
+
+
+def _transcribe_unlocked(
     file_path: Path,
     model_size: str = "medium",
     language: str = "ja",

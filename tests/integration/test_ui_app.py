@@ -2693,7 +2693,7 @@ def test_downloads_page_shows_task_context_and_worker_summary(tmp_path):
     # 入队/开始时间（MM-DD HH:MM）
     assert re.search(r"\d{2}-\d{2} \d{2}:\d{2}", page)
     # Worker 摘要：本地/网络分域
-    assert "本地 ASR" in page and "网络 ASR" in page
+    assert "本地转写" in page and "网络转写" in page and "请求上限" in page
     # full_process 行的快照展示 + 失败重试按钮
     assert 'action="/tasks/full-1/retry"' in page
 

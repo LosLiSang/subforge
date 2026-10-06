@@ -70,19 +70,24 @@
   <section id="settings-concurrency" class="dash-section tab-panel" :class="{ 'active': currentTab === 'concurrency' }" x-show="currentTab === 'concurrency'" data-tab-panel="concurrency">
     <div class="field-list">
       <div class="field">
-        <div class="field-label">同时加载 ASR 模型数</div>
+        <div class="field-label">本地转写 · 同时加载模型数</div>
         <input class="narrow" type="number" name="asr_concurrency" min="1" value="{{ asr_concurrency }}">
-        <small>控制本地 ASR（Whisper GPU/内存推理）同时运行的任务数；每个本地 Worker 会独立加载模型，数值过高可能耗尽内存或显存。</small>
+        <small>每个模型占一份显存/内存，也就是同时做本地转写的作品数。显存不足时保持 1。</small>
       </div>
       <div class="field">
-        <div class="field-label">网络 ASR 最大并发请求数</div>
+        <div class="field-label">网络转写 · 同时转写作品数</div>
+        <input class="narrow" type="number" name="remote_asr_task_concurrency" min="1" value="{{ remote_asr_task_concurrency }}">
+        <small>同时进入网络转写的作品（含片段重处理）。设为 1 时一个作品独占全部请求，先到先完成。</small>
+      </div>
+      <div class="field">
+        <div class="field-label">网络转写 · 同时请求数</div>
         <input class="narrow" type="number" name="remote_asr_concurrency" min="1" value="{{ remote_asr_concurrency }}">
-        <small>控制 Deepgram / Gemini 音频模型等网络 ASR 任务（含片段重处理）的并发上限；受 API 配额约束，与本地 GPU 推理互不抢占。重启 UI 后生效。</small>
+        <small>所有作品共享，同时发往转写服务的请求上限。频繁遇到 429 限流时调低。</small>
       </div>
       <div class="field">
-        <div class="field-label">全局翻译最大并发请求数</div>
+        <div class="field-label">翻译 · 同时请求数</div>
         <input class="narrow" type="number" name="translate_workers" min="1" value="{{ translate_workers }}">
-        <small>所有音轨和 Worker 进程共享此请求上限，不会再按同时处理的音轨数成倍放大。与 ASR 模型数量相互独立，修改后新任务立即使用。</small>
+        <small>所有作品共享，同时发往翻译模型的请求上限。频繁遇到 429 限流时调低。</small>
       </div>
     </div>
   </section>

@@ -6,7 +6,7 @@ import time
 
 
 from subforge.asr.deepgram import transcribe as deepgram_transcribe, transcribe_chunked as deepgram_transcribe_chunked
-from subforge.asr.remote_limiter import RemoteAsrRequestLimiter
+from subforge.asr.remote_limiter import LocalAsrModelLimiter, RemoteAsrRequestLimiter
 from subforge.asr.engine import _audio_duration_seconds, transcribe as asr_transcribe
 from subforge.asr.model_manager import ensure_model
 from subforge.config import Config
@@ -98,6 +98,10 @@ def _run_asr(job: Job, config: Config, progress_callback, model_ready_callback=N
             preprocess_audio=config.preprocess_audio,
             progress_callback=progress_callback,
             model_ready_callback=model_ready_callback,
+            model_limiter=(
+                LocalAsrModelLimiter(config.local_asr_limiter_dir, config.local_asr_global_workers)
+                if config.local_asr_global_workers > 0 else None
+            ),
         )
     if config.asr_provider == "deepgram":
         if model_ready_callback:
@@ -187,6 +191,7 @@ async def _run_asr_model(job: Job, config: Config, progress_callback, model_read
     }
     if config.remote_asr_global_workers > 0:
         adapter_kwargs["chunk_concurrency"] = config.remote_asr_global_workers
+        # fan-out 与请求池同值；真实请求上限由 transport 上的文件锁保证
     # transport 在每次真实 HTTP attempt 上获取网络 ASR 槽；
     # adapter 不再包住含重试/退避的整个 generate()。
     adapter = GeminiAudioAdapter(gemini_profile, transport, **adapter_kwargs)

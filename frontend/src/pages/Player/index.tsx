@@ -18,6 +18,7 @@ import { api } from '../../api/client'
 import type { Track, Item } from '../../types'
 import { usePlayer } from '../../context/PlayerContext'
 import { useFont } from '../../context/FontContext'
+import { CustomSelect } from '../../components/CustomSelect'
 
 function fmtTime(sec: number): string {
   if (!sec || isNaN(sec)) return '00:00'
@@ -768,42 +769,46 @@ export function PlayerPage() {
                   <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
                     ASR 引擎
                   </label>
-                  <select
-                    className="select-field"
+                  <CustomSelect
+                    ariaLabel="ASR 引擎"
                     style={{ width: '100%' }}
                     value={selectedAsr}
-                    onChange={(e) => setSelectedAsr(e.target.value)}
-                  >
-                    {asrProfiles.length > 0 ? (
-                      <optgroup label="云端音频模型 (OpenAI Whisper / DeepSeek ASR / Gemini)">
-                        {asrProfiles.map((p) => (
-                          <option key={p.profile_id} value={p.profile_id}>
-                            {p.name} ({p.model})
-                          </option>
-                        ))}
-                      </optgroup>
-                    ) : (
-                      <option value="">请先在「翻译配置」添加 ASR 模型</option>
-                    )}
-                  </select>
+                    onChange={setSelectedAsr}
+                    groups={
+                      asrProfiles.length > 0
+                        ? [
+                            {
+                              label: '云端音频模型',
+                              options: asrProfiles.map((p) => ({
+                                value: p.profile_id,
+                                label: `${p.name} (${p.model})`,
+                              })),
+                            },
+                          ]
+                        : []
+                    }
+                    options={
+                      asrProfiles.length === 0
+                        ? [{ value: '', label: '请先在「翻译配置」添加 ASR 模型' }]
+                        : []
+                    }
+                  />
                 </div>
 
                 <div>
                   <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
                     LLM 翻译模型
                   </label>
-                  <select
-                    className="select-field"
+                  <CustomSelect
+                    ariaLabel="LLM 翻译模型"
                     style={{ width: '100%' }}
                     value={selectedLlm}
-                    onChange={(e) => setSelectedLlm(e.target.value)}
-                  >
-                    {llmProfiles.map((p) => (
-                      <option key={p.profile_id} value={p.profile_id}>
-                        {p.name} ({p.model})
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setSelectedLlm}
+                    options={llmProfiles.map((p) => ({
+                      value: p.profile_id,
+                      label: `${p.name} (${p.model})`,
+                    }))}
+                  />
                 </div>
               </div>
 

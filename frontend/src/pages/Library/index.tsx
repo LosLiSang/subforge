@@ -19,6 +19,7 @@ import { ImportModal } from './ImportModal'
 import { ImportFolderModal } from './ImportFolderModal'
 import { ImportUrlModal } from './ImportUrlModal'
 import { WorkCard } from '../../components/WorkCard'
+import { CustomSelect } from '../../components/CustomSelect'
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B'
@@ -248,8 +249,8 @@ export function LibraryPage() {
           flexWrap: 'wrap',
         }}
       >
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flex: 1, minWidth: 260 }}>
-          <div style={{ position: 'relative', width: 260 }}>
+        <div className="library-filter-primary">
+          <div className="library-search-wrap">
             <Search
               size={15}
               style={{ position: 'absolute', left: 10, top: 10, color: 'var(--fg-faint)' }}
@@ -257,7 +258,7 @@ export function LibraryPage() {
             <input
               type="text"
               className="input-field"
-              style={{ paddingLeft: 32, paddingRight: searchQuery ? 28 : 10 }}
+              style={{ paddingLeft: 32, paddingRight: searchQuery ? 28 : 10, width: '100%' }}
               placeholder="搜索标题、RJ 号、声优、社团、标签(#tag)…"
               value={searchQuery}
               onChange={(e) => {
@@ -290,37 +291,41 @@ export function LibraryPage() {
             )}
           </div>
 
-          <select
-            className="select-field"
-            value={selectedCreator}
-            onChange={(e) => {
-              setSelectedCreator(e.target.value)
-              setPage(1)
-            }}
-          >
-            <option value="">全部创作者 ({creators.length})</option>
-            {creators.map((c) => (
-              <option key={c.creator_id} value={c.creator_id}>
-                {c.name} {c.kind === 'voice_actor' ? '(CV)' : '(社团)'} {c.item_count ? `(${c.item_count})` : ''}
-              </option>
-            ))}
-          </select>
+          <div className="library-selects-wrap">
+            <CustomSelect
+              ariaLabel="筛选创作者"
+              value={selectedCreator}
+              onChange={(val) => {
+                setSelectedCreator(val)
+                setPage(1)
+              }}
+              style={{ width: '100%' }}
+              options={[
+                { value: '', label: `全部创作者 (${creators.length})` },
+                ...creators.map((c) => ({
+                  value: c.creator_id,
+                  label: `${c.name} ${c.kind === 'voice_actor' ? '(CV)' : '(社团)'}${c.item_count ? ` (${c.item_count})` : ''}`,
+                })),
+              ]}
+            />
 
-          <select
-            className="select-field"
-            value={selectedTag}
-            onChange={(e) => {
-              setSelectedTag(e.target.value)
-              setPage(1)
-            }}
-          >
-            <option value="">全部标签 ({allTags.length})</option>
-            {allTags.map((tag) => (
-              <option key={tag} value={tag}>
-                🏷️ {tag} {tagCounts[tag] ? `(${tagCounts[tag]})` : ''}
-              </option>
-            ))}
-          </select>
+            <CustomSelect
+              ariaLabel="筛选标签"
+              value={selectedTag}
+              onChange={(val) => {
+                setSelectedTag(val)
+                setPage(1)
+              }}
+              style={{ width: '100%' }}
+              options={[
+                { value: '', label: `全部标签 (${allTags.length})` },
+                ...allTags.map((tag) => ({
+                  value: tag,
+                  label: `${tag}${tagCounts[tag] ? ` (${tagCounts[tag]})` : ''}`,
+                })),
+              ]}
+            />
+          </div>
 
           {selectedTag && (
             <span

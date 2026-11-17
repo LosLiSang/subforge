@@ -21,6 +21,7 @@ import type { UiSettings, ModelProfile } from '../../types'
 import { useFont } from '../../context/FontContext'
 import { useCornerStyle } from '../../context/CornerContext'
 import { ServerDirBrowser } from '../../components/ServerDirBrowser'
+import { CustomSelect } from '../../components/CustomSelect'
 
 type SettingsTab = 'general' | 'models' | 'cover' | 'appearance' | 'pipeline' | 'proxy' | 'prompt' | 'security'
 
@@ -470,19 +471,20 @@ export function SettingsPage() {
                     <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
                       默认 API 语音识别模型
                     </label>
-                    <select
-                      className="select-field"
+                    <CustomSelect
+                      ariaLabel="默认 API 语音识别模型"
                       style={{ width: '100%' }}
                       value={defaultAsrProfileId}
-                      onChange={(e) => setDefaultAsrProfileId(e.target.value)}
-                    >
-                      {availableAsrProfiles.length === 0 && <option value="">暂无支持语音转写的配置</option>}
-                      {availableAsrProfiles.map((p) => (
-                        <option key={p.profile_id} value={p.profile_id}>
-                          {p.name} ({p.model})
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setDefaultAsrProfileId}
+                      options={
+                        availableAsrProfiles.length === 0
+                          ? [{ value: '', label: '暂无支持语音转写的配置' }]
+                          : availableAsrProfiles.map((p) => ({
+                              value: p.profile_id,
+                              label: `${p.name} (${p.model})`,
+                            }))
+                      }
+                    />
                     <span style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 4, display: 'block' }}>
                       可在「翻译配置」页面添加更多具备语音转写能力 (transcribe) 的模型。
                     </span>
@@ -523,19 +525,20 @@ export function SettingsPage() {
                 <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
                   默认翻译模型配置
                 </label>
-                <select
-                  className="select-field"
+                <CustomSelect
+                  ariaLabel="默认翻译模型配置"
                   style={{ width: '100%', maxWidth: 480 }}
                   value={defaultLlmProfileId}
-                  onChange={(e) => setDefaultLlmProfileId(e.target.value)}
-                >
-                  {availableLlmProfiles.length === 0 && <option value="">暂无支持翻译的模型配置</option>}
-                  {availableLlmProfiles.map((p) => (
-                    <option key={p.profile_id} value={p.profile_id}>
-                      {p.name} ({p.model})
-                    </option>
-                  ))}
-                </select>
+                  onChange={setDefaultLlmProfileId}
+                  options={
+                    availableLlmProfiles.length === 0
+                      ? [{ value: '', label: '暂无支持翻译的模型配置' }]
+                      : availableLlmProfiles.map((p) => ({
+                          value: p.profile_id,
+                          label: `${p.name} (${p.model})`,
+                        }))
+                  }
+                />
                 <span style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 4, display: 'block' }}>
                   生成双语台本时默认选用此模型。如需新增或修改模型参数（如 Base URL、思考等级等），请前往「翻译配置」页面。
                 </span>

@@ -2914,6 +2914,220 @@ a {
   margin-top: 2px;
 }
 
+/* ─── CustomSelect Theme Dropdown & Mobile Bottom Sheet ─── */
+.custom-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.custom-select-trigger.is-open {
+  border-color: var(--accent-base);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.custom-select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.custom-select-arrow {
+  flex-shrink: 0;
+  color: var(--fg-dim);
+  transition: transform 0.15s ease;
+}
+
+.custom-select-arrow.is-open {
+  transform: rotate(180deg);
+}
+
+.custom-select-menu {
+  position: fixed;
+  z-index: 10050;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+[data-theme="light"] .custom-select-menu {
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+}
+
+.custom-select-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.custom-select-sheet {
+  width: 100%;
+  max-width: 100%;
+  max-height: 65dvh;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border-strong);
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  box-shadow: 0 -10px 36px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: env(safe-area-inset-bottom, 12px);
+}
+
+[data-theme="light"] .custom-select-sheet {
+  background: #ffffff;
+}
+
+.custom-select-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg-main);
+}
+
+.custom-select-sheet-list {
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.custom-select-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.custom-select-group:first-child {
+  margin-top: 0;
+}
+
+.custom-select-group-label {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--fg-faint);
+  letter-spacing: 0.02em;
+}
+
+.custom-select-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--fg-main);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.custom-select-option:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="light"] .custom-select-option:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.05);
+}
+
+.custom-select-option.is-selected {
+  background: var(--accent-soft);
+  color: var(--accent-base);
+  font-weight: 600;
+}
+
+.custom-select-option:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.custom-select-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.custom-select-check {
+  flex-shrink: 0;
+}
+
+/* Library Mobile Filter Row */
+.library-filter-primary {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex: 1;
+  min-width: 260px;
+  flex-wrap: wrap;
+}
+
+.library-search-wrap {
+  position: relative;
+  width: 260px;
+  max-width: 100%;
+}
+
+.library-selects-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .library-filter-primary {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .library-search-wrap {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .library-selects-wrap {
+    flex: 1 1 100%;
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+}
+
 .tracklist-header-row {
   display: flex;
   align-items: center;

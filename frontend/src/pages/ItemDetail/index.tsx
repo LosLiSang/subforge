@@ -24,6 +24,7 @@ import {
 import { api } from '../../api/client'
 import type { ItemDetailData, Track, Creator } from '../../types'
 import { usePlayer } from '../../context/PlayerContext'
+import { CustomSelect } from '../../components/CustomSelect'
 
 const STORAGE_KEY_COL_WIDTHS = 'subforge.item_detail.col_widths'
 
@@ -1284,27 +1285,34 @@ export function ItemDetailPage() {
                       在设置中更改默认
                     </Link>
                   </div>
-                  <select
-                    className="select-field"
+                  <CustomSelect
+                    ariaLabel="选择 ASR 语音识别引擎"
                     style={{ width: '100%' }}
                     value={selectedAsr}
-                    onChange={(e) => setSelectedAsr(e.target.value)}
-                  >
-                    {data.available_profiles?.asr_profiles && data.available_profiles.asr_profiles.length > 0 && (
-                      <optgroup label="云端音频模型">
-                        {data.available_profiles.asr_profiles.map((p: any) => (
-                          <option key={p.profile_id} value={`model:${p.profile_id}`}>
-                            {p.name} ({p.model}) {isDefaultAsr(`model:${p.profile_id}`) ? '★ [默认]' : ''}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    <optgroup label="云端极速转写">
-                      <option value="deepgram">
-                        Deepgram Nova-3 (云端) {isDefaultAsr('deepgram') ? '★ [默认]' : ''}
-                      </option>
-                    </optgroup>
-                  </select>
+                    onChange={setSelectedAsr}
+                    groups={[
+                      ...(data.available_profiles?.asr_profiles?.length
+                        ? [
+                            {
+                              label: '云端音频模型',
+                              options: data.available_profiles.asr_profiles.map((p: any) => ({
+                                value: `model:${p.profile_id}`,
+                                label: `${p.name} (${p.model})${isDefaultAsr(`model:${p.profile_id}`) ? ' ★ [默认]' : ''}`,
+                              })),
+                            },
+                          ]
+                        : []),
+                      {
+                        label: '云端极速转写',
+                        options: [
+                          {
+                            value: 'deepgram',
+                            label: `Deepgram Nova-3 (云端)${isDefaultAsr('deepgram') ? ' ★ [默认]' : ''}`,
+                          },
+                        ],
+                      },
+                    ]}
+                  />
                 </div>
 
                 <div>
@@ -1316,34 +1324,33 @@ export function ItemDetailPage() {
                       在设置中更改默认
                     </Link>
                   </div>
-                  <select
-                    className="select-field"
+                  <CustomSelect
+                    ariaLabel="选择 LLM 双语翻译模型"
                     style={{ width: '100%' }}
                     value={selectedLlm}
-                    onChange={(e) => setSelectedLlm(e.target.value)}
-                  >
-                    {data.available_profiles?.llm_profiles?.map((p: any) => (
-                      <option key={p.profile_id} value={p.profile_id}>
-                        {p.name} ({p.model}) {isDefaultLlm(p.profile_id) ? '★ [默认]' : ''}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setSelectedLlm}
+                    options={(data.available_profiles?.llm_profiles || []).map((p: any) => ({
+                      value: p.profile_id,
+                      label: `${p.name} (${p.model})${isDefaultLlm(p.profile_id) ? ' ★ [默认]' : ''}`,
+                    }))}
+                  />
                 </div>
 
                 <div>
                   <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
                     处理方式
                   </label>
-                  <select
-                    className="select-field"
+                  <CustomSelect
+                    ariaLabel="处理方式"
                     style={{ width: '100%' }}
                     value={processMode}
-                    onChange={(e) => setProcessMode(e.target.value as any)}
-                  >
-                    <option value="from_scratch">从头进行 ASR 语音识别与双语翻译（重新生成）</option>
-                    <option value="retranslate">仅重新翻译（沿用已有 ASR 日语文本）</option>
-                    <option value="continue">断点续跑（沿用原配置继续未完成部分）</option>
-                  </select>
+                    onChange={(v) => setProcessMode(v as any)}
+                    options={[
+                      { value: 'from_scratch', label: '从头进行 ASR 语音识别与双语翻译（重新生成）' },
+                      { value: 'retranslate', label: '仅重新翻译（沿用已有 ASR 日语文本）' },
+                      { value: 'continue', label: '断点续跑（沿用原配置继续未完成部分）' },
+                    ]}
+                  />
                 </div>
               </div>
 

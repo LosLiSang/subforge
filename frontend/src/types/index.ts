@@ -165,8 +165,6 @@ export interface ModelProfile {
   reasoning_effort?: string
   prompt?: string
   has_key?: boolean
-  compute_type?: string
-  device?: string
   proxy_url?: string
   verify_tls?: boolean
   health?: ProfileHealth
@@ -183,7 +181,6 @@ export interface DefaultCoverSettings {
 export interface DefaultProcessingSettings {
   asr_provider: string
   asr_profile_id?: string
-  whisper_model?: string
   llm_profile_id?: string
   merge_profile_id?: string
   scene?: string
@@ -193,7 +190,6 @@ export interface DefaultProcessingSettings {
 export interface UiSettings {
   library_root?: string | null
   proxy_url?: string | null
-  asr_concurrency: number
   remote_asr_concurrency: number
   remote_asr_task_concurrency?: number
   translate_workers: number

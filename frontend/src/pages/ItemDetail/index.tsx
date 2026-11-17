@@ -10,6 +10,7 @@ import {
   Trash2,
   ExternalLink,
   Download,
+  Upload,
   FileText,
   Check,
   X,
@@ -82,6 +83,11 @@ export function ItemDetailPage() {
   const [data, setData] = useState<ItemDetailData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const coverInputRef = useRef<HTMLInputElement | null>(null)
+  const subInputRef = useRef<HTMLInputElement | null>(null)
+  const [subImportTrack, setSubImportTrack] = useState<Track | null>(null)
+  const [subImportLang, setSubImportLang] = useState<'target' | 'source'>('target')
+  const [subUploading, setSubUploading] = useState(false)
 
   // Resizable table columns
   const [colWidths, setColWidths] = useState<ColumnWidths>(loadSavedColWidths)
@@ -219,8 +225,6 @@ export function ItemDetailPage() {
   // Process form state
   const [selectedAsr, setSelectedAsr] = useState('')
   const [selectedLlm, setSelectedLlm] = useState('')
-  // 场景（ASMR 预设）只对本地 Whisper 生效，其余引擎不显示也不发送
-  const [selectedScene, setSelectedScene] = useState<'asmr' | 'normal'>('asmr')
   const [processMode, setProcessMode] = useState<'from_scratch' | 'retranslate' | 'continue'>('from_scratch')
   const [submittingProcess, setSubmittingProcess] = useState(false)
 
@@ -244,10 +248,11 @@ export function ItemDetailPage() {
             setSelectedAsr(`model:${defProc.asr_profile_id}`)
           } else if (defProc.asr_provider === 'deepgram') {
             setSelectedAsr('deepgram')
+          } else if (res.available_profiles.asr_profiles?.length > 0) {
+            setSelectedAsr(`model:${res.available_profiles.asr_profiles[0].profile_id}`)
           } else {
-            setSelectedAsr(`local:${defProc.whisper_model || 'large-v3'}`)
+            setSelectedAsr('deepgram')
           }
-          setSelectedScene(defProc.scene === 'normal' ? 'normal' : 'asmr')
           if (defProc.llm_profile_id) {
             setSelectedLlm(defProc.llm_profile_id)
           } else if (res.available_profiles.llm_profiles?.length > 0) {
@@ -257,7 +262,7 @@ export function ItemDetailPage() {
           if (res.available_profiles.asr_profiles?.length > 0) {
             setSelectedAsr(`model:${res.available_profiles.asr_profiles[0].profile_id}`)
           } else {
-            setSelectedAsr('local:large-v3')
+            setSelectedAsr('deepgram')
           }
           if (res.available_profiles.llm_profiles?.length > 0) {
             setSelectedLlm(res.available_profiles.llm_profiles[0].profile_id || '')
@@ -318,7 +323,7 @@ export function ItemDetailPage() {
     if (!defProc) return false
     if (defProc.asr_provider === 'model') return val === `model:${defProc.asr_profile_id}`
     if (defProc.asr_provider === 'deepgram') return val === 'deepgram'
-    return val === `local:${defProc.whisper_model || 'large-v3'}`
+    return false
   }
   const isDefaultLlm = (pid: string) => defProc?.llm_profile_id === pid
 
@@ -337,17 +342,45 @@ export function ItemDetailPage() {
     }
   }
 
-  const handleChangeCover = async () => {
+  const handleChangeCover = () => {
+    coverInputRef.current?.click()
+  }
+
+  const handleCoverFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
     try {
-      const res = await api.post<{ selection_id?: string; cancelled?: boolean }>('/picker/image')
-      if (res.selection_id) {
+      const uploadForm = new FormData()
+      uploadForm.append('file', file)
+      const uploaded = await api.postForm<{ selection_id: string }>('/api/upload-image', uploadForm)
+      if (uploaded.selection_id) {
         const formData = new FormData()
-        formData.append('selection_id', res.selection_id)
+        formData.append('selection_id', uploaded.selection_id)
         await api.postForm(`/items/${item.item_id}/cover`, formData)
         loadItem()
       }
     } catch (err: any) {
       alert('更换封面失败: ' + err.message)
+    }
+  }
+
+  const handleSubtitleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || !subImportTrack) return
+    setSubUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('language', subImportLang)
+      await api.postForm(`/api/tracks/${subImportTrack.track_id}/subtitles/upload`, formData)
+      setSubImportTrack(null)
+      loadItem()
+    } catch (err: any) {
+      alert('导入字幕失败: ' + (err.message || '未知错误'))
+    } finally {
+      setSubUploading(false)
     }
   }
 
@@ -390,14 +423,8 @@ export function ItemDetailPage() {
       if (selectedAsr.startsWith('model:')) {
         formData.append('asr_provider', 'model')
         formData.append('asr_profile_id', selectedAsr.replace('model:', ''))
-      } else if (selectedAsr === 'deepgram') {
-        formData.append('asr_provider', 'deepgram')
-      } else if (selectedAsr.startsWith('local:')) {
-        formData.append('asr_provider', 'local')
-        formData.append('whisper_model', selectedAsr.replace('local:', ''))
-        formData.append('scene', selectedScene)
       } else {
-        formData.append('asr_provider', 'local')
+        formData.append('asr_provider', 'deepgram')
       }
       if (selectedLlm) formData.append('llm_profile_id', selectedLlm)
       formData.append('mode', processMode)
@@ -576,7 +603,7 @@ export function ItemDetailPage() {
           </div>
 
           <div className="hero-info">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="hero-meta-badges" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               {item.rj_code && (
                 <a
                   href={`https://www.dlsite.com/maniax/work/=/product_id/${item.rj_code}.html`}
@@ -783,6 +810,13 @@ export function ItemDetailPage() {
                 </button>
               )}
 
+              <input
+                ref={coverInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={handleCoverFileSelected}
+              />
               <button type="button" className="btn btn-ghost" onClick={handleChangeCover}>
                 <Image size={15} />
                 更换封面
@@ -823,7 +857,7 @@ export function ItemDetailPage() {
 
       {/* Tracklist Section */}
       <div className="card-panel">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div className="tracklist-header-row">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <h3 style={{ fontSize: 16, fontWeight: 700 }}>音轨列表 ({tracks.length})</h3>
             {hasCustomWidths && (
@@ -839,12 +873,12 @@ export function ItemDetailPage() {
               </button>
             )}
           </div>
-          <span style={{ fontSize: 12, color: 'var(--fg-dim)' }}>
+          <span className="tracklist-resize-hint" style={{ fontSize: 12, color: 'var(--fg-dim)' }}>
             拖动表头分隔线调整列宽（双击还原），点击标题就地试听或「播放台本」
           </span>
         </div>
 
-        <div className="works-table-container">
+        <div className="works-table-container tracklist-desktop-table">
           <table
             className="works-table"
             style={{
@@ -1007,6 +1041,16 @@ export function ItemDetailPage() {
                           处理
                         </button>
 
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost btn-circle"
+                          style={{ width: 30, height: 30, padding: 0 }}
+                          onClick={() => setSubImportTrack(track)}
+                          title="导入外部字幕 (.srt / .vtt / .lrc / .ass)"
+                        >
+                          <Upload size={13} />
+                        </button>
+
                         {track.has_target_sub ? (
                           <a
                             href={`/tracks/${track.track_id}/subtitles/zh/download`}
@@ -1037,7 +1081,188 @@ export function ItemDetailPage() {
             </tbody>
           </table>
         </div>
+
+        <div className="tracklist-mobile-cards">
+          {tracks.map((track, idx) => {
+            const isCurrent = currentTrack?.track_id === track.track_id
+            return (
+              <div key={track.track_id} className={`track-mobile-card ${isCurrent ? 'is-current' : ''}`}>
+                <div className="track-mobile-top">
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary btn-circle"
+                    onClick={() => handleToggleTrack(track)}
+                    title={isCurrent && isPlaying ? '暂停' : '就地播放'}
+                    style={{ flexShrink: 0 }}
+                  >
+                    {isCurrent && isPlaying ? (
+                      <Pause size={13} fill="currentColor" />
+                    ) : (
+                      <Play size={13} fill="currentColor" style={{ marginLeft: 2 }} />
+                    )}
+                  </button>
+                  <div className="track-mobile-title-wrap" onClick={() => handleToggleTrack(track)}>
+                    <div className="track-mobile-title" style={{ color: isCurrent ? 'var(--accent-base)' : 'var(--fg-main)' }}>
+                      {idx + 1}. {track.title}
+                    </div>
+                    <div className="track-mobile-meta">
+                      <span style={{ fontFamily: 'var(--font-mono)' }}>{track.duration_label || '00:00'}</span>
+                      <span>·</span>
+                      <span>{formatBytes(track.size)}</span>
+                      {track.has_source_sub && track.has_target_sub ? (
+                        <span className="sub-badge sub-bilingual">双语 ✓</span>
+                      ) : track.has_source_sub ? (
+                        <span className="sub-badge sub-jp">仅日文</span>
+                      ) : track.has_target_sub ? (
+                        <span className="sub-badge sub-zh">仅中字</span>
+                      ) : (
+                        <span className="sub-badge sub-none">未转写</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="track-mobile-actions">
+                  <Link
+                    to={`/tracks/${track.track_id}/play`}
+                    className="btn btn-sm"
+                    style={{ background: 'var(--accent-soft)', color: 'var(--accent-base)' }}
+                  >
+                    <FileText size={13} />
+                    台本
+                  </Link>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => handleOpenProcess(track.track_id)}
+                  >
+                    <Sparkles size={13} />
+                    处理
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => setSubImportTrack(track)}
+                  >
+                    <Upload size={13} />
+                    导入字幕
+                  </button>
+                  {track.has_target_sub && (
+                    <>
+                      <a
+                        href={`/tracks/${track.track_id}/subtitles/zh/download?format=srt`}
+                        download
+                        className="btn btn-sm btn-ghost"
+                      >
+                        <Download size={13} />
+                        SRT
+                      </a>
+                      <a
+                        href={`/tracks/${track.track_id}/subtitles/zh/download?format=vtt`}
+                        download
+                        className="btn btn-sm btn-ghost"
+                      >
+                        VTT
+                      </a>
+                      <a
+                        href={`/tracks/${track.track_id}/subtitles/zh/download?format=lrc`}
+                        download
+                        className="btn btn-sm btn-ghost"
+                      >
+                        LRC
+                      </a>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost btn-danger"
+                    onClick={() => handleDeleteTrack(track)}
+                    title="删除音轨"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
+
+      {/* External Subtitle Import Modal */}
+      {subImportTrack && (
+        <div className="modal-overlay" onClick={() => !subUploading && setSubImportTrack(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">导入外部字幕</h3>
+              <button
+                type="button"
+                className="btn btn-ghost btn-circle"
+                onClick={() => !subUploading && setSubImportTrack(null)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, color: 'var(--fg-dim)' }}>
+                音轨：<strong>{subImportTrack.title}</strong>
+              </p>
+              <p style={{ fontSize: 12, color: 'var(--fg-faint)' }}>
+                支持 <code>.srt</code>、<code>.vtt</code>、<code>.lrc</code>、<code>.ass</code> / <code>.ssa</code> 格式，系统将自动解析时间轴并保存为标准字幕。
+              </p>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                  导入为哪种字幕轨道
+                </label>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+                    <input
+                      type="radio"
+                      name="subImportLang"
+                      checked={subImportLang === 'target'}
+                      onChange={() => setSubImportLang('target')}
+                    />
+                    译文字幕（中字）
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+                    <input
+                      type="radio"
+                      name="subImportLang"
+                      checked={subImportLang === 'source'}
+                      onChange={() => setSubImportLang('source')}
+                    />
+                    原文字幕（日文）
+                  </label>
+                </div>
+              </div>
+              <input
+                ref={subInputRef}
+                type="file"
+                accept=".srt,.vtt,.lrc,.ass,.ssa"
+                style={{ display: 'none' }}
+                onChange={handleSubtitleFileSelected}
+              />
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setSubImportTrack(null)}
+                disabled={subUploading}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => subInputRef.current?.click()}
+                disabled={subUploading}
+              >
+                <Upload size={14} />
+                {subUploading ? '正在导入…' : '选择字幕文件'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Batch / Single Process Modal */}
       {processOpen && (
@@ -1073,19 +1298,8 @@ export function ItemDetailPage() {
                     value={selectedAsr}
                     onChange={(e) => setSelectedAsr(e.target.value)}
                   >
-                    <optgroup label="本地离线 Whisper (faster-whisper GPU/CPU)">
-                      <option value="local:large-v3">
-                        本地 Faster-Whisper (large-v3 - 最高精度) {isDefaultAsr('local:large-v3') ? '★ [默认]' : ''}
-                      </option>
-                      <option value="local:medium">
-                        本地 Faster-Whisper (medium - 均衡显存) {isDefaultAsr('local:medium') ? '★ [默认]' : ''}
-                      </option>
-                      <option value="local:base">
-                        本地 Faster-Whisper (base - 快速轻量) {isDefaultAsr('local:base') ? '★ [默认]' : ''}
-                      </option>
-                    </optgroup>
                     {data.available_profiles?.asr_profiles && data.available_profiles.asr_profiles.length > 0 && (
-                      <optgroup label="API / 自定义音频转写模型 (OpenAI / Gemini)">
+                      <optgroup label="云端音频模型">
                         {data.available_profiles.asr_profiles.map((p: any) => (
                           <option key={p.profile_id} value={`model:${p.profile_id}`}>
                             {p.name} ({p.model}) {isDefaultAsr(`model:${p.profile_id}`) ? '★ [默认]' : ''}
@@ -1100,23 +1314,6 @@ export function ItemDetailPage() {
                     </optgroup>
                   </select>
                 </div>
-
-                {selectedAsr.startsWith('local:') && (
-                  <div>
-                    <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                      场景识别优化（仅本地 Whisper）
-                    </label>
-                    <select
-                      className="select-field"
-                      style={{ width: '100%' }}
-                      value={selectedScene}
-                      onChange={(e) => setSelectedScene(e.target.value as 'asmr' | 'normal')}
-                    >
-                      <option value="asmr">ASMR 悄悄话强化（降低静音截断，保留呼吸声）{defProc?.scene !== 'normal' ? ' ★ [默认]' : ''}</option>
-                      <option value="normal">标准人声对话（普通播客/影视人声）{defProc?.scene === 'normal' ? ' ★ [默认]' : ''}</option>
-                    </select>
-                  </div>
-                )}
 
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>

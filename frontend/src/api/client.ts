@@ -120,4 +120,45 @@ export const api = {
       body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
     })
   },
+  uploadMedia: async (
+    file: File,
+    onProgress?: (percent: number, loaded: number, total: number) => void
+  ): Promise<{ selection_id: string; filename: string; size: number }> => {
+    const token = await getCsrfToken()
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', '/api/upload-media')
+      xhr.withCredentials = true
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+      xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name))
+      if (token) {
+        xhr.setRequestHeader('x-csrf-token', token)
+      }
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) {
+          const pct = Math.min(100, Math.round((e.loaded / e.total) * 100))
+          onProgress(pct, e.loaded, e.total)
+        }
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText))
+          } catch {
+            reject(new Error('Invalid upload response'))
+          }
+        } else {
+          let msg = `HTTP Error ${xhr.status}`
+          try {
+            const err = JSON.parse(xhr.responseText)
+            msg = err.error || err.message || msg
+          } catch {}
+          reject(new Error(msg))
+        }
+      }
+      xhr.onerror = () => reject(new Error('网络错误，上传失败'))
+      xhr.onabort = () => reject(new Error('上传已取消'))
+      xhr.send(file)
+    })
+  },
 }

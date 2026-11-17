@@ -178,7 +178,7 @@ def _enqueue_segment_reprocess(client, headers, track_id, data):
 
 
 def test_segment_reprocess_accepts_explicit_time_range_beyond_entries(tmp_path):
-    from subforge.asr.engine import _audio_duration_seconds
+    from subforge.asr.audio import _audio_duration_seconds
 
     library = tmp_path / "Library"
     audio = tmp_path / "timesegment.m4a"
@@ -235,7 +235,7 @@ def test_segment_reprocess_accepts_explicit_time_range_beyond_entries(tmp_path):
 
 
 def test_segment_reprocess_covers_to_audio_edges(tmp_path):
-    from subforge.asr.engine import _audio_duration_seconds
+    from subforge.asr.audio import _audio_duration_seconds
 
     library = tmp_path / "Library"
     audio = tmp_path / "edge.m4a"
@@ -459,10 +459,11 @@ def test_no_auth_mode_allows_access_without_token(tmp_path):
         allowed_hosts={"testserver"},
     ))
     client = TestClient(app)
-    # Accessing root without token automatically redirects to set session cookie
+    # Accessing root without token sets session cookie directly without redirect loop
     resp = client.get("/", follow_redirects=False)
-    assert resp.status_code == 303
+    assert resp.status_code == 200
     assert "subforge_session" in resp.cookies
+    assert "samesite=lax" in resp.headers.get("set-cookie", "").lower()
     # Following redirect allows viewing the page
     resp_page = client.get("/")
     assert resp_page.status_code == 200
@@ -558,6 +559,7 @@ def test_local_import_can_automatically_enqueue_subtitle_processing(tmp_path):
     client, headers = _authenticated_client(tmp_path, audio=audio, library=library)
     profile = ModelProfileStore(tmp_path / "profiles.json").save(
         "Default", "https://api.example/v1", "chat", "sk-test",
+        capabilities=["transcribe", "translate"],
     )
 
     selected = client.post("/picker/audio", headers=headers).json()
@@ -577,11 +579,11 @@ def test_local_import_can_automatically_enqueue_subtitle_processing(tmp_path):
     task = runtime.tasks.latest_for_track(item.tracks[0].track_id)
     assert task is not None
     assert task.config_snapshot == {
-        "asr_provider": "local",
+        "asr_provider": "model",
         "scene": "asmr",
-        "whisper_model": "large-v3",
+        "whisper_model": "",
         "llm_profile_id": profile.profile_id,
-        "asr_profile_id": "",
+        "asr_profile_id": profile.profile_id,
         "merge_profile_id": "",
         "asr_chunk_seconds": 60,
     }
@@ -599,12 +601,13 @@ def test_auto_processing_reuses_the_most_recent_processing_configuration(tmp_pat
     recent = {
         "asr_provider": "deepgram",
         "scene": "normal",
-        "whisper_model": "medium",
+        "whisper_model": "",
         "llm_profile_id": profile.profile_id,
         "asr_profile_id": "",
         "merge_profile_id": "",
         "asr_chunk_seconds": 60,
     }
+    UiSettingsStore(tmp_path / "ui.json").set_deepgram_api_key("dg-test")
     UiSettingsStore(tmp_path / "ui.json").set_last_processing_snapshot(recent)
 
     selected = client.post("/picker/audio", headers=headers).json()
@@ -753,26 +756,9 @@ def test_settings_page_renders_dashboard_sections(tmp_path):
     # Tab 布局：顶部 Tab 导航 + 每个分区仍保留原有全部控件（功能行为不变）
     assert 'class="page-head"' in html
     assert 'class="tab-bar"' in html
-    assert 'data-tab="models"' in html
     assert 'data-tab="network"' in html
     assert 'data-tab="concurrency"' in html
-    assert html.count("dash-section") >= 3
-    assert html.count("data-pick-directory") == 3
-    assert html.count("data-test-endpoint") == 2
-
-
-def test_settings_model_check_reports_cached_and_uncached_models(tmp_path):
-    library = tmp_path / "Library"
-    client, headers = _authenticated_client(tmp_path, library=library)
-
-    with patch("subforge.ui.app.check_model_configuration", return_value=(True, "模型已缓存")):
-        response = client.post("/settings/models/medium/check", headers=headers)
-
-    assert response.status_code == 200
-    assert response.json() == {"ok": True, "message": "模型已缓存"}
-
-    response = client.post("/settings/models/unknown/check", headers=headers)
-    assert response.status_code == 404
+    assert html.count("dash-section") >= 2
 
 
 def test_profile_key_can_only_be_deleted_by_explicit_action(tmp_path):
@@ -1036,8 +1022,7 @@ def test_detail_renders_track_rows_with_status_badges(tmp_path):
     # 处理表单字段与端点全部保留，并集中到 Dialog。
     assert 'id="processing-dialog"' in html
     assert 'name="asr_provider"' in html
-    assert 'name="scene"' in html
-    assert 'name="whisper_model"' in html
+    assert 'name="asr_chunk_seconds"' in html
     assert 'name="llm_profile_id"' in html
     assert 'name="mode"' in html
     assert "/process" in html
@@ -1111,8 +1096,8 @@ def test_detail_renders_last_config_and_dlsite_link(tmp_path):
             "INSERT OR REPLACE INTO tasks (task_id,track_id,status,stage,progress,completed,total,message,config_snapshot,updated_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?)",
             ("task1", imported.track_id, "completed", "complete", 1.0, 5, 5, None,
-             json.dumps({"asr_provider": "local", "scene": "asmr",
-                         "whisper_model": "large-v3", "llm_profile_id": "p1"}),
+             json.dumps({"asr_provider": "model", "asr_profile_id": "p1",
+                         "asr_chunk_seconds": 60, "llm_profile_id": "p1"}),
              "2026-08-23T00:00:00Z"),
         )
     store.close()
@@ -1121,8 +1106,7 @@ def test_detail_renders_last_config_and_dlsite_link(tmp_path):
     assert 'class="item-config"' in page
     config = re.search(r'class="item-config".*?</section>', page, re.S)
     assert config, "缺少上次处理配置摘要段"
-    assert "本地" in config.group(0)
-    assert "large-v3" in config.group(0)
+    assert "音频模型" in config.group(0)
     assert "测试配置" in config.group(0)
     assert "deepseek-chat" in config.group(0)
     assert "https://www.dlsite.com/maniax/work/=/product_id/RJ01546796" in page
@@ -1154,14 +1138,15 @@ def test_process_item_enqueues_every_incomplete_track(tmp_path):
     store.update_track_status(completed.track_id, "playable")
     store.close()
     profile = ModelProfileStore(tmp_path / "profiles.json").save(
-        name="Test", base_url="https://example.com/v1", model="chat", api_key="key"
+        name="Test", base_url="https://example.com/v1", model="chat", api_key="key",
+        capabilities=["transcribe", "translate"],
     )
 
     response = client.post(
         f"/items/{first.item_id}/process",
         headers=headers,
         data={
-            "asr_provider": "local", "scene": "asmr", "whisper_model": "medium",
+            "asr_provider": "model", "asr_profile_id": profile.profile_id,
             "llm_profile_id": profile.profile_id, "mode": "from_scratch",
         },
         follow_redirects=False,
@@ -1173,11 +1158,11 @@ def test_process_item_enqueues_every_incomplete_track(tmp_path):
     assert tasks.latest_for_track(second.track_id) is not None
     assert tasks.latest_for_track(completed.track_id) is None
     assert UiSettingsStore(tmp_path / "ui.json").get_last_processing_snapshot() == {
-        "asr_provider": "local",
+        "asr_provider": "model",
         "scene": "asmr",
-        "whisper_model": "medium",
+        "whisper_model": "",
         "llm_profile_id": profile.profile_id,
-        "asr_profile_id": "",
+        "asr_profile_id": profile.profile_id,
         "merge_profile_id": "",
         "asr_chunk_seconds": 60,
     }
@@ -1203,14 +1188,15 @@ def test_process_item_with_scope_all_enqueues_playable_tracks(tmp_path):
     store.update_track_status(completed.track_id, "playable")
     store.close()
     profile = ModelProfileStore(tmp_path / "profiles.json").save(
-        name="Test", base_url="https://example.com/v1", model="chat", api_key="key"
+        name="Test", base_url="https://example.com/v1", model="chat", api_key="key",
+        capabilities=["transcribe", "translate"],
     )
 
     response = client.post(
         f"/items/{first.item_id}/process",
         headers=headers,
         data={
-            "asr_provider": "local", "scene": "asmr", "whisper_model": "medium",
+            "asr_provider": "model", "asr_profile_id": profile.profile_id,
             "llm_profile_id": profile.profile_id, "scope": "all", "mode": "from_scratch",
         },
         follow_redirects=False,
@@ -1220,16 +1206,15 @@ def test_process_item_with_scope_all_enqueues_playable_tracks(tmp_path):
     assert tasks.latest_for_track(first.track_id) is not None
     assert tasks.latest_for_track(completed.track_id) is not None
 
-    # 处理对话框只在选本地 Whisper 时显示场景；未发送 scene 时沿用设置页默认，而不是降级为 normal
     UiSettingsStore(tmp_path / "ui.json").set_default_processing_snapshot({
-        "asr_provider": "local", "scene": "asmr", "whisper_model": "medium",
+        "asr_provider": "model", "scene": "asmr", "asr_profile_id": profile.profile_id,
         "llm_profile_id": profile.profile_id,
     })
     response = client.post(
         f"/items/{first.item_id}/process",
         headers=headers,
         data={
-            "asr_provider": "local", "whisper_model": "medium",
+            "asr_provider": "model", "asr_profile_id": profile.profile_id,
             "llm_profile_id": profile.profile_id, "scope": "all", "mode": "from_scratch",
         },
         follow_redirects=False,
@@ -1316,7 +1301,7 @@ def test_single_track_can_be_reprocessed_directly(tmp_path):
         f"/tracks/{imported.track_id}/process",
         headers=headers,
         data={
-            "asr_provider": "local", "scene": "asmr", "whisper_model": "medium",
+            "asr_provider": "deepgram",
             "llm_profile_id": profile.profile_id, "mode": "from_scratch",
         },
         follow_redirects=False,
@@ -1894,6 +1879,7 @@ def test_rj_folder_preview_and_background_import(tmp_path):
     client, headers = _authenticated_client(tmp_path, library=library)
     profile = ModelProfileStore(tmp_path / "profiles.json").save(
         "Default", "https://api.example/v1", "chat", "sk-test",
+        capabilities=["transcribe", "translate"],
     )
     client.app.state.runtime.deps.picker.media_folder = folder
 
@@ -2074,6 +2060,7 @@ def test_import_url_returns_accepted_async(tmp_path):
     client, headers = _authenticated_client(tmp_path, library=library)
     profile = ModelProfileStore(tmp_path / "profiles.json").save(
         "Default", "https://api.example/v1", "chat", "sk-test",
+        capabilities=["transcribe", "translate"],
     )
 
     fake_audio = tmp_path / "dl.m4a"
@@ -2692,8 +2679,8 @@ def test_downloads_page_shows_task_context_and_worker_summary(tmp_path):
     assert "DeepSeek 主力" in page and "deepseek-chat" in page
     # 入队/开始时间（MM-DD HH:MM）
     assert re.search(r"\d{2}-\d{2} \d{2}:\d{2}", page)
-    # Worker 摘要：本地/网络分域
-    assert "本地转写" in page and "网络转写" in page and "请求上限" in page
+    # Worker 摘要：网络分域
+    assert "网络转写" in page and "请求上限" in page
     # full_process 行的快照展示 + 失败重试按钮
     assert 'action="/tasks/full-1/retry"' in page
 
@@ -2947,3 +2934,142 @@ def test_fetch_bilibili_video_info_handles_lowercase_bv_and_protocol_relative_pi
     assert info["title"] == "B站视频"
     assert info["author"] == "UP主"
     assert info["cover_url"] == "https://i0.hdslb.com/bfs/archive/pic.jpg"
+
+
+def test_upload_media_streams_and_imports(tmp_path):
+    library = tmp_path / "Library"
+    client, headers = _authenticated_client(tmp_path, library=library)
+    res = client.post(
+        "/api/upload-media",
+        headers={**headers, "x-filename": "track%2001.mp3", "content-type": "application/octet-stream"},
+        content=b"ID3demo-audio-payload",
+    )
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["filename"] == "track 01.mp3"
+    assert payload["size"] == len(b"ID3demo-audio-payload")
+    assert payload["selection_id"]
+
+    imported = client.post("/items/import", headers=headers, data={
+        "selection_id": payload["selection_id"],
+        "kind": "rj_work",
+        "title": "Mobile Upload",
+        "rj_code": "RJ00009999",
+    })
+    assert imported.status_code in {200, 303}
+
+
+def test_proxy_forwarded_headers_and_pwa_public_paths(tmp_path):
+    from subforge.ui.app import UiDependencies, create_app
+    from subforge.ui.model_profiles import ModelProfileStore
+    from subforge.ui.picker import FakeFilePicker
+    from subforge.ui.settings import UiSettingsStore
+
+    app = create_app(UiDependencies(
+        settings=UiSettingsStore(tmp_path / "ui.json"),
+        picker=FakeFilePicker(),
+        profiles=ModelProfileStore(tmp_path / "profiles.json"),
+        worker=FakeWorkerAdapter([]),
+        startup_token="secret-token",
+        no_auth=False,
+    ))
+    client = TestClient(app)
+
+    # Public PWA paths are not blocked by auth and serve proper MIME types
+    sw_res = client.get("/sw.js")
+    assert sw_res.status_code == 200
+    assert "javascript" in sw_res.headers.get("content-type", "")
+    manifest_res = client.get("/manifest.webmanifest")
+    assert manifest_res.status_code == 200
+    assert "manifest+json" in manifest_res.headers.get("content-type", "")
+    icon_res = client.get("/icons/icon-192.png")
+    assert icon_res.status_code == 200
+    assert "image/png" in icon_res.headers.get("content-type", "")
+
+    # Tailscale / reverse proxy HTTPS sets secure cookie & allows .ts.net host
+    res = client.get("/?token=secret-token", headers={
+        "host": "127.0.0.1:8765",
+        "x-forwarded-host": "my-rpi.tailnet.ts.net",
+        "x-forwarded-proto": "https",
+    }, follow_redirects=False)
+    assert res.status_code == 303
+    set_cookie = res.headers.get("set-cookie", "").lower()
+    assert "subforge_session=" in set_cookie
+    assert "secure" in set_cookie
+
+
+def test_upload_and_export_external_subtitles(tmp_path):
+    library = tmp_path / "Library"
+    audio = tmp_path / "sub.mp3"
+    audio.write_bytes(b"audio")
+    client, headers = _authenticated_client(tmp_path, library=library)
+    store = LibraryStore.open(library)
+    imported = store.import_audio(ImportRequest(
+        source=audio, kind=ItemKind.STREAM_ARCHIVE, title="SubTest", author="Author",
+    ))
+    track_id = imported.track_id
+    store.close()
+
+    # Upload VTT as source ("ja")
+    vtt_bytes = b"WEBVTT\n\n00:00:01.000 --> 00:00:02.500\n\xe3\x81\x93\xe3\x82\x93\xe3\x81\xab\xe3\x81\xa1\xe3\x81\xaf\n"
+    res_vtt = client.post(
+        f"/api/tracks/{track_id}/subtitles/upload",
+        headers=headers,
+        files={"file": ("subs.vtt", vtt_bytes, "text/vtt")},
+        data={"language": "source"},
+    )
+    assert res_vtt.status_code == 200
+    assert res_vtt.json() == {"ok": True, "track_id": track_id, "language": "ja", "count": 1}
+
+    # Upload LRC as target ("zh")
+    lrc_bytes = "[00:01.00]你好\n".encode("utf-8")
+    res_lrc = client.post(
+        f"/api/tracks/{track_id}/subtitles/upload",
+        headers=headers,
+        files={"file": ("subs.lrc", lrc_bytes, "text/plain")},
+        data={"language": "target"},
+    )
+    assert res_lrc.status_code == 200
+    assert res_lrc.json() == {"ok": True, "track_id": track_id, "language": "zh", "count": 1}
+
+    # Export as SRT, VTT, LRC
+    dl_srt = client.get(f"/tracks/{track_id}/subtitles/zh/download")
+    assert dl_srt.status_code == 200 and "你好" in dl_srt.text
+    dl_vtt = client.get(f"/tracks/{track_id}/subtitles/ja/download?format=vtt")
+    assert dl_vtt.status_code == 200 and dl_vtt.text.startswith("WEBVTT") and "こんにちは" in dl_vtt.text
+    dl_lrc = client.get(f"/tracks/{track_id}/subtitles/zh/download?format=lrc")
+    assert dl_lrc.status_code == 200 and "[00:01.00]你好" in dl_lrc.text
+
+
+def test_headless_fs_list_and_select_path(tmp_path):
+    library = tmp_path / "Library"
+    root = tmp_path / "browse"
+    (root / "Beta").mkdir(parents=True)
+    (root / "alpha").mkdir()
+    (root / ".hidden").mkdir()
+    (root / "file.txt").write_text("x", encoding="utf-8")
+    client, headers = _authenticated_client(tmp_path, library=library)
+
+    listed = client.get(f"/api/fs/list?path={root}")
+    assert listed.status_code == 200
+    data = listed.json()
+    assert data["current_path"] == str(root.resolve())
+    assert data["parent_path"] == str(tmp_path.resolve())
+    assert [d["name"] for d in data["dirs"]] == ["alpha", "Beta"]
+
+    selected = client.post("/api/picker/select-path", headers=headers, json={
+        "path": str(root / "alpha"),
+        "kind": "folder",
+    })
+    assert selected.status_code == 200
+    sel_data = selected.json()
+    assert sel_data["name"] == "alpha"
+    assert sel_data["path"] == str((root / "alpha").resolve())
+    assert sel_data["selection_id"] in client.app.state.runtime.selections
+
+    bad = client.post("/api/picker/select-path", headers=headers, json={
+        "path": str(root / "missing"),
+        "kind": "folder",
+    })
+    assert bad.status_code == 400
+

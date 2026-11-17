@@ -23,6 +23,7 @@ export function FloatLyrics() {
     floatLyricsOpen,
     toggleFloatLyrics,
     isDesktopPipActive,
+    isDesktopPipSupported,
     toggleDesktopPip,
     subtitles,
     activeSubtitleIndex,
@@ -184,19 +185,21 @@ export function FloatLyrics() {
           </button>
 
           {/* Desktop Picture-in-Picture Button */}
-          <button
-            type="button"
-            onClick={toggleDesktopPip}
-            className={`float-lyrics-tool-btn ${isDesktopPipActive ? 'active' : ''}`}
-            title={
-              isDesktopPipActive
-                ? '关闭独立桌面悬浮小窗'
-                : '开启独立桌面歌词小窗（置顶悬浮在其他所有应用之上）'
-            }
-            aria-label="独立桌面画中画小窗"
-          >
-            <PictureInPicture size={12} />
-          </button>
+          {isDesktopPipSupported && (
+            <button
+              type="button"
+              onClick={toggleDesktopPip}
+              className={`float-lyrics-tool-btn ${isDesktopPipActive ? 'active' : ''}`}
+              title={
+                isDesktopPipActive
+                  ? '关闭独立桌面悬浮小窗'
+                  : '开启独立桌面歌词小窗（置顶悬浮在其他所有应用之上）'
+              }
+              aria-label="独立桌面画中画小窗"
+            >
+              <PictureInPicture size={12} />
+            </button>
+          )}
 
           <button
             type="button"

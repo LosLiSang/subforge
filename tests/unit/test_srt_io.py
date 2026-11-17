@@ -112,3 +112,33 @@ class TestWriteReadRoundtrip:
         first[0].text = "hacked"
         second = read_srt(path)
         assert second[0].text == "hello"
+
+
+class TestExternalSubtitleFormats:
+    def test_parse_vtt_lrc_ass_and_format_exports(self):
+        from subforge.translate.srt_io import format_lrc, format_vtt, parse_subtitle_text
+
+        vtt = "WEBVTT\n\n00:01.500 --> 00:03.200 align:start\n<i>こんにちは</i>\n\nNOTE ignore\n"
+        vtt_entries = parse_subtitle_text(vtt, ".vtt")
+        assert len(vtt_entries) == 1
+        assert (vtt_entries[0].start, vtt_entries[0].end, vtt_entries[0].text) == (1.5, 3.2, "こんにちは")
+
+        lrc = "[ti:Test]\n[00:05.50]一行目\n[00:10.00]二行目\n"
+        lrc_entries = parse_subtitle_text(lrc, ".lrc")
+        assert len(lrc_entries) == 2
+        assert (lrc_entries[0].start, lrc_entries[0].end, lrc_entries[0].text) == (5.5, 10.0, "一行目")
+        assert (lrc_entries[1].start, lrc_entries[1].end, lrc_entries[1].text) == (10.0, 15.0, "二行目")
+
+        ass = (
+            "[Events]\n"
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+            "Dialogue: 0,0:00:01.00,0:00:02.50,Default,,0,0,0,,{\\pos(10,10)}第一句\\N换行\n"
+        )
+        ass_entries = parse_subtitle_text(ass, ".ass")
+        assert len(ass_entries) == 1
+        assert (ass_entries[0].start, ass_entries[0].end, ass_entries[0].text) == (1.0, 2.5, "第一句\n换行")
+
+        vtt_out = format_vtt(ass_entries)
+        assert vtt_out.startswith("WEBVTT\n\n00:00:01.000 --> 00:00:02.500\n第一句\n换行")
+        lrc_out = format_lrc(ass_entries)
+        assert lrc_out == "[00:01.00]第一句 换行\n"

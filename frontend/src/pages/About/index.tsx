@@ -57,7 +57,7 @@ export function AboutPage() {
                 前沿语音识别引擎
               </div>
               <p style={{ fontSize: 12.5, color: 'var(--fg-dim)' }}>
-                支持 faster-whisper (本地离线 GPU/CPU)、Deepgram Nova-3 与 Google Gemini 长音频转写。
+                支持 OpenAI Whisper / Groq、DeepSeek ASR、Deepgram Nova-3 与 Google Gemini 云端音频转写。
               </p>
             </div>
 

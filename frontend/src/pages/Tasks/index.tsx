@@ -261,7 +261,7 @@ export function TasksPage() {
             </div>
           </div>
 
-          <div className="tasks-table-container">
+          <div className="tasks-table-container tasks-desktop-table">
             <table className="tasks-table">
               <thead>
                 <tr>
@@ -559,12 +559,103 @@ export function TasksPage() {
               </tbody>
             </table>
           </div>
+
+          <div className="tasks-mobile-cards">
+            {filteredTasks.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--fg-dim)' }}>
+                {searchQuery || statusFilter !== 'all' ? '未找到符合条件的字幕任务' : '暂无字幕任务记录'}
+              </div>
+            ) : (
+              filteredTasks.map((task) => {
+                const rawProgress = (task.progress !== undefined && task.progress !== null) ? task.progress : 0
+                const isSegment = task.kind === 'segment_reprocess'
+                const isRunning = task.status === 'running'
+                const isAwaitingReview = task.status === 'awaiting_review'
+                const isDone = task.status === 'completed'
+                const isFailed = task.status === 'failed'
+                const pct = (isDone || isAwaitingReview) ? 100 : Math.min(100, Math.max(0, Math.round(rawProgress <= 1 ? rawProgress * 100 : rawProgress)))
+                return (
+                  <div key={task.task_id} className="track-mobile-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span
+                        className={`task-status-badge task-status-${task.status}`}
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '3px 8px',
+                          borderRadius: 'var(--radius-sm)',
+                          background: isRunning ? 'var(--accent-soft)' : isAwaitingReview ? 'rgba(168, 85, 247, 0.15)' : isDone ? 'rgba(63, 185, 80, 0.15)' : isFailed ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                          color: isRunning ? 'var(--accent-base)' : isAwaitingReview ? '#a855f7' : isDone ? 'var(--color-green)' : isFailed ? 'var(--color-red)' : 'var(--color-amber)',
+                        }}
+                      >
+                        {task.status}
+                      </span>
+                      <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--fg-dim)' }}>{pct}%</span>
+                    </div>
+                    <div style={{ fontWeight: 600, fontSize: 13.5, wordBreak: 'break-word' }}>
+                      {task.item_id ? (
+                        <Link to={`/items/${task.item_id}`} style={{ color: 'var(--fg-main)' }}>
+                          {task.track_title || task.item_title || task.track_id}
+                        </Link>
+                      ) : (
+                        task.track_title || task.item_title || task.track_id
+                      )}
+                    </div>
+                    <div style={{ width: '100%', height: 5, background: 'rgba(255, 255, 255, 0.08)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                      <div style={{ width: `${pct}%`, height: '100%', background: isFailed ? 'var(--color-red)' : isAwaitingReview ? '#a855f7' : isDone ? 'var(--color-green)' : 'var(--accent-base)' }} />
+                    </div>
+                    {task.error && (
+                      <div style={{ fontSize: 11, color: 'var(--color-red)', wordBreak: 'break-all' }}>{task.error}</div>
+                    )}
+                    <div className="track-mobile-actions">
+                      {isRunning && (
+                        <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleCancel(task.task_id)}>
+                          <XCircle size={13} /> 取消
+                        </button>
+                      )}
+                      {isAwaitingReview && (
+                        <>
+                          <button type="button" className="btn btn-sm btn-primary" onClick={() => handleOpenCandidate(task.task_id)}>
+                            <Eye size={12} /> 候选
+                          </button>
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleConfirmCandidate(task.task_id)}>
+                            <Check size={13} />
+                          </button>
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleDiscardCandidate(task.task_id)}>
+                            <X size={13} />
+                          </button>
+                        </>
+                      )}
+                      {isFailed && (
+                        <>
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleRetry(task.task_id)}>
+                            <RotateCcw size={13} /> 重试
+                          </button>
+                          {!isSegment && (
+                            <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleRetranscribe(task)} disabled={reprocessingId === task.task_id}>
+                              <RefreshCw size={13} /> 转写
+                            </button>
+                          )}
+                        </>
+                      )}
+                      {isDone && !isSegment && (
+                        <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleRetranscribe(task)} disabled={reprocessingId === task.task_id}>
+                          <RotateCcw size={13} /> 重新转写
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })
+            )}
+          </div>
         </div>
       )}
 
       {/* Downloads Tab Content */}
       {activeTab === 'downloads' && (
-        <div className="tasks-table-container">
+        <>
+        <div className="tasks-table-container tasks-desktop-table">
           <table className="tasks-table">
             <thead>
               <tr>
@@ -662,6 +753,47 @@ export function TasksPage() {
             </tbody>
           </table>
         </div>
+        <div className="tasks-mobile-cards">
+          {downloads.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--fg-dim)' }}>暂无下载任务记录</div>
+          ) : (
+            downloads.map((dl) => {
+              const isDone = dl.status === 'done' || dl.status === 'completed'
+              const isError = dl.status === 'error' || dl.status === 'failed'
+              const isRunning = dl.status === 'running' || dl.status === 'downloading'
+              const canRetry = isError && (dl.kind ?? 'download') === 'download'
+              const displayTitle = dl.title || dl.url || '未命名任务'
+              return (
+                <div key={dl.task_id} className="track-mobile-card">
+                  <div style={{ fontWeight: 600, fontSize: 13.5, wordBreak: 'break-all' }}>
+                    {dl.item_id ? <Link to={`/items/${dl.item_id}`} style={{ color: 'var(--fg-main)' }}>{displayTitle}</Link> : displayTitle}
+                  </div>
+                  <div style={{ fontSize: 12, color: isError ? 'var(--color-red)' : 'var(--fg-dim)', wordBreak: 'break-all' }}>
+                    {dl.message || (isDone ? '下载完成' : isRunning ? '下载中…' : dl.status)}
+                  </div>
+                  <div className="track-mobile-actions">
+                    {isRunning && (
+                      <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleCancelDownload(dl.task_id)}>
+                        <XCircle size={13} /> 取消
+                      </button>
+                    )}
+                    {canRetry && (
+                      <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleRetryDownload(dl.task_id)}>
+                        <RotateCcw size={13} /> 重试
+                      </button>
+                    )}
+                    {dl.item_id && (
+                      <Link to={`/items/${dl.item_id}`} className="btn btn-sm btn-ghost">
+                        <Eye size={13} /> 查看
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+        </>
       )}
 
       {/* Candidate Review Modal */}

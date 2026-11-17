@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { X, Folder, Upload, Check, Globe, Sparkles, User, Users } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Creator, DlsiteMetadata } from '../../types'
+import { ServerDirBrowser } from '../../components/ServerDirBrowser'
 
 interface ImportFolderModalProps {
   isOpen: boolean
@@ -22,6 +23,7 @@ export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderMo
   const [error, setError] = useState<string | null>(null)
   const [dlsiteMeta, setDlsiteMeta] = useState<DlsiteMetadata | null>(null)
   const [fetchingDlsite, setFetchingDlsite] = useState(false)
+  const [showDirBrowser, setShowDirBrowser] = useState(false)
 
   const fetchDlsiteInfo = async (targetRj?: string) => {
     const code = (targetRj || rjCode).trim().toUpperCase()
@@ -141,22 +143,50 @@ export function ImportFolderModal({ isOpen, onClose, onSuccess }: ImportFolderMo
 
             <div>
               <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                本地文件夹 *
+                服务器文件夹 *
               </label>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button
                   type="button"
-                  className="btn"
-                  onClick={handlePickFolder}
-                  disabled={picking}
+                  className="btn btn-primary"
+                  onClick={() => setShowDirBrowser((v) => !v)}
                 >
                   <Folder size={15} />
-                  {picking ? '正在选择…' : '选择文件夹'}
+                  {showDirBrowser ? '收起目录浏览器' : '浏览服务器目录'}
                 </button>
-                <span style={{ fontSize: 13, color: folderName ? 'var(--fg-main)' : 'var(--fg-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={handlePickFolder}
+                  disabled={picking}
+                  title="仅在服务器桌面端可用"
+                >
+                  {picking ? '正在选择…' : '桌面弹窗选择'}
+                </button>
+                <span style={{ fontSize: 13, color: folderName ? 'var(--fg-main)' : 'var(--fg-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
                   {folderName || '未选择目录'}
                 </span>
               </div>
+              {showDirBrowser && (
+                <ServerDirBrowser
+                  kind="folder"
+                  onSelect={(res) => {
+                    setSelectionId(res.selection_id)
+                    const name = res.name || '已选文件夹'
+                    setFolderName(name)
+                    const m = name.match(/RJ\d{6,8}/i)
+                    if (m && !rjCode) {
+                      setRjCode(m[0].toUpperCase())
+                      fetchDlsiteInfo(m[0].toUpperCase())
+                    }
+                    if (!title) {
+                      setTitle(name)
+                    }
+                    setShowDirBrowser(false)
+                  }}
+                  onCancel={() => setShowDirBrowser(false)}
+                />
+              )}
             </div>
 
             <div>

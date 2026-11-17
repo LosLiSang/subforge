@@ -1,0 +1,18 @@
+[Unit]
+Description=SubForge Web UI & Library Server
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi
+Environment="PYTHONUNBUFFERED=1"
+Environment="SUBFORGE_ALLOWED_HOSTS=127.0.0.1,localhost"
+ExecStart=/home/pi/.local/bin/subforge ui --host 127.0.0.1 --port 8765 --no-browser --auth
+Restart=on-failure
+RestartSec=5
+MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target

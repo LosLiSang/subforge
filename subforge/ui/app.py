@@ -40,16 +40,14 @@ from starlette.staticfiles import StaticFiles
 
 FRONTEND_DIST = Path(__file__).resolve().parent / "dist"
 
-from subforge.asr.model_manager import cached_models
-from subforge.asr.remote_limiter import LocalAsrModelLimiter, RemoteAsrRequestLimiter
-from subforge.concurrency import LOCAL_ASR_POOL_DIR, REMOTE_ASR_POOL_DIR
-from subforge.asr.engine import _audio_duration_seconds
+from subforge.asr.audio import _audio_duration_seconds
+from subforge.asr.remote_limiter import RemoteAsrRequestLimiter
+from subforge.concurrency import REMOTE_ASR_POOL_DIR
 from subforge import __version__
-from subforge.config import Config, DEFAULT_MODELS_DIR
+from subforge.config import Config
 from subforge.gemini_audio import (
     GeminiAudioAdapter,
-    GoogleGeminiTransport,
-    OpenAICompatibleAudioTransport,
+    build_audio_transport,
     gemini_profile_from_mapping,
 )
 from subforge.library import CreatorKind, ImportRequest, ImportResult, ItemKind, LibraryStore
@@ -59,13 +57,12 @@ from subforge.segment_processing import (
     SegmentProcessingError,
     SegmentProcessor,
     SegmentRequest,
-    WhisperSegmentAdapter,
 )
 from subforge.subtitle_revision import SubtitleRevisionStore
 from subforge.translate.context import translate_all
 from subforge.translate.llm_client import translate_batch
-from subforge.translate.srt_io import read_srt
-from subforge.ui.checks import check_model_configuration, test_profile_connection
+from subforge.translate.srt_io import format_lrc, format_vtt, parse_subtitle_text, read_srt, write_srt
+from subforge.ui.checks import test_profile_connection
 from subforge.ui.covers import cover_for_item, covers_dir, replace_cover, get_preset_cover_svg, is_valid_image_bytes, parse_multipart_data
 from subforge.ui.model_profiles import ModelProfileStore
 from subforge.ui.import_tasks import ImportTaskRegistry
@@ -94,7 +91,7 @@ class UiRuntime:
 
     def __init__(self, deps: UiDependencies) -> None:
         self.deps = deps
-        self.sessions: dict[str, str] = {}
+        self.sessions: dict[str, str] = _load_sessions(deps)
         self.selections: dict[str, Path] = {}
         self.uploaded_selections: set[str] = set()
         self.pending_selections: set[str] = set()
@@ -114,6 +111,26 @@ class UiRuntime:
             loader=PackageLoader("subforge.ui", "templates"),
             autoescape=select_autoescape(["html", "xml"]),
         )
+
+    def register_selection(self, path: Path, *, uploaded: bool = False) -> str:
+        """Register a picker/upload path and evict oldest entries beyond 200."""
+        while len(self.selections) >= 200:
+            evict_id = next((sid for sid in self.selections if sid not in self.pending_selections), None)
+            if evict_id is None:
+                break
+            old_path = self.selections.pop(evict_id, None)
+            if evict_id in self.uploaded_selections:
+                self.uploaded_selections.discard(evict_id)
+                if old_path is not None:
+                    try:
+                        old_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+        selection_id = uuid4().hex
+        self.selections[selection_id] = path
+        if uploaded:
+            self.uploaded_selections.add(selection_id)
+        return selection_id
 
     async def ensure_auto_processing(self, import_task_id: str) -> None:
         task = self.imports.get(import_task_id)
@@ -192,8 +209,6 @@ class UiRuntime:
                 profile_resolver=self.deps.profiles.resolve,
                 deepgram_key_resolver=self.deps.settings.get_deepgram_api_key,
                 proxy_resolver=self.deps.settings.get_proxy_url,
-                models_dir_resolver=self.deps.settings.get_models_dir,
-                direct_model_resolver=self.deps.settings.get_direct_model_path,
                 translate_workers=self.deps.settings.get_translate_workers(),
                 translate_workers_resolver=self.deps.settings.get_translate_workers,
                 translation_prompt_resolver=self.deps.settings.get_translation_prompt,
@@ -466,24 +481,7 @@ async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, pay
                 report("translation", 0.85, "翻译中…", completed=estimated_chunks, total=estimated_chunks)
                 return await translate_all(entries, translation_config, translate_batch)
 
-        if processor_name == "whisper":
-            model = options["whisper_model"]
-            direct_model = deps.settings.get_direct_model_path(model)
-            asr_options = {
-                "model_size": str(direct_model) if direct_model else model,
-                "models_dir": deps.settings.get_models_dir(),
-                "local_files_only": bool(direct_model),
-                "device": "auto",
-                "compute_type": "auto",
-                "model_limiter": LocalAsrModelLimiter(
-                    library.root / ".subforge" / LOCAL_ASR_POOL_DIR,
-                    deps.settings.get_asr_concurrency(),
-                ),
-            }
-            if options["scene"] == "asmr":
-                asr_options.update(ASMR_PRESET)
-            processor = WhisperSegmentAdapter(translate_fn=translate_segment)
-        elif processor_name == "gemini":
+        if processor_name in {"gemini", "model"}:
             asr_profile_id = options["asr_profile_id"]
             if not asr_profile_id:
                 raise ValueError("请选择音频转写模型配置")
@@ -493,11 +491,7 @@ async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, pay
                 library.root / ".subforge" / REMOTE_ASR_POOL_DIR,
                 deps.settings.get_remote_asr_concurrency(),
             )
-            transport = (
-                GoogleGeminiTransport(gemini_profile, request_limiter=remote_limiter)
-                if gemini_profile.protocol == "google_native"
-                else OpenAICompatibleAudioTransport(gemini_profile, request_limiter=remote_limiter)
-            )
+            transport = build_audio_transport(gemini_profile, request_limiter=remote_limiter)
             def on_gemini_progress(ratio: float, completed: int | None = None, total: int | None = None, message: str | None = None):
                 tot = total if total is not None else estimated_chunks
                 comp = completed if completed is not None else 0
@@ -510,9 +504,9 @@ async def _execute_segment_job(deps: UiDependencies, runtime, track_id: str, pay
                 chunk_concurrency=deps.settings.get_remote_asr_concurrency(),
             )
         else:
-            raise ValueError("未知片段处理器")
+            raise ValueError("未知片段处理器（已移除本地 Whisper，请选择音频模型配置）")
 
-    init_msg = f"ASR 转写中（分片 0/{estimated_chunks}）" if processor_name == "gemini" else "Whisper 转写中（分片 0/1）"
+    init_msg = f"ASR 转写中（分片 0/{estimated_chunks}）"
     report("asr", 0.05, init_msg, completed=0, total=estimated_chunks)
     request_model = SegmentRequest(
         media_path=library.track_media_path(track_id),
@@ -558,29 +552,18 @@ def create_app(deps: UiDependencies) -> Starlette:
                 deps.startup_token = ""
             session_id = secrets.token_urlsafe(32)
             runtime.sessions[session_id] = secrets.token_urlsafe(32)
+            _save_sessions(deps, runtime.sessions)
             response = RedirectResponse("/", status_code=303)
-            response.set_cookie(
-                "subforge_session",
-                session_id,
-                httponly=True,
-                samesite="strict",
-                secure=False,
-            )
+            _set_session_cookie(response, session_id, request)
             return response
         if deps.no_auth:
             session_id = request.cookies.get("subforge_session")
+            new_session = False
             if not session_id or session_id not in runtime.sessions:
                 session_id = secrets.token_urlsafe(32)
                 runtime.sessions[session_id] = secrets.token_urlsafe(32)
-                response = RedirectResponse("/", status_code=303)
-                response.set_cookie(
-                    "subforge_session",
-                    session_id,
-                    httponly=True,
-                    samesite="strict",
-                    secure=False,
-                )
-                return response
+                _save_sessions(deps, runtime.sessions)
+                new_session = True
             if _should_serve_spa(request):
                 response = FileResponse(FRONTEND_DIST / "index.html")
             else:
@@ -598,7 +581,9 @@ def create_app(deps: UiDependencies) -> Starlette:
                         default_cover_info=deps.settings.get_default_cover_info(),
                         default_cover_file_configured=bool(deps.settings.get_default_cover_file()),
                     )
-                return response
+            if new_session:
+                _set_session_cookie(response, session_id, request)
+            return response
         if _session_csrf(request, runtime) is None:
             return Response("Authentication required", status_code=401)
         if _should_serve_spa(request):
@@ -726,8 +711,6 @@ def create_app(deps: UiDependencies) -> Starlette:
             profile_resolver=deps.profiles.resolve,
             deepgram_key_resolver=deps.settings.get_deepgram_api_key,
             proxy_resolver=deps.settings.get_proxy_url,
-            models_dir_resolver=deps.settings.get_models_dir,
-            direct_model_resolver=deps.settings.get_direct_model_path,
             translate_workers=deps.settings.get_translate_workers(),
             translate_workers_resolver=deps.settings.get_translate_workers,
             translation_prompt_resolver=deps.settings.get_translation_prompt,
@@ -749,9 +732,71 @@ def create_app(deps: UiDependencies) -> Starlette:
             return JSONResponse({"error": f"打开目录选择器失败: {exc}"}, status_code=500)
         if selected is None:
             return JSONResponse({"cancelled": True})
-        selection_id = uuid4().hex
-        runtime.selections[selection_id] = selected.resolve()
+        selection_id = runtime.register_selection(selected.resolve())
         return JSONResponse({"selection_id": selection_id, "name": selected.name})
+
+    async def fs_list(request: Request) -> Response:
+        """List subdirectories on the server for headless/mobile folder picking."""
+        raw_path = request.query_params.get("path", "").strip()
+        if raw_path:
+            try:
+                target = Path(raw_path).expanduser().resolve()
+            except (OSError, RuntimeError) as exc:
+                return JSONResponse({"error": f"无效路径：{exc}"}, status_code=400)
+        else:
+            active = deps.settings.get_active_library()
+            target = active if (active and active.is_dir()) else Path.home()
+        if not target.is_dir():
+            return JSONResponse({"error": f"目录不存在：{target}"}, status_code=400)
+        parent = str(target.parent) if target.parent != target else None
+        dirs: list[dict[str, str]] = []
+        try:
+            entries = list(target.iterdir())
+        except OSError as exc:
+            return JSONResponse({"error": f"无法读取目录：{exc}"}, status_code=403)
+        for entry in entries:
+            try:
+                if entry.is_dir() and not entry.name.startswith("."):
+                    dirs.append({"name": entry.name, "path": str(entry)})
+            except OSError:
+                continue
+        dirs.sort(key=lambda item: item["name"].casefold())
+        return JSONResponse({
+            "current_path": str(target),
+            "parent_path": parent,
+            "dirs": dirs,
+        })
+
+    async def select_path(request: Request) -> Response:
+        """Register a server-side directory path without a desktop GUI dialog."""
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        raw_path = ""
+        content_type = request.headers.get("content-type", "").lower()
+        if "application/json" in content_type:
+            try:
+                payload = await request.json()
+                raw_path = str(payload.get("path", "")).strip()
+            except Exception:
+                raw_path = ""
+        else:
+            form = await _read_form(request)
+            raw_path = form.get("path", "").strip()
+        if not raw_path:
+            return JSONResponse({"error": "请提供文件夹路径"}, status_code=400)
+        try:
+            resolved = Path(raw_path).expanduser().resolve()
+        except (OSError, RuntimeError) as exc:
+            return JSONResponse({"error": f"无效路径：{exc}"}, status_code=400)
+        if not resolved.is_dir():
+            return JSONResponse({"error": f"目录不存在：{resolved}"}, status_code=400)
+        selection_id = runtime.register_selection(resolved)
+        return JSONResponse({
+            "selection_id": selection_id,
+            "name": resolved.name or str(resolved),
+            "path": str(resolved),
+        })
 
     async def choose_audio(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
@@ -778,9 +823,71 @@ def create_app(deps: UiDependencies) -> Starlette:
             return JSONResponse({"error": f"打开文件夹选择器失败: {exc}"}, status_code=500)
         if selected is None:
             return JSONResponse({"cancelled": True})
-        selection_id = uuid4().hex
-        runtime.selections[selection_id] = selected.resolve()
+        selection_id = runtime.register_selection(selected.resolve())
         return JSONResponse({"selection_id": selection_id, "name": selected.name})
+
+    async def fs_list(request: Request) -> Response:
+        """List subdirectories on the server for headless/mobile folder picking."""
+        raw_path = request.query_params.get("path", "").strip()
+        if raw_path:
+            try:
+                target = Path(raw_path).expanduser().resolve()
+            except (OSError, RuntimeError) as exc:
+                return JSONResponse({"error": f"无效路径：{exc}"}, status_code=400)
+        else:
+            active = deps.settings.get_active_library()
+            target = active if (active and active.is_dir()) else Path.home()
+        if not target.is_dir():
+            return JSONResponse({"error": f"目录不存在：{target}"}, status_code=400)
+        parent = str(target.parent) if target.parent != target else None
+        dirs: list[dict[str, str]] = []
+        try:
+            entries = list(target.iterdir())
+        except OSError as exc:
+            return JSONResponse({"error": f"无法读取目录：{exc}"}, status_code=403)
+        for entry in entries:
+            try:
+                if entry.is_dir() and not entry.name.startswith("."):
+                    dirs.append({"name": entry.name, "path": str(entry)})
+            except OSError:
+                continue
+        dirs.sort(key=lambda item: item["name"].casefold())
+        return JSONResponse({
+            "current_path": str(target),
+            "parent_path": parent,
+            "dirs": dirs,
+        })
+
+    async def select_path(request: Request) -> Response:
+        """Register a server-side directory path without a desktop GUI dialog."""
+        error = await _authorize_write(request, runtime)
+        if error:
+            return error
+        raw_path = ""
+        content_type = request.headers.get("content-type", "").lower()
+        if "application/json" in content_type:
+            try:
+                payload = await request.json()
+                raw_path = str(payload.get("path", "")).strip()
+            except Exception:
+                raw_path = ""
+        else:
+            form = await _read_form(request)
+            raw_path = form.get("path", "").strip()
+        if not raw_path:
+            return JSONResponse({"error": "请提供文件夹路径"}, status_code=400)
+        try:
+            resolved = Path(raw_path).expanduser().resolve()
+        except (OSError, RuntimeError) as exc:
+            return JSONResponse({"error": f"无效路径：{exc}"}, status_code=400)
+        if not resolved.is_dir():
+            return JSONResponse({"error": f"目录不存在：{resolved}"}, status_code=400)
+        selection_id = runtime.register_selection(resolved)
+        return JSONResponse({
+            "selection_id": selection_id,
+            "name": resolved.name or str(resolved),
+            "path": str(resolved),
+        })
 
     async def choose_image(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
@@ -846,6 +953,83 @@ def create_app(deps: UiDependencies) -> Starlette:
             "selection_id": selection_id,
             "filename": filename,
             "preview_url": f"/api/selections/{selection_id}/image",
+        })
+
+    _ALLOWED_MEDIA_SUFFIXES = {
+        ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus", ".aac",
+        ".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v",
+    }
+    _MEDIA_UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
+
+    async def upload_media(request: Request) -> Response:
+        """流式接收浏览器上传的音频/视频文件到磁盘，返回 selection_id。"""
+        error = await _authorize_write(request, runtime, skip_body_csrf=True)
+        if error:
+            return error
+        if request.headers.get("content-length"):
+            try:
+                declared = int(request.headers["content-length"])
+            except ValueError:
+                declared = 0
+            if declared > _MEDIA_UPLOAD_MAX_BYTES:
+                return JSONResponse({"error": "媒体文件过大（最大 2 GiB）"}, status_code=413)
+        content_type = request.headers.get("content-type", "").lower()
+        raw_name = request.headers.get("x-filename") or request.query_params.get("filename") or ""
+        filename = Path(urllib.parse.unquote(raw_name)).name if raw_name else "upload.bin"
+        suffix = Path(filename).suffix.lower()
+        tmp_path = Path(tempfile.gettempdir()) / f"subforge_media_{uuid4().hex}{suffix or '.bin'}"
+        size = 0
+        try:
+            if "multipart/form-data" in content_type:
+                form = await request.form()
+                file = form.get("file") or form.get("media")
+                if not file or not hasattr(file, "read"):
+                    return JSONResponse({"error": "缺少上传文件"}, status_code=400)
+                if getattr(file, "filename", None):
+                    filename = Path(str(file.filename)).name
+                    suffix = Path(filename).suffix.lower()
+                if suffix not in _ALLOWED_MEDIA_SUFFIXES:
+                    return JSONResponse({"error": f"不支持的媒体格式：{suffix or '未知'}"}, status_code=400)
+                final_tmp = tmp_path.with_suffix(suffix)
+                with final_tmp.open("wb") as out:
+                    while True:
+                        chunk = await file.read(64 * 1024)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if size > _MEDIA_UPLOAD_MAX_BYTES:
+                            raise ValueError("too_large")
+                        out.write(chunk)
+                tmp_path = final_tmp
+            else:
+                if suffix not in _ALLOWED_MEDIA_SUFFIXES:
+                    return JSONResponse({"error": f"不支持的媒体格式：{suffix or '未知'}"}, status_code=400)
+                with tmp_path.open("wb") as out:
+                    async for chunk in request.stream():
+                        if not chunk:
+                            continue
+                        size += len(chunk)
+                        if size > _MEDIA_UPLOAD_MAX_BYTES:
+                            raise ValueError("too_large")
+                        out.write(chunk)
+        except ValueError as exc:
+            tmp_path.unlink(missing_ok=True)
+            if str(exc) == "too_large":
+                return JSONResponse({"error": "媒体文件过大（最大 2 GiB）"}, status_code=413)
+            return JSONResponse({"error": "上传失败"}, status_code=400)
+        except Exception as exc:
+            tmp_path.unlink(missing_ok=True)
+            return JSONResponse({"error": f"上传失败：{exc}"}, status_code=400)
+        if size == 0:
+            tmp_path.unlink(missing_ok=True)
+            return JSONResponse({"error": "上传的文件为空"}, status_code=400)
+        selection_id = uuid4().hex
+        runtime.selections[selection_id] = tmp_path
+        runtime.uploaded_selections.add(selection_id)
+        return JSONResponse({
+            "selection_id": selection_id,
+            "filename": filename,
+            "size": size,
         })
 
     async def import_item(request: Request) -> Response:
@@ -1191,13 +1375,6 @@ def create_app(deps: UiDependencies) -> Starlette:
                 track_media_available[track.track_id] = False
                 track_subtitle_available[track.track_id] = {}
                 track_durations[track.track_id] = "--:--"
-        model_names = ["medium", "large-v3"]
-        models_dir = deps.settings.get_models_dir()
-        cached = cached_models(models_dir, model_names)
-        direct_models = {
-            model for model in model_names
-            if deps.settings.get_direct_model_path(model) is not None
-        }
         latest_snapshot = next(
             (task.config_snapshot for task in task_by_track.values() if task and task.config_snapshot),
             None,
@@ -1209,10 +1386,7 @@ def create_app(deps: UiDependencies) -> Starlette:
             latest_profile_id if latest_profile_id in profile_ids
             else (public_profiles[0]["profile_id"] if public_profiles else "")
         )
-        default_model = (
-            latest_snapshot.get("whisper_model") if latest_snapshot
-            else next((name for name in ("large-v3", "medium", "base") if name in cached), "medium")
-        )
+        default_model = latest_snapshot.get("whisper_model", "") if latest_snapshot else ""
         creators = library.list_creators()
         status_counts: dict[str, int] = {}
         for track in item.tracks:
@@ -1270,10 +1444,10 @@ def create_app(deps: UiDependencies) -> Starlette:
         return runtime.render(
             "detail.html", request, item=item, task_by_track=task_by_track,
             profiles=_sort_by_history(public_profiles, library.selection_order("full.translation_profile")),
-            models=_sort_names_by_history(model_names, library.selection_order("full.whisper_model")),
+            models=[],
             audio_profiles=_sort_by_history(deps.profiles.list_for("transcribe"), library.selection_order("full.asr_profile")),
             merge_profiles=_sort_by_history(deps.profiles.list_for("merge"), library.selection_order("full.merge_profile")),
-            cached_models=cached, direct_models=direct_models, default_model=default_model,
+            cached_models=set(), direct_models=set(), default_model=default_model,
             latest_snapshot=latest_snapshot, creators=creators,
             creator_by_id={creator.creator_id: creator for creator in creators},
             track_media_available=track_media_available,
@@ -1423,7 +1597,6 @@ def create_app(deps: UiDependencies) -> Starlette:
             worker_summary = runtime.tasks.summary()
         else:
             worker_summary = {
-                "local_running": 0, "local_capacity": deps.settings.get_asr_concurrency(),
                 "remote_running": 0, "remote_capacity": deps.settings.get_remote_asr_task_concurrency(),
                 "remote_request_capacity": deps.settings.get_remote_asr_concurrency(),
                 "queued": 0,
@@ -1478,24 +1651,9 @@ def create_app(deps: UiDependencies) -> Starlette:
         subtitles_pag = build_task_pagination(all_processing_tasks, "subtitles")
         downloads_pag = build_task_pagination(all_import_tasks, "downloads")
 
-        models_dir = deps.settings.get_models_dir()
-        model_names = ["tiny", "base", "small", "medium", "large-v3"]
-        cached = cached_models(models_dir, model_names)
-        direct = {
-            name: deps.settings.get_direct_model_path(name)
-            for name in model_names
-        }
-        models = {}
-        for name in model_names:
-            if direct.get(name):
-                models[name] = {"state": "direct", "note": f"直接目录：{direct[name]}"}
-            elif name in cached:
-                models[name] = {"state": "cached", "note": "已缓存，可离线使用"}
-            else:
-                models[name] = {"state": "未下载", "note": "首次使用本地 ASR 时自动下载"}
         return runtime.render(
             "downloads.html", request,
-            models=models, models_dir=models_dir,
+            models={}, models_dir="",
             proxy_url=deps.settings.get_proxy_url(),
             processing_tasks=subtitles_pag["items"],
             subtitles_pagination=subtitles_pag,
@@ -1523,16 +1681,14 @@ def create_app(deps: UiDependencies) -> Starlette:
                     deps.settings.set_deepgram_api_key(form["deepgram_api_key"])
                 if form.get("default_asr_provider"):
                     deps.settings.set_default_processing_snapshot({
-                        "asr_provider": form.get("default_asr_provider", "local"),
+                        "asr_provider": form.get("default_asr_provider", "model"),
                         "scene": form.get("default_scene", "asmr"),
-                        "whisper_model": form.get("default_whisper_model", "large-v3"),
                         "llm_profile_id": form.get("default_llm_profile_id", ""),
                         "asr_profile_id": form.get("default_asr_profile_id", ""),
                         "merge_profile_id": form.get("default_merge_profile_id", ""),
                         "asr_chunk_seconds": form.get("default_asr_chunk_seconds", 60),
                     })
-                deps.settings.set_asr_concurrency(int(form.get("asr_concurrency", "1")))
-                deps.settings.set_remote_asr_concurrency(int(form.get("remote_asr_concurrency", "20")))
+                deps.settings.set_remote_asr_concurrency(int(form.get("remote_asr_concurrency", "4")))
                 if form.get("remote_asr_task_concurrency"):
                     deps.settings.set_remote_asr_task_concurrency(int(form["remote_asr_task_concurrency"]))
                 deps.settings.set_translate_workers(int(form.get("translate_workers", "20")))
@@ -1542,12 +1698,6 @@ def create_app(deps: UiDependencies) -> Starlette:
                     deps.settings.set_download_history_max_age_days(int(form["download_history_max_age_days"]))
                 deps.settings.set_translation_prompt(form.get("translation_prompt", ""))
                 deps.settings.set_proxy_url(form.get("proxy_url", ""))
-                models_dir = _resolve_selected_path(runtime, form, "models_dir")
-                if models_dir:
-                    deps.settings.set_models_dir(models_dir)
-                for model in ("medium", "large-v3"):
-                    value = _resolve_selected_path(runtime, form, f"direct_{model}")
-                    deps.settings.set_direct_model_path(model, value)
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=400)
             if runtime.tasks is not None:
@@ -1564,20 +1714,16 @@ def create_app(deps: UiDependencies) -> Starlette:
             deepgram_key_masked=deps.settings.deepgram_key_display(),
             deepgram_key_configured=bool(deps.settings.get_deepgram_api_key()),
             deepgram_key_deletable=deps.settings.has_stored_deepgram_api_key(),
-            asr_concurrency=deps.settings.get_asr_concurrency(),
             remote_asr_concurrency=deps.settings.get_remote_asr_concurrency(),
             remote_asr_task_concurrency=deps.settings.get_remote_asr_task_concurrency(),
             translate_workers=deps.settings.get_translate_workers(),
             translation_prompt=deps.settings.get_translation_prompt(),
             proxy_url=deps.settings.get_proxy_url(),
-            models_dir=deps.settings.get_models_dir(),
-            direct_medium=deps.settings.get_direct_model_path("medium"),
-            direct_large_v3=deps.settings.get_direct_model_path("large-v3"),
             audio_profiles=deps.profiles.list_for("transcribe"),
             default_processing=deps.settings.get_default_processing_snapshot() or deps.settings.get_last_processing_snapshot() or {},
             translation_profiles=translation_profiles,
             merge_profiles=merge_profiles,
-            models=["large-v3", "medium", "base"],
+            models=[],
         )
 
     async def delete_deepgram_key(request: Request) -> Response:
@@ -1612,20 +1758,6 @@ def create_app(deps: UiDependencies) -> Starlette:
             "status": health_data["status"],
             "tested_at": health_data["tested_at"],
         })
-
-    async def check_model(request: Request) -> Response:
-        error = await _authorize_write(request, runtime)
-        if error:
-            return error
-        model = request.path_params["model"]
-        if model not in {"medium", "large-v3"}:
-            return Response("Not found", status_code=404)
-        ok, message = check_model_configuration(
-            model,
-            deps.settings.get_models_dir(),
-            deps.settings.get_direct_model_path(model),
-        )
-        return JSONResponse({"ok": ok, "message": message})
 
     async def delete_profile_key(request: Request) -> Response:
         error = await _authorize_write(request, runtime)
@@ -2226,6 +2358,9 @@ def create_app(deps: UiDependencies) -> Starlette:
             return Response("Not found", status_code=404)
         track_id = request.path_params["track_id"]
         language = request.path_params["language"]
+        fmt = request.query_params.get("format", "srt").strip().lower()
+        if fmt not in {"srt", "vtt", "lrc"}:
+            return JSONResponse({"error": f"不支持的导出格式：{fmt}"}, status_code=400)
         try:
             _, track = library.get_track(track_id)
             if language not in {track.source_language, track.target_language}:
@@ -2235,7 +2370,87 @@ def create_app(deps: UiDependencies) -> Starlette:
             return Response("Not found", status_code=404)
         if not path.is_file():
             return Response("Not found", status_code=404)
-        return FileResponse(path, media_type="application/x-subrip", filename=path.name)
+        if fmt == "srt":
+            return FileResponse(path, media_type="application/x-subrip", filename=path.name)
+        entries = read_srt(path)
+        body = format_vtt(entries) if fmt == "vtt" else format_lrc(entries)
+        media_type = "text/vtt; charset=utf-8" if fmt == "vtt" else "text/plain; charset=utf-8"
+        out_name = f"{path.stem}.{fmt}"
+        encoded_name = urllib.parse.quote(out_name)
+        return Response(
+            body,
+            media_type=media_type,
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}"},
+        )
+
+    async def upload_track_subtitle(request: Request) -> Response:
+        error = await _authorize_write(request, runtime, skip_body_csrf=True)
+        if error:
+            return error
+        library = runtime.open_active_library()
+        if library is None:
+            return JSONResponse({"error": "Library is not configured"}, status_code=409)
+        track_id = request.path_params["track_id"]
+        try:
+            _, track = library.get_track(track_id)
+        except KeyError:
+            return JSONResponse({"error": "Track not found"}, status_code=404)
+        max_bytes = 10 * 1024 * 1024
+        if request.headers.get("content-length"):
+            try:
+                declared = int(request.headers["content-length"])
+            except ValueError:
+                declared = 0
+            if declared > max_bytes:
+                return JSONResponse({"error": "字幕文件过大（最大 10 MB）"}, status_code=413)
+        body = await request.body()
+        if len(body) > max_bytes:
+            return JSONResponse({"error": "字幕文件过大（最大 10 MB）"}, status_code=413)
+        content_type = request.headers.get("content-type", "")
+        if "multipart/form-data" in content_type.lower():
+            raw_bytes, raw_name, fields = parse_multipart_data(body, content_type)
+            lang_param = str(fields.get("language") or request.query_params.get("language") or "source").strip()
+        else:
+            raw_bytes = body
+            raw_name = urllib.parse.unquote(request.headers.get("x-filename") or request.query_params.get("filename") or "subtitle.srt")
+            lang_param = str(request.query_params.get("language") or "source").strip()
+        if not raw_bytes:
+            return JSONResponse({"error": "字幕文件为空"}, status_code=400)
+        suffix = Path(raw_name).suffix.lower()
+        if suffix not in {".srt", ".vtt", ".lrc", ".ass", ".ssa"}:
+            return JSONResponse({"error": f"不支持的字幕格式：{suffix or '未知'}"}, status_code=400)
+        if lang_param == "source":
+            resolved_language = track.source_language
+        elif lang_param == "target":
+            resolved_language = track.target_language
+        elif lang_param in {track.source_language, track.target_language}:
+            resolved_language = lang_param
+        else:
+            return JSONResponse({"error": f"不支持的字幕语言：{lang_param}"}, status_code=400)
+        text = None
+        for encoding in ("utf-8-sig", "utf-8", "gb18030", "cp932"):
+            try:
+                text = raw_bytes.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        if text is None:
+            return JSONResponse({"error": "无法识别字幕文件编码（请使用 UTF-8）"}, status_code=400)
+        try:
+            entries = parse_subtitle_text(text, suffix)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if not entries:
+            return JSONResponse({"error": "未解析到有效时间轴字幕条目"}, status_code=400)
+        target_path = library.track_subtitle_path(track_id, resolved_language)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        write_srt(entries, target_path)
+        return JSONResponse({
+            "ok": True,
+            "track_id": track_id,
+            "language": resolved_language,
+            "count": len(entries),
+        })
 
     async def track_subtitles(request: Request) -> Response:
         library = runtime.open_active_library()
@@ -2990,7 +3205,6 @@ def create_app(deps: UiDependencies) -> Starlette:
                "latest_task": latest_task_info,
            })
 
-        cached = cached_models(deps.settings.get_models_dir(), ["medium", "large-v3"])
         has_jp = any(t.get("has_source_sub") for t in tracks_payload)
         has_zh = any(t.get("has_target_sub") for t in tracks_payload)
         sub_status = "bilingual" if (has_jp and has_zh) else ("zh" if has_zh else ("jp" if has_jp else "none"))
@@ -3042,8 +3256,6 @@ def create_app(deps: UiDependencies) -> Starlette:
             "available_profiles": {
                 "asr_profiles": deps.profiles.list_for("transcribe"),
                 "llm_profiles": deps.profiles.list_public(),
-                "cached_models": list(cached),
-                "default_model": "medium",
                 "default_processing": deps.settings.get_default_processing_snapshot() or deps.settings.get_last_processing_snapshot() or {},
             },
         })
@@ -3180,8 +3392,6 @@ def create_app(deps: UiDependencies) -> Starlette:
         return JSONResponse({"ok": True, "task_id": new_task.task_id, "track_id": track_id})
 
     async def api_profiles(request: Request) -> Response:
-        models_dir = deps.settings.get_models_dir()
-        cached = cached_models(models_dir, ["base", "small", "medium", "large-v3"])
         library = runtime.open_active_library()
         usage_map: dict[str, dict] = {}
         if library:
@@ -3221,7 +3431,6 @@ def create_app(deps: UiDependencies) -> Starlette:
         return JSONResponse({
             "asr_profiles": _enrich(deps.profiles.list_for("transcribe")),
             "llm_profiles": _enrich(deps.profiles.list_public()),
-            "cached_models": list(cached),
         })
 
     async def api_get_settings(request: Request) -> Response:
@@ -3230,7 +3439,6 @@ def create_app(deps: UiDependencies) -> Starlette:
         return JSONResponse({
             "library_root": str(active_lib) if active_lib else None,
             "proxy_url": deps.settings.get_proxy_url(),
-            "asr_concurrency": deps.settings.get_asr_concurrency(),
             "remote_asr_concurrency": deps.settings.get_remote_asr_concurrency(),
             "remote_asr_task_concurrency": deps.settings.get_remote_asr_task_concurrency(),
             "translate_workers": deps.settings.get_translate_workers(),
@@ -3345,8 +3553,11 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/picker/folder", choose_media_folder, methods=["POST"]),
         Route("/picker/image", choose_image, methods=["POST"]),
         Route("/api/upload-image", upload_image, methods=["POST"]),
+        Route("/api/upload-media", upload_media, methods=["POST"]),
         Route("/api/selections/{selection_id}/image", selected_image_preview),
         Route("/picker/directory", choose_directory, methods=["POST"]),
+        Route("/api/fs/list", fs_list),
+        Route("/api/picker/select-path", select_path, methods=["POST"]),
         Route("/items/import", import_item, methods=["POST"]),
         Route("/library/import", import_item, methods=["POST"]),
         Route("/api/library/import", import_item, methods=["POST"]),
@@ -3389,7 +3600,6 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/profiles/{profile_id}/test", test_profile, methods=["POST"]),
         Route("/profiles/{profile_id}/delete", delete_profile, methods=["POST"]),
         Route("/profiles/{profile_id}/delete-key", delete_profile_key, methods=["POST"]),
-        Route("/settings/models/{model}/check", check_model, methods=["POST"]),
         Route("/tracks/{track_id}/process", start_task, methods=["POST"]),
         Route("/tracks/{track_id}/rename", rename_track, methods=["POST"]),
         Route("/tracks/{track_id}/delete", delete_track, methods=["POST"]),
@@ -3405,6 +3615,7 @@ def create_app(deps: UiDependencies) -> Starlette:
         Route("/tasks/{task_id}/candidate/discard", discard_track_segment, methods=["POST"]),
         Route("/tracks/{track_id}/subtitles/{language}", track_subtitles),
         Route("/tracks/{track_id}/subtitles/{language}/download", download_track_subtitle),
+        Route("/api/tracks/{track_id}/subtitles/upload", upload_track_subtitle, methods=["POST"]),
         Route("/api/tasks", api_tasks),
         Route("/api/tasks/{task_id}/retry", retry_task, methods=["POST"]),
         Route("/api/tasks/{task_id}/cancel", cancel_task, methods=["POST"]),
@@ -3428,11 +3639,31 @@ def create_app(deps: UiDependencies) -> Starlette:
             return FileResponse(FRONTEND_DIST / "index.html")
         return Response("Not found", status_code=404)
 
-    if (FRONTEND_DIST / "index.html").is_file():
-        routes.append(Route("/{full_path:path}", spa_fallback))
+    if (FRONTEND_DIST / "sw.js").is_file():
+        async def pwa_sw(request: Request) -> Response:
+            return FileResponse(FRONTEND_DIST / "sw.js", media_type="application/javascript")
+        routes.insert(0, Route("/sw.js", pwa_sw))
+
+    if (FRONTEND_DIST / "manifest.webmanifest").is_file():
+        async def pwa_manifest(request: Request) -> Response:
+            return FileResponse(FRONTEND_DIST / "manifest.webmanifest", media_type="application/manifest+json")
+        routes.insert(0, Route("/manifest.webmanifest", pwa_manifest))
+
+    for svg_name in ("subforge-icon.svg", "favicon.svg", "icons.svg"):
+        svg_path = FRONTEND_DIST / svg_name
+        if svg_path.is_file():
+            async def _serve_svg(request: Request, _path: Path = svg_path) -> Response:
+                return FileResponse(_path, media_type="image/svg+xml")
+            routes.insert(0, Route(f"/{svg_name}", _serve_svg))
+
+    if (FRONTEND_DIST / "icons").is_dir():
+        routes.insert(0, Mount("/icons", StaticFiles(directory=FRONTEND_DIST / "icons"), name="icons"))
 
     if (FRONTEND_DIST / "assets").is_dir():
         routes.insert(0, Mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets"))
+
+    if (FRONTEND_DIST / "index.html").is_file():
+        routes.append(Route("/{full_path:path}", spa_fallback))
 
     @asynccontextmanager
     async def lifespan(app):
@@ -3454,10 +3685,15 @@ def create_app(deps: UiDependencies) -> Starlette:
         public_path = (
             request.url.path.startswith("/static/")
             or request.url.path.startswith("/assets/")
+            or request.url.path.startswith("/icons/")
             or request.url.path.endswith(".svg")
             or request.url.path.endswith(".png")
             or request.url.path.endswith(".ico")
-            or request.url.path in {"/docs", "/openapi.json", "/redoc", "/subforge-icon.svg", "/favicon.svg"}
+            or request.url.path in {
+                "/docs", "/openapi.json", "/redoc",
+                "/subforge-icon.svg", "/favicon.svg",
+                "/manifest.webmanifest", "/sw.js",
+            }
         )
         token_exchange = request.url.path == "/" and request.query_params.get("token") is not None
         no_auth_root = deps.no_auth and request.url.path == "/"
@@ -3465,19 +3701,14 @@ def create_app(deps: UiDependencies) -> Starlette:
             if deps.no_auth:
                 session_id = secrets.token_urlsafe(32)
                 runtime.sessions[session_id] = secrets.token_urlsafe(32)
+                _save_sessions(deps, runtime.sessions)
                 headers = [(k, v) for k, v in request.scope.get("headers", []) if k.lower() != b"cookie"]
                 headers.append((b"cookie", f"subforge_session={session_id}".encode("latin-1")))
                 request.scope["headers"] = headers
                 if hasattr(request, "_cookies"):
                     delattr(request, "_cookies")
                 response = await call_next(request)
-                response.set_cookie(
-                    "subforge_session",
-                    session_id,
-                    httponly=True,
-                    samesite="strict",
-                    secure=False,
-                )
+                _set_session_cookie(response, session_id, request)
                 return response
             return Response("Authentication required", status_code=401)
         return await call_next(request)
@@ -3538,8 +3769,10 @@ def _snapshot_from_form(deps: UiDependencies, form: dict) -> ProcessingSnapshot:
         raise ValueError("所选翻译配置不支持文本翻译")
     asr_provider = form.get("asr_provider", "")
     if not asr_provider:
-        asr_provider = "model" if form.get("asr_profile_id") else "local"
-    if asr_provider not in {"local", "deepgram", "model"}:
+        asr_provider = "model" if form.get("asr_profile_id") else ("deepgram" if deps.settings.get_deepgram_api_key() else "model")
+    if asr_provider == "local":
+        raise ValueError("已移除本地 Whisper，请选择云端音频模型（model）或 Deepgram")
+    if asr_provider not in {"deepgram", "model"}:
         raise ValueError("不支持的 ASR 提供商")
     asr_profile_id = ""
     if asr_provider == "model":
@@ -3563,7 +3796,7 @@ def _snapshot_from_form(deps: UiDependencies, form: dict) -> ProcessingSnapshot:
     return ProcessingSnapshot(
         asr_provider=asr_provider,
         scene=resolve_scene(form.get("scene"), _default_scene(deps)),
-        whisper_model=form.get("whisper_model", "medium"),
+        whisper_model=form.get("whisper_model", ""),
         llm_profile_id=profile.profile_id,
         asr_profile_id=asr_profile_id,
         merge_profile_id=merge_profile_id,
@@ -3581,14 +3814,30 @@ def _automatic_processing_snapshot(deps: UiDependencies) -> ProcessingSnapshot |
     profile_id = str(saved.get("llm_profile_id", ""))
     if profile_id not in profile_ids:
         profile_id = translation_profiles[0]["profile_id"]
-    asr_provider = str(saved.get("asr_provider", "local"))
+    asr_provider = str(saved.get("asr_provider", "model"))
+    if asr_provider == "local":
+        asr_provider = "model"
     asr_profile_id = str(saved.get("asr_profile_id", ""))
+    transcribe_profiles = [p for p in profiles if "transcribe" in p.get("capabilities", [])]
+    transcribe_ids = {p["profile_id"] for p in transcribe_profiles}
     if asr_provider == "model":
-        transcribe_ids = {p["profile_id"] for p in profiles if "transcribe" in p.get("capabilities", [])}
         if asr_profile_id not in transcribe_ids:
-            asr_provider, asr_profile_id = "local", ""
-    else:
+            if transcribe_profiles:
+                asr_profile_id = transcribe_profiles[0]["profile_id"]
+            elif deps.settings.get_deepgram_api_key():
+                asr_provider, asr_profile_id = "deepgram", ""
+            else:
+                return None
+    elif asr_provider == "deepgram":
         asr_profile_id = ""
+        if not deps.settings.get_deepgram_api_key():
+            if transcribe_profiles:
+                asr_provider = "model"
+                asr_profile_id = transcribe_profiles[0]["profile_id"]
+            else:
+                return None
+    else:
+        return None
     merge_profile_id = str(saved.get("merge_profile_id", ""))
     try:
         asr_chunk_seconds = int(saved.get("asr_chunk_seconds", 60))
@@ -3599,11 +3848,10 @@ def _automatic_processing_snapshot(deps: UiDependencies) -> ProcessingSnapshot |
     if merge_profile_id not in merge_ids:
         merge_profile_id = ""
     scene = str(saved.get("scene", "asmr"))
-    whisper_model = str(saved.get("whisper_model", "large-v3"))
     return ProcessingSnapshot(
-        asr_provider=asr_provider if asr_provider in {"local", "deepgram", "model"} else "local",
+        asr_provider=asr_provider,
         scene=scene if scene in {"asmr", "normal"} else "asmr",
-        whisper_model=whisper_model or "large-v3",
+        whisper_model="",
         llm_profile_id=profile_id,
         asr_profile_id=asr_profile_id,
         merge_profile_id=merge_profile_id,
@@ -3627,24 +3875,87 @@ def _cleanup_upload_selection(runtime: UiRuntime, selection_id: str, source: Pat
         pass
 
 
-async def _authorize_write(request: Request, runtime: UiRuntime) -> Response | None:
-    host = request.headers.get("host", "").split(":", 1)[0].lower()
-    if host not in {value.lower() for value in runtime.deps.allowed_hosts}:
+def _sessions_file(deps: UiDependencies) -> Path | None:
+    path = getattr(deps.settings, "path", None)
+    return (path.parent / "sessions.json") if path is not None else None
+
+
+def _load_sessions(deps: UiDependencies) -> dict[str, str]:
+    path = _sessions_file(deps)
+    if path is None or not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items() if k and v}
+    except (OSError, ValueError, TypeError):
+        pass
+    return {}
+
+
+def _save_sessions(deps: UiDependencies, sessions: dict[str, str]) -> None:
+    if len(sessions) > 50:
+        for old_key in list(sessions.keys())[:-50]:
+            sessions.pop(old_key, None)
+    path = _sessions_file(deps)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        trimmed = dict(list(sessions.items())[-50:])
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(trimmed), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _is_https_request(request: Request) -> bool:
+    proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    return proto == "https" or request.url.scheme == "https"
+
+
+def _set_session_cookie(response: Response, session_id: str, request: Request) -> None:
+    response.set_cookie(
+        "subforge_session",
+        session_id,
+        httponly=True,
+        samesite="lax",
+        secure=_is_https_request(request),
+    )
+
+
+def _host_allowed(host: str, allowed_hosts: set[str]) -> bool:
+    normalized = {value.lower() for value in allowed_hosts}
+    if "*" in normalized or host in normalized:
+        return True
+    if host.endswith(".ts.net"):
+        return True
+    return False
+
+
+async def _authorize_write(request: Request, runtime: UiRuntime, *, skip_body_csrf: bool = False) -> Response | None:
+    raw_host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",", 1)[0].strip()
+    host = raw_host.split(":", 1)[0].lower()
+    if not _host_allowed(host, runtime.deps.allowed_hosts):
         return JSONResponse({"error": "invalid host"}, status_code=403)
     csrf = _session_csrf(request, runtime)
     if csrf is None:
         return JSONResponse({"error": "authentication required"}, status_code=401)
     origin = request.headers.get("origin")
+    direct_host = request.headers.get("host", "")
     allowed_origins = {
-        f"http://{request.headers.get('host')}",
-        f"https://{request.headers.get('host')}",
+        f"http://{raw_host}",
+        f"https://{raw_host}",
+        f"http://{direct_host}",
+        f"https://{direct_host}",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     }
     if origin and origin not in allowed_origins:
         return JSONResponse({"error": "invalid origin"}, status_code=403)
     supplied = request.headers.get("x-csrf-token")
-    if not supplied:
+    if not supplied and not skip_body_csrf:
         try:
             body = (await request.body()).decode("utf-8", errors="ignore")
             supplied = parse_qs(body, keep_blank_values=True).get("csrf_token", [""])[-1]

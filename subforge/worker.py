@@ -26,9 +26,12 @@ async def run_request(request_path: Path) -> int:
     request = json.loads(request_path.read_text(encoding="utf-8"))
     overrides = request.get("config_overrides") or {}
     jobs_dir = overrides.pop("jobs_dir", None)
-    models_dir = overrides.pop("models_dir", None)
+    overrides.pop("models_dir", None)
     remote_asr_limiter_dir = overrides.pop("remote_asr_limiter_dir", None)
-    local_asr_limiter_dir = overrides.pop("local_asr_limiter_dir", None)
+    overrides.pop("local_asr_limiter_dir", None)
+    overrides.pop("local_asr_global_workers", None)
+    overrides.pop("device", None)
+    overrides.pop("compute_type", None)
     if overrides.get("output_dir"):
         overrides["output_dir"] = Path(overrides["output_dir"])
     config = load_config(
@@ -37,14 +40,8 @@ async def run_request(request_path: Path) -> int:
     )
     if jobs_dir:
         config.jobs_dir = Path(jobs_dir)
-    if models_dir:
-        config.models_dir = Path(models_dir)
     if remote_asr_limiter_dir:
         config.remote_asr_limiter_dir = Path(remote_asr_limiter_dir)
-    if local_asr_limiter_dir:
-        config.local_asr_limiter_dir = Path(local_asr_limiter_dir)
-    if request.get("model_path"):
-        config.direct_model_path = Path(request["model_path"])
     if os.environ.get("SUBFORGE_WORKER_LLM_API_KEY"):
         config.llm_api_key = os.environ["SUBFORGE_WORKER_LLM_API_KEY"]
     if os.environ.get("SUBFORGE_WORKER_DEEPGRAM_API_KEY"):

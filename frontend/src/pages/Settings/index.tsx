@@ -20,6 +20,7 @@ import { api } from '../../api/client'
 import type { UiSettings, ModelProfile } from '../../types'
 import { useFont } from '../../context/FontContext'
 import { useCornerStyle } from '../../context/CornerContext'
+import { ServerDirBrowser } from '../../components/ServerDirBrowser'
 
 type SettingsTab = 'general' | 'models' | 'cover' | 'appearance' | 'pipeline' | 'proxy' | 'prompt' | 'security'
 
@@ -35,8 +36,8 @@ export function SettingsPage() {
 
   // Form fields
   const [libraryRoot, setLibraryRoot] = useState('')
+  const [showDirBrowser, setShowDirBrowser] = useState(false)
   const [proxyUrl, setProxyUrl] = useState('')
-  const [asrConcurrency, setAsrConcurrency] = useState(1)
   const [remoteAsrConcurrency, setRemoteAsrConcurrency] = useState(20)
   const [remoteAsrTaskConcurrency, setRemoteAsrTaskConcurrency] = useState(20)
   const [translateWorkers, setTranslateWorkers] = useState(20)
@@ -59,9 +60,8 @@ export function SettingsPage() {
   // Default Models fields
   const [availableAsrProfiles, setAvailableAsrProfiles] = useState<ModelProfile[]>([])
   const [availableLlmProfiles, setAvailableLlmProfiles] = useState<ModelProfile[]>([])
-  const [defaultAsrProvider, setDefaultAsrProvider] = useState<'local' | 'model' | 'deepgram'>('local')
+  const [defaultAsrProvider, setDefaultAsrProvider] = useState<'model' | 'deepgram'>('model')
   const [defaultAsrProfileId, setDefaultAsrProfileId] = useState('')
-  const [defaultWhisperModel, setDefaultWhisperModel] = useState('large-v3')
   const [defaultLlmProfileId, setDefaultLlmProfileId] = useState('')
   const [defaultMergeProfileId, setDefaultMergeProfileId] = useState('')
   const [defaultScene, setDefaultScene] = useState<'asmr' | 'normal'>('asmr')
@@ -80,7 +80,6 @@ export function SettingsPage() {
       setAvailableLlmProfiles(profs.llm_profiles || [])
       setLibraryRoot(data.library_root || '')
       setProxyUrl(data.proxy_url || '')
-      setAsrConcurrency(data.asr_concurrency || 1)
       setRemoteAsrConcurrency(data.remote_asr_concurrency || 20)
       setRemoteAsrTaskConcurrency(data.remote_asr_task_concurrency || 20)
       setTranslateWorkers(data.translate_workers || 20)
@@ -94,9 +93,9 @@ export function SettingsPage() {
         setCoverUrl(data.default_cover.url || '')
       }
       if (data.default_processing) {
-        setDefaultAsrProvider((data.default_processing.asr_provider as any) || 'local')
+        const provider = data.default_processing.asr_provider
+        setDefaultAsrProvider(provider === 'deepgram' ? 'deepgram' : 'model')
         setDefaultAsrProfileId(data.default_processing.asr_profile_id || '')
-        setDefaultWhisperModel(data.default_processing.whisper_model || 'large-v3')
         setDefaultLlmProfileId(data.default_processing.llm_profile_id || '')
         setDefaultMergeProfileId(data.default_processing.merge_profile_id || '')
         setDefaultScene((data.default_processing.scene as any) || 'asmr')
@@ -144,7 +143,6 @@ export function SettingsPage() {
       const formData = new FormData()
       if (libraryRoot) formData.append('library_root', libraryRoot)
       if (proxyUrl) formData.append('proxy_url', proxyUrl)
-      formData.append('asr_concurrency', String(asrConcurrency))
       formData.append('remote_asr_concurrency', String(remoteAsrConcurrency))
       formData.append('remote_asr_task_concurrency', String(remoteAsrTaskConcurrency))
       formData.append('translate_workers', String(translateWorkers))
@@ -156,7 +154,6 @@ export function SettingsPage() {
       if (deepgramKey) formData.append('deepgram_api_key', deepgramKey)
       formData.append('default_asr_provider', defaultAsrProvider)
       formData.append('default_asr_profile_id', defaultAsrProfileId)
-      formData.append('default_whisper_model', defaultWhisperModel)
       formData.append('default_llm_profile_id', defaultLlmProfileId)
       formData.append('default_merge_profile_id', defaultMergeProfileId)
       formData.append('default_scene', defaultScene)
@@ -209,7 +206,6 @@ export function SettingsPage() {
       const formData = new FormData()
       formData.append('default_asr_provider', defaultAsrProvider)
       formData.append('default_asr_profile_id', defaultAsrProfileId)
-      formData.append('default_whisper_model', defaultWhisperModel)
       formData.append('default_llm_profile_id', defaultLlmProfileId)
       formData.append('default_merge_profile_id', defaultMergeProfileId)
       formData.append('default_scene', defaultScene)
@@ -225,8 +221,7 @@ export function SettingsPage() {
   }
 
   const handleResetDefaultModels = () => {
-    setDefaultAsrProvider('local')
-    setDefaultWhisperModel('large-v3')
+    setDefaultAsrProvider('model')
     setDefaultScene('asmr')
     setDefaultChunkSeconds(60)
     if (availableAsrProfiles.length > 0) setDefaultAsrProfileId(availableAsrProfiles[0].profile_id)
@@ -375,20 +370,42 @@ export function SettingsPage() {
           <p style={{ fontSize: 13, color: 'var(--fg-dim)', marginBottom: 12 }}>
             SubForge 存储音频、作品封面以及生成的中日双语字幕的基础文件夹。
           </p>
-          <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <input
               type="text"
               className="input-field"
               value={libraryRoot}
               onChange={(e) => setLibraryRoot(e.target.value)}
               placeholder="选择本地音声库绝对路径"
-              style={{ flex: 1 }}
+              style={{ flex: 1, minWidth: 180 }}
             />
-            <button type="button" className="btn" onClick={handleSelectFolder}>
+            <button type="button" className="btn btn-primary" onClick={() => setShowDirBrowser((v) => !v)}>
               <Folder size={15} />
-              选择文件夹
+              {showDirBrowser ? '收起目录浏览' : '浏览服务器目录'}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={handleSelectFolder} title="仅在服务器桌面端可用">
+              桌面弹窗
             </button>
           </div>
+          {showDirBrowser && (
+            <ServerDirBrowser
+              kind="directory"
+              initialPath={libraryRoot}
+              onSelect={async (res) => {
+                try {
+                  const formData = new FormData()
+                  formData.append('selection_id', res.selection_id)
+                  await api.postForm('/library/select', formData)
+                  setShowDirBrowser(false)
+                  setSuccessMsg('已更新媒体库根目录')
+                  loadSettings()
+                } catch (err: any) {
+                  setErrorMsg('更新媒体库根目录失败: ' + (err.message || '未知错误'))
+                }
+              }}
+              onCancel={() => setShowDirBrowser(false)}
+            />
+          )}
         </div>
         )}
 
@@ -430,8 +447,7 @@ export function SettingsPage() {
                 </label>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   {[
-                    { key: 'local', label: '本地 Faster-Whisper', desc: '离线 GPU / CPU 推理' },
-                    { key: 'model', label: '自定义 / API 音频模型', desc: '如 raspb (Gemini 3.8 Flash) / OpenAI Compatible' },
+                    { key: 'model', label: '自定义 / 云端音频模型', desc: 'OpenAI Whisper / DeepSeek ASR / Google Gemini' },
                     { key: 'deepgram', label: 'Deepgram Nova-3', desc: '极速云端语音转写' },
                   ].map((p) => (
                     <button
@@ -447,44 +463,9 @@ export function SettingsPage() {
                 </div>
               </div>
 
-              {/* Local Whisper Model Options */}
-              {defaultAsrProvider === 'local' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 12 }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                      Whisper 模型规格
-                    </label>
-                    <select
-                      className="select-field"
-                      style={{ width: '100%' }}
-                      value={defaultWhisperModel}
-                      onChange={(e) => setDefaultWhisperModel(e.target.value)}
-                    >
-                      <option value="large-v3">large-v3 (最高准确率，推荐 GPU 运行)</option>
-                      <option value="medium">medium (均衡型，适合显存较小设备)</option>
-                      <option value="base">base (轻量快速，仅基础转写)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                      场景识别优化
-                    </label>
-                    <select
-                      className="select-field"
-                      style={{ width: '100%' }}
-                      value={defaultScene}
-                      onChange={(e) => setDefaultScene(e.target.value as any)}
-                    >
-                      <option value="asmr">ASMR 悄悄话强化（降低静音截断，保留呼吸声）</option>
-                      <option value="normal">标准人声对话（普通播客/影视人声）</option>
-                    </select>
-                  </div>
-                </div>
-              )}
-
               {/* Model Profile Options */}
               {defaultAsrProvider === 'model' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 12 }}>
+                <div className="settings-two-col">
                   <div>
                     <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
                       默认 API 语音识别模型
@@ -601,7 +582,7 @@ export function SettingsPage() {
             </p>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 24, alignItems: 'start' }}>
+          <div className="settings-cover-grid">
             {/* Left Preview */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
               <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg-dim)' }}>当前生效效果预览</span>
@@ -832,15 +813,7 @@ export function SettingsPage() {
           </p>
           {([
             {
-              group: '本地转写（Whisper）',
-              fields: [{
-                label: '同时加载模型数',
-                hint: '每个模型占一份显存/内存，也就是同时做本地转写的作品数。显存不足时保持 1。',
-                value: asrConcurrency, set: setAsrConcurrency, max: 8,
-              }],
-            },
-            {
-              group: '网络转写（Deepgram / 音频模型）',
+              group: '网络转写（Deepgram / 云端音频模型）',
               fields: [
                 {
                   label: '同时转写作品数',

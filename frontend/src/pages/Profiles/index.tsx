@@ -30,13 +30,22 @@ function getProviderInfo(p: ModelProfile) {
   const nameLower = (p.name || '').toLowerCase()
   const baseLower = (p.base_url || p.api_base || '').toLowerCase()
 
-  if (p.provider === 'faster-whisper') {
+  if (p.protocol === 'deepseek_asr' || baseLower.includes('deepseek.com') && p.capabilities?.includes('transcribe')) {
     return {
-      brand: 'faster-whisper',
-      type: 'Whisper 本地',
-      color: '#3fb950',
-      bg: 'rgba(63, 185, 80, 0.14)',
-      icon: <Cpu size={14} />,
+      brand: 'DeepSeek ASR',
+      type: '云端转写',
+      color: '#3b82f6',
+      bg: 'rgba(59, 130, 246, 0.14)',
+      icon: <Mic size={14} />,
+    }
+  }
+  if (p.protocol === 'openai_whisper' || modelLower.includes('whisper')) {
+    return {
+      brand: 'Whisper API',
+      type: '云端转写',
+      color: '#10b981',
+      bg: 'rgba(16, 185, 129, 0.14)',
+      icon: <Mic size={14} />,
     }
   }
   if (p.provider === 'deepgram' || nameLower.includes('deepgram') || modelLower.includes('nova')) {
@@ -151,7 +160,6 @@ export function ProfilesPage() {
   const [formModel, setFormModel] = useState('deepseek-chat')
   const [formBaseUrl, setFormBaseUrl] = useState('')
   const [formApiKey, setFormApiKey] = useState('')
-  const [formDevice, setFormDevice] = useState('cuda')
   const [formTemperature, setFormTemperature] = useState(0.0)
   const [formMaxSeconds, setFormMaxSeconds] = useState(60)
   const [formReasoningEffort, setFormReasoningEffort] = useState('')
@@ -270,8 +278,8 @@ export function ProfilesPage() {
     setFormKind(kind)
     setFormName('')
     if (kind === 'asr') {
-      setFormProvider('faster-whisper')
-      setFormModel('large-v3')
+      setFormProvider('openai_whisper')
+      setFormModel('whisper-1')
       setFormCaps(['transcribe'])
     } else {
       setFormProvider('openai_compatible')
@@ -280,7 +288,6 @@ export function ProfilesPage() {
     }
     setFormBaseUrl('')
     setFormApiKey('')
-    setFormDevice('cuda')
     setFormTemperature(0.0)
     setFormMaxSeconds(60)
     setFormReasoningEffort('')
@@ -293,9 +300,8 @@ export function ProfilesPage() {
     setFormName(p.name || '')
     setFormModel(p.model || '')
     setFormBaseUrl(p.base_url || p.api_base || '')
-    setFormProvider(p.provider || p.protocol || 'openai_compatible')
+    setFormProvider(p.protocol || p.provider || 'openai_compatible')
     setFormApiKey('')
-    setFormDevice(p.device || 'cuda')
     setFormTemperature(p.temperature ?? 0.0)
     setFormMaxSeconds(p.max_request_seconds ?? 60)
     setFormReasoningEffort(p.reasoning_effort || '')
@@ -322,9 +328,6 @@ export function ProfilesPage() {
       formData.append('protocol', formProvider)
       if (formApiKey.trim()) {
         formData.append('api_key', formApiKey.trim())
-      }
-      if (formDevice) {
-        formData.append('device', formDevice)
       }
       formData.append('temperature', String(formTemperature))
       formData.append('max_request_seconds', String(formMaxSeconds))
@@ -649,7 +652,13 @@ export function ProfilesPage() {
             const selectionCount = p.usage?.selected_count || 0
             const lastUsedAt = p.usage?.last_used_at ? formatDateTime(p.usage.last_used_at) : '未使用'
 
-            const providerLabel = p.provider || (p.protocol === 'google_native' ? 'Google 原生' : 'OpenAI 兼容')
+            const protocolLabels: Record<string, string> = {
+              google_native: 'Google 原生',
+              openai_compatible: 'OpenAI 兼容',
+              openai_whisper: 'OpenAI Whisper',
+              deepseek_asr: 'DeepSeek ASR',
+            }
+            const providerLabel = p.provider || protocolLabels[p.protocol || ''] || 'OpenAI 兼容'
             const endpoint = p.base_url || p.api_base || '—'
             const modelDisplay = formatModelDisplay(p.model)
 
@@ -846,7 +855,7 @@ export function ProfilesPage() {
           </div>
 
           <div className="newapi-pagination-right">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
               <span>每页</span>
               <select
                 className="select-field"
@@ -880,7 +889,7 @@ export function ProfilesPage() {
               下一页
             </button>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
               <span>前往</span>
               <input
                 type="number"
@@ -951,8 +960,8 @@ export function ProfilesPage() {
                           checked={formKind === 'asr'}
                           onChange={() => {
                             setFormKind('asr')
-                            setFormProvider('faster-whisper')
-                            setFormModel('large-v3')
+                            setFormProvider('openai_whisper')
+                            setFormModel('whisper-1')
                             setFormCaps(['transcribe'])
                           }}
                         />
@@ -989,15 +998,15 @@ export function ProfilesPage() {
                   >
                     {formKind === 'asr' ? (
                       <>
-                        <option value="faster-whisper">faster-whisper (本地离线 GPU)</option>
-                        <option value="deepgram">Deepgram Nova-3 (云端极速)</option>
-                        <option value="gemini">Google Gemini Audio (云端长音频)</option>
-                        <option value="openai_compatible">OpenAI 兼容音频服务</option>
+                        <option value="openai_whisper">OpenAI Whisper 兼容 (/audio/transcriptions)</option>
+                        <option value="deepseek_asr">DeepSeek ASR (api.deepseek.com/v1/tools/asr)</option>
+                        <option value="google_native">Google Gemini 原生 (长音频)</option>
+                        <option value="openai_compatible">OpenAI 兼容多模态音频服务</option>
                       </>
                     ) : (
                       <>
                         <option value="openai_compatible">openai_compatible (DeepSeek / Qwen / Claude / New API)</option>
-                        <option value="gemini">Google Gemini Flash</option>
+                        <option value="google_native">Google Gemini 原生</option>
                       </>
                     )}
                   </select>
@@ -1017,59 +1026,44 @@ export function ProfilesPage() {
                   />
                 </div>
 
-                {formProvider !== 'faster-whisper' && (
-                  <>
-                    <div>
-                      <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                        API Base URL
-                      </label>
-                      <input
-                        type="text"
-                        className="input-field"
-                        value={formBaseUrl}
-                        onChange={(e) => setFormBaseUrl(e.target.value)}
-                        placeholder="如: https://api.deepseek.com/v1 或 http://127.0.0.1:11434/v1"
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                        API Key{' '}
-                        {editingProfile && editingProfile.api_key_masked && (
-                          <span
-                            style={{ color: 'var(--accent-base)', wordBreak: 'break-all' }}
-                            title={editingProfile.api_key_masked}
-                          >
-                            (已安全配置: {compactMaskedKey(editingProfile.api_key_masked)})
-                          </span>
-                        )}
-                      </label>
-                      <input
-                        type="password"
-                        className="input-field"
-                        value={formApiKey}
-                        onChange={(e) => setFormApiKey(e.target.value)}
-                        placeholder={editingProfile?.api_key_masked ? '留空保留已有 API 密钥，输入新 Key 则覆盖' : 'sk-...'}
-                      />
-                    </div>
-                  </>
-                )}
-
-                {formProvider === 'faster-whisper' && (
-                  <div>
-                    <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                      运行设备
-                    </label>
-                    <select
-                      className="select-field"
-                      style={{ width: '100%' }}
-                      value={formDevice}
-                      onChange={(e) => setFormDevice(e.target.value)}
-                    >
-                      <option value="cuda">CUDA (NVIDIA 显卡)</option>
-                      <option value="cpu">CPU (兼容模式)</option>
-                    </select>
-                  </div>
-                )}
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                    API Base URL
+                  </label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    value={formBaseUrl}
+                    onChange={(e) => setFormBaseUrl(e.target.value)}
+                    placeholder={
+                      formProvider === 'deepseek_asr'
+                        ? 'https://api.deepseek.com/v1'
+                        : formProvider === 'openai_whisper'
+                        ? 'https://api.openai.com/v1 或 https://api.groq.com/openai/v1'
+                        : '如: https://api.deepseek.com/v1 或 http://127.0.0.1:11434/v1'
+                    }
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                    API Key{' '}
+                    {editingProfile && editingProfile.api_key_masked && (
+                      <span
+                        style={{ color: 'var(--accent-base)', wordBreak: 'break-all' }}
+                        title={editingProfile.api_key_masked}
+                      >
+                        (已安全配置: {compactMaskedKey(editingProfile.api_key_masked)})
+                      </span>
+                    )}
+                  </label>
+                  <input
+                    type="password"
+                    className="input-field"
+                    value={formApiKey}
+                    onChange={(e) => setFormApiKey(e.target.value)}
+                    placeholder={editingProfile?.api_key_masked ? '留空保留已有 API 密钥，输入新 Key 则覆盖' : 'sk-...'}
+                  />
+                </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                   <div>
@@ -1101,28 +1095,26 @@ export function ProfilesPage() {
                   </div>
                 </div>
 
-                {formProvider !== 'faster-whisper' && (
-                  <div>
-                    <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                      思考等级 / 推理深度 (Reasoning Effort)
-                    </label>
-                    <select
-                      className="select-field"
-                      style={{ width: '100%' }}
-                      value={formReasoningEffort}
-                      onChange={(e) => setFormReasoningEffort(e.target.value)}
-                    >
-                      <option value="">跟随服务端默认</option>
-                      <option value="none">关闭思考 / Level 0 (none - 极速不思考)</option>
-                      <option value="low">低思考预算 (low)</option>
-                      <option value="medium">中等思考 (medium)</option>
-                      <option value="high">高思考深度 (high)</option>
-                    </select>
-                    <span style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 4, display: 'block' }}>
-                      如需彻底关闭 Gemini / DeepSeek-R1 / o1 类模型的思考过程，请选择「关闭思考 / Level 0 (none)」。
-                    </span>
-                  </div>
-                )}
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
+                    思考等级 / 推理深度 (Reasoning Effort)
+                  </label>
+                  <select
+                    className="select-field"
+                    style={{ width: '100%' }}
+                    value={formReasoningEffort}
+                    onChange={(e) => setFormReasoningEffort(e.target.value)}
+                  >
+                    <option value="">跟随服务端默认</option>
+                    <option value="none">关闭思考 / Level 0 (none - 极速不思考)</option>
+                    <option value="low">低思考预算 (low)</option>
+                    <option value="medium">中等思考 (medium)</option>
+                    <option value="high">高思考深度 (high)</option>
+                  </select>
+                  <span style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 4, display: 'block' }}>
+                    如需彻底关闭 Gemini / DeepSeek-R1 / o1 类模型的思考过程，请选择「关闭思考 / Level 0 (none)」。
+                  </span>
+                </div>
 
                 <div>
                   <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>

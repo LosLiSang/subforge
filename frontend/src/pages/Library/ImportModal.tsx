@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { X, Upload, Folder, Check, Plus, User, Users } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Creator } from '../../types'
@@ -25,7 +25,10 @@ export function ImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
   const [creatingCreator, setCreatingCreator] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [picking, setPicking] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     if (isOpen) {
@@ -39,6 +42,33 @@ export function ImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
   }, [isOpen])
 
   if (!isOpen) return null
+
+  const handleBrowserFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setUploading(true)
+    setUploadProgress(0)
+    setError(null)
+    try {
+      const res = await api.uploadMedia(file, (pct) => setUploadProgress(pct))
+      if (res.selection_id) {
+        setSelectionId(res.selection_id)
+        const fname = res.filename || file.name
+        setFilename(fname)
+        if (!title) {
+          const baseName = fname.replace(/\.[^/.]+$/, '')
+          setTitle(baseName)
+          const m = baseName.match(/(RJ\d{6,8})/i)
+          if (m) setRjCode(m[1].toUpperCase())
+        }
+      }
+    } catch (err: any) {
+      setError('上传文件失败: ' + (err.message || '未知错误'))
+    } finally {
+      setUploading(false)
+    }
+  }
 
   const handlePickFile = async () => {
     setPicking(true)
@@ -139,22 +169,44 @@ export function ImportModal({ isOpen, onClose, onSuccess }: ImportModalProps) {
 
             <div>
               <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                音频文件 *
+                音频 / 视频文件 *
               </label>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*,video/*,.mp3,.wav,.m4a,.flac,.ogg,.opus,.aac,.mp4,.mkv,.webm,.mov,.avi,.m4v"
+                style={{ display: 'none' }}
+                onChange={handleBrowserFileSelected}
+              />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button
                   type="button"
-                  className="btn"
+                  className="btn btn-primary"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading || picking}
+                >
+                  <Upload size={15} />
+                  {uploading ? `上传中 ${uploadProgress}%` : '从设备上传'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
                   onClick={handlePickFile}
-                  disabled={picking}
+                  disabled={uploading || picking}
+                  title="仅在服务器桌面端可用"
                 >
                   <Folder size={15} />
-                  {picking ? '正在选择…' : '浏览文件'}
+                  {picking ? '正在选择…' : '服务器文件'}
                 </button>
-                <span style={{ fontSize: 13, color: filename ? 'var(--fg-main)' : 'var(--fg-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 13, color: filename ? 'var(--fg-main)' : 'var(--fg-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
                   {filename || '未选择音频文件'}
                 </span>
               </div>
+              {uploading && (
+                <div style={{ marginTop: 8, height: 6, borderRadius: 999, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                  <div style={{ width: `${uploadProgress}%`, height: '100%', background: 'var(--accent-base)', transition: 'width 0.15s ease' }} />
+                </div>
+              )}
             </div>
 
             <div>

@@ -190,43 +190,44 @@ def transcribe(
 
     last_exception: Exception | None = None
     try:
-        audio = file_path.read_bytes()
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                if limiter is None:
-                    response = client.post(url, content=audio, headers=headers)
-                else:
-                    # 槽只覆盖一次真实 HTTP 请求；429/5xx 后的退避不占槽。
-                    with limiter.sync_slot():
-                        response = client.post(url, content=audio, headers=headers)
-                if response.status_code in (401, 403):
-                    raise DeepgramAuthError(
-                        f"Deepgram authentication failed ({response.status_code})"
-                    )
-                if _is_retryable_status(response.status_code):
+        with file_path.open("rb") as audio_file:
+            for attempt in range(1, _MAX_RETRIES + 1):
+                try:
+                    audio_file.seek(0)
+                    if limiter is None:
+                        response = client.post(url, content=audio_file, headers=headers)
+                    else:
+                        # 槽只覆盖一次真实 HTTP 请求；429/5xx 后的退避不占槽。
+                        with limiter.sync_slot():
+                            response = client.post(url, content=audio_file, headers=headers)
+                    if response.status_code in (401, 403):
+                        raise DeepgramAuthError(
+                            f"Deepgram authentication failed ({response.status_code})"
+                        )
+                    if _is_retryable_status(response.status_code):
+                        response.raise_for_status()
                     response.raise_for_status()
-                response.raise_for_status()
-                entries = _parse_response(response.json())
-                if progress_callback:
-                    progress_callback(1.0)
-                logger.info("Deepgram ASR: %d segments transcribed.", len(entries))
-                return entries
-            except DeepgramAuthError:
-                raise
-            except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
-                last_exception = exc
-                status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-                if status is not None and not _is_retryable_status(status):
-                    raise DeepgramError(f"Deepgram non-retryable HTTP error: {status}") from exc
-                if attempt >= _MAX_RETRIES:
-                    break
-                wait = 2 ** (attempt - 1)
-                logger.warning("Deepgram ASR: retryable error on attempt %d/%d, waiting %ss",
-                               attempt, _MAX_RETRIES, wait)
-                sleep_fn(wait)
-            except Exception as exc:
-                last_exception = exc
-                raise DeepgramError(f"Deepgram ASR failed: {exc}") from exc
+                    entries = _parse_response(response.json())
+                    if progress_callback:
+                        progress_callback(1.0)
+                    logger.info("Deepgram ASR: %d segments transcribed.", len(entries))
+                    return entries
+                except DeepgramAuthError:
+                    raise
+                except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
+                    last_exception = exc
+                    status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                    if status is not None and not _is_retryable_status(status):
+                        raise DeepgramError(f"Deepgram non-retryable HTTP error: {status}") from exc
+                    if attempt >= _MAX_RETRIES:
+                        break
+                    wait = 2 ** (attempt - 1)
+                    logger.warning("Deepgram ASR: retryable error on attempt %d/%d, waiting %ss",
+                                   attempt, _MAX_RETRIES, wait)
+                    sleep_fn(wait)
+                except Exception as exc:
+                    last_exception = exc
+                    raise DeepgramError(f"Deepgram ASR failed: {exc}") from exc
     finally:
         if close_client:
             client.close()
@@ -255,7 +256,7 @@ def _media_duration(path: Path) -> float:
 
 def _cut_audio(path: Path, start: float, end: float, output: Path) -> None:
     result = subprocess.run(
-        ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}",
+        ["ffmpeg", "-y", "-threads", "1", "-v", "error", "-ss", f"{start:.3f}",
          "-i", str(path), "-t", f"{end - start:.3f}",
          "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(output)],
         capture_output=True, timeout=120,

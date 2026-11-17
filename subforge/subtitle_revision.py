@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
-from subforge.asr.engine import _audio_duration_seconds
+from subforge.asr.audio import _audio_duration_seconds
 from subforge.library import LibraryStore
 from subforge.models import SubtitleEntry
 from subforge.translate.srt_io import read_srt, write_srt

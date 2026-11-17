@@ -16,11 +16,9 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable
 
-LOCAL = "local"
 REMOTE = "remote"
 
 # 资源池目录（相对 <Library>/.subforge/）
-LOCAL_ASR_POOL_DIR = "local-asr-slots"
 REMOTE_ASR_POOL_DIR = "remote-asr-slots"
 LLM_POOL_DIR = "translation-slots"
 
@@ -33,29 +31,24 @@ LEAVES_ASR_PHASE_EVENTS = frozenset({
 
 @dataclass(frozen=True)
 class ConcurrencyPolicy:
-    local_asr: int = 1
-    remote_asr_tasks: int = 20
-    remote_asr_requests: int = 20
+    remote_asr_tasks: int = 2
+    remote_asr_requests: int = 4
     llm_requests: int = 20
 
     def __post_init__(self) -> None:
-        for name in ("local_asr", "remote_asr_tasks", "remote_asr_requests", "llm_requests"):
+        for name in ("remote_asr_tasks", "remote_asr_requests", "llm_requests"):
             if int(getattr(self, name)) < 1:
                 raise ValueError(f"{name} must be at least 1")
 
     def admission_limit(self, domain: str) -> int:
-        if domain == LOCAL:
-            return self.local_asr
         if domain == REMOTE:
             return self.remote_asr_tasks
         raise ValueError(f"unknown concurrency domain: {domain}")
 
 
 def task_domain(kind: str, asr_provider: str | None = None, processor: str | None = None) -> str:
-    """纯函数：任务归属的并发域。"""
-    if kind == "segment_reprocess":
-        return REMOTE if (processor or "whisper") == "gemini" else LOCAL
-    return LOCAL if (asr_provider or "local") == "local" else REMOTE
+    """纯函数：任务归属的并发域（全云端 ASR，统一归属 remote 域）。"""
+    return REMOTE
 
 
 def chunk_fanout(chunk_count: int, remote_asr_requests: int) -> int:

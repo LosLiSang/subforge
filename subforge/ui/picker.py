@@ -32,6 +32,34 @@ class FakeFilePicker:
         return self.directory
 
 
+class HeadlessFilePicker:
+    """No-op picker for headless / Linux / Raspberry Pi servers without a desktop GUI."""
+
+    def choose_audio(self) -> Path | None:
+        return None
+
+    def choose_image(self) -> Path | None:
+        return None
+
+    def choose_media_folder(self) -> Path | None:
+        return None
+
+    def choose_directory(self) -> Path | None:
+        return None
+
+
+def default_file_picker() -> FilePicker:
+    """Return WindowsFilePicker on Windows when tkinter is available, else HeadlessFilePicker."""
+    import sys
+    if sys.platform != "win32":
+        return HeadlessFilePicker()
+    try:
+        import tkinter  # noqa: F401
+        return WindowsFilePicker()
+    except Exception:
+        return HeadlessFilePicker()
+
+
 class WindowsFilePicker:
     """Use the standard Windows dialog without introducing a GUI runtime."""
 

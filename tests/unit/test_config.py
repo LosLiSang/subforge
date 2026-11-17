@@ -21,8 +21,7 @@ class TestEnsureDefaultConfig:
         assert config_path.exists()
         content = config_path.read_text(encoding="utf-8")
         assert "[asr]" in content
-        assert 'provider = "local"' in content
-        assert 'model = "medium"' in content
+        assert 'provider = "model"' in content
         assert "[translate]" in content
         assert "[llm]" in content
         assert "[deepgram]" in content
@@ -42,8 +41,8 @@ class TestLoadConfigDefaults:
     def test_all_defaults(self, tmp_path):
         # Use a non-existent config file to get pure defaults
         config = load_config(config_path=tmp_path / "nonexistent.toml")
-        assert config.model == "medium"
-        assert config.asr_provider == "local"
+        assert config.model == ""
+        assert config.asr_provider == "model"
         assert config.source_lang == "ja"
         assert config.target_lang == "zh"
         assert config.batch_size == 20
@@ -59,7 +58,6 @@ class TestLoadConfigDefaults:
         assert config.log_file == "subforge.log"
         assert config.output_dir is None
         assert config.force is False
-        assert config.models_dir == Path.home() / ".subforge" / "models"
         assert config.jobs_dir == Path.home() / ".subforge" / "jobs"
 
 
@@ -190,7 +188,7 @@ class TestConfigDataclass:
         assert config.llm_api_key == "sk-direct"
         assert config.concurrency == 1
         # Defaults for unspecified
-        assert config.asr_provider == "local"
+        assert config.asr_provider == "model"
         assert config.batch_size == 20
         assert config.context_size == 10
         assert config.deepgram_model == "nova-3"

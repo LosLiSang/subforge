@@ -334,12 +334,13 @@ export function LibraryPage() {
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', maxWidth: '100%' }}>
           {/* Work kind pills (RJ作品 / 录播作品 / 全部) */}
           <div
             style={{
               display: 'flex',
               gap: 4,
+              flexWrap: 'wrap',
               background: 'rgba(255, 255, 255, 0.04)',
               padding: 3,
               borderRadius: 'var(--radius-sm)',
@@ -367,7 +368,7 @@ export function LibraryPage() {
           </div>
 
           {/* Subtitle status pills */}
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {[
               { key: 'all', label: '全部' },
               { key: 'bilingual', label: '双语已就绪 ✓' },

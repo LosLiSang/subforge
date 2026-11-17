@@ -13,6 +13,8 @@ from subforge.translate.llm_client import LLMError
 @pytest.fixture
 def config(tmp_path):
     return Config(
+        asr_provider="deepgram",
+        deepgram_api_key="dg-test",
         source_lang="ja",
         target_lang="zh",
         concurrency=2,
@@ -37,13 +39,12 @@ class TestProcessOne:
             return "[1] 你好\n[2] 世界"
 
         def fake_asr(*args, **kwargs):
-            kwargs["model_ready_callback"]()
             kwargs["progress_callback"](0.25)
             kwargs["progress_callback"](0.75)
             return sample_entries
 
         with (
-            patch("subforge.orchestrator.asr_transcribe", side_effect=fake_asr),
+            patch("subforge.orchestrator.deepgram_transcribe", side_effect=fake_asr),
             patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
         ):
             await process_one(job, config, pbar_slot=0, event_sink=events.append)
@@ -69,7 +70,7 @@ class TestProcessOne:
         events = []
 
         with (
-            patch("subforge.orchestrator.asr_transcribe", return_value=[]),
+            patch("subforge.orchestrator.deepgram_transcribe", return_value=[]),
             patch("subforge.orchestrator.translate_batch", new=AsyncMock()) as translate,
         ):
             await process_one(job, config, pbar_slot=0, event_sink=events.append)
@@ -85,11 +86,11 @@ class TestProcessOne:
         job = Job(file_path=tmp_path / "secret-name.mp3")
         events = []
 
-        with patch("subforge.orchestrator.asr_transcribe", side_effect=RuntimeError("ASR crashed")):
+        with patch("subforge.orchestrator.deepgram_transcribe", side_effect=RuntimeError("ASR crashed")):
             await process_one(job, config, pbar_slot=0, event_sink=events.append)
 
         assert events[-1].type == EventType.TASK_FAILED
-        assert events[-1].stage == "model"
+        assert events[-1].stage == "asr"
         assert events[-1].error_type == "RuntimeError"
         assert events[-1].message == "ASR crashed"
         assert str(job.file_path) not in events[-1].message
@@ -102,7 +103,7 @@ class TestProcessOne:
 
         with (
             patch(
-                "subforge.orchestrator.asr_transcribe",
+                "subforge.orchestrator.deepgram_transcribe",
                 return_value=sample_entries,
             ),
             patch(
@@ -117,43 +118,6 @@ class TestProcessOne:
         assert job.translate_progress == 1.0
         assert job.error is None
 
-    async def test_direct_model_path_bypasses_cache_lookup(self, config, sample_entries, tmp_path):
-        job = Job(file_path=tmp_path / "test.mp3", model_size="large-v3")
-        direct = tmp_path / "large-v3"
-        direct.mkdir()
-        config.direct_model_path = direct
-
-        async def fake_translate(msgs, cfg, activity_callback=None):
-            return "[1] 你好\n[2] 世界"
-
-        with (
-            patch("subforge.orchestrator.ensure_model") as mock_ensure,
-            patch("subforge.orchestrator.asr_transcribe", return_value=sample_entries) as mock_asr,
-            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
-        ):
-            await process_one(job, config, pbar_slot=0)
-
-        mock_ensure.assert_not_called()
-        assert mock_asr.call_args.kwargs["model_size"] == str(direct)
-        assert mock_asr.call_args.kwargs["local_files_only"] is True
-
-    async def test_default_local_provider_uses_local_asr(self, config, sample_entries, tmp_path):
-        job = Job(file_path=tmp_path / "test.mp3")
-
-        async def fake_translate(msgs, cfg, activity_callback=None):
-            return "[1] 你好\n[2] 世界"
-
-        with (
-            patch("subforge.orchestrator.asr_transcribe", return_value=sample_entries) as mock_local,
-            patch("subforge.orchestrator.deepgram_transcribe") as mock_deepgram,
-            patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
-        ):
-            await process_one(job, config, pbar_slot=0)
-
-        assert job.status == JobStatus.DONE
-        assert mock_local.call_count == 1
-        mock_deepgram.assert_not_called()
-
     async def test_deepgram_provider_uses_deepgram_asr(self, config, sample_entries, tmp_path):
         job = Job(file_path=tmp_path / "test.mp3")
         config.asr_provider = "deepgram"
@@ -165,16 +129,12 @@ class TestProcessOne:
             return "[1] 你好\n[2] 世界"
 
         with (
-            patch("subforge.orchestrator.ensure_model") as mock_ensure_model,
-            patch("subforge.orchestrator.asr_transcribe") as mock_local,
             patch("subforge.orchestrator.deepgram_transcribe", return_value=sample_entries) as mock_deepgram,
             patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
         ):
             await process_one(job, config, pbar_slot=0)
 
         assert job.status == JobStatus.DONE
-        mock_ensure_model.assert_not_called()
-        mock_local.assert_not_called()
         assert mock_deepgram.call_count == 1
         _, kwargs = mock_deepgram.call_args
         assert kwargs["api_key"] == "dg-test"
@@ -196,7 +156,7 @@ class TestProcessOne:
         job = Job(file_path=tmp_path / "broken.mp3")
 
         with patch(
-            "subforge.orchestrator.asr_transcribe",
+            "subforge.orchestrator.deepgram_transcribe",
             side_effect=RuntimeError("ASR crashed"),
         ):
             await process_one(job, config, pbar_slot=0)
@@ -212,7 +172,7 @@ class TestProcessOne:
 
         with (
             patch(
-                "subforge.orchestrator.asr_transcribe",
+                "subforge.orchestrator.deepgram_transcribe",
                 return_value=sample_entries,
             ),
             patch(
@@ -235,7 +195,7 @@ class TestProcessOne:
         write_srt(sample_entries, tmp_path / "test.zh.srt")
 
         with (
-            patch("subforge.orchestrator.asr_transcribe") as mock_asr,
+            patch("subforge.orchestrator.deepgram_transcribe") as mock_asr,
             patch("subforge.orchestrator.translate_batch", new_callable=AsyncMock) as mock_translate,
         ):
             await process_one(job, config, pbar_slot=0)
@@ -261,7 +221,7 @@ class TestProcessOne:
             return "[1] 你好\n[2] 世界"
 
         with (
-            patch("subforge.orchestrator.asr_transcribe") as mock_asr,
+            patch("subforge.orchestrator.deepgram_transcribe") as mock_asr,
             patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
         ):
             await process_one(job, config, pbar_slot=0)
@@ -281,7 +241,7 @@ class TestProcessOne:
             return "[1] 你好\n[2] 世界"
 
         with (
-            patch("subforge.orchestrator.asr_transcribe", return_value=sample_entries) as mock_asr,
+            patch("subforge.orchestrator.deepgram_transcribe", return_value=sample_entries) as mock_asr,
             patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
         ):
             await process_one(job, config, pbar_slot=0)
@@ -301,7 +261,7 @@ class TestProcessOne:
             return "[1] 你好\n[2] 世界"
 
         with (
-            patch("subforge.orchestrator.asr_transcribe") as mock_asr,
+            patch("subforge.orchestrator.deepgram_transcribe") as mock_asr,
             patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
         ):
             await process_one(job, config, pbar_slot=0)
@@ -344,7 +304,7 @@ class TestProcessOne:
             return "[1] 你好\n[2] 世界"
 
         with (
-            patch("subforge.orchestrator.asr_transcribe", return_value=sample_entries) as mock_asr,
+            patch("subforge.orchestrator.deepgram_transcribe", return_value=sample_entries) as mock_asr,
             patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
         ):
             await process_one(job, config, pbar_slot=0)
@@ -395,7 +355,7 @@ class TestProcessOne:
             return "\n".join(f"[{i}] ok{i}" for i in range(1, 11))
 
         with (
-            patch("subforge.orchestrator.asr_transcribe", return_value=entries),
+            patch("subforge.orchestrator.deepgram_transcribe", return_value=entries),
             patch("subforge.orchestrator.translate_batch", side_effect=flaky_translate),
         ):
             await process_one(job, config, pbar_slot=0)
@@ -435,7 +395,7 @@ class TestProcessOne:
             return "\n".join(f"[{i}] live{i}" for i in range(11, 16))
 
         with (
-            patch("subforge.orchestrator.asr_transcribe") as mock_asr,
+            patch("subforge.orchestrator.deepgram_transcribe") as mock_asr,
             patch("subforge.orchestrator.translate_batch", side_effect=translate_remaining) as mock_translate,
         ):
             await process_one(job, config, pbar_slot=0)
@@ -465,7 +425,7 @@ class TestProcessAll:
 
         with (
             patch(
-                "subforge.orchestrator.asr_transcribe",
+                "subforge.orchestrator.deepgram_transcribe",
                 return_value=sample,
             ),
             patch(
@@ -493,7 +453,7 @@ class TestProcessAll:
 
         with (
             patch(
-                "subforge.orchestrator.asr_transcribe",
+                "subforge.orchestrator.deepgram_transcribe",
                 side_effect=flaky_asr,
             ),
             patch(
@@ -531,7 +491,7 @@ class TestProcessAll:
 
         with (
             patch(
-                "subforge.orchestrator.asr_transcribe",
+                "subforge.orchestrator.deepgram_transcribe",
                 side_effect=tracking_asr,
             ),
             patch(

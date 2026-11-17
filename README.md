@@ -2,10 +2,10 @@
 
 <div align="center">
 
-**面向同人音声与 ASMR 的本地字幕翻译工作台**
+**面向同人音声与 ASMR 的轻量云端字幕翻译工作台 & 手机端 PWA**
 
-用 faster-whisper / Deepgram / Gemini 类音频模型识别日语，再交给 LLM 翻译成中文，输出中日双语 SRT。<br>
-作品库、DLsite 元数据、标签与创作者管理、任务中心、双语播放器、桌面歌词，都在本机一个 Web 工作台里完成。
+用云端 ASR（OpenAI Whisper 兼容 / DeepSeek ASR / Gemini / Deepgram）识别日语，再交给 LLM 翻译成中文，输出中日双语字幕。<br>
+去除本地显卡与重型推理依赖，可轻量运行在树莓派（ARM64）上，并在手机端以 PWA 形式流畅播放、上传音视频与导入外挂字幕。
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square)](pyproject.toml)
 [![React](https://img.shields.io/badge/UI-React%2019%20%2B%20FastAPI-61dafb?style=flat-square)](frontend/)
@@ -67,10 +67,11 @@
 
 同人音声的主力场景是 ASMR、低语和长音频。通用字幕工具经常漏掉短促气音，或把耳语识别成幻觉文本。SubForge 把这类内容作为核心场景：
 
-- **ASMR 优先**：低阈值 VAD、响度预处理、幻觉抑制，尽量保留低语；
-- **本地优先**：作品库、模型缓存和任务状态都在本机，UI 只监听 `127.0.0.1`；
+- **ASMR 优先**：低阈值语音分段、响度自适应与并发限流，尽量保留耳语与气音；
+- **轻量自托管（支持树莓派）**：无 `faster-whisper` / `PyTorch` / CUDA 依赖，常驻内存仅约 30–50 MB，配合 Caddy / Tailscale Serve 即可在手机与桌面安全访问；
+- **手机端 PWA**：响应式抽屉导航与卡片列表、自定义主题下拉抽屉、`MediaSession` 锁屏控制、300% 音量增益浮层、Android 系统画中画小窗字幕、浏览器流式上传与外挂字幕导入（`.srt`/`.vtt`/`.lrc`/`.ass`）；
 - **窄而深**：专注日语音频到中文字幕，不做泛用多语言字幕工具；
-- **不动源文件**：导入时复制音频或提取视频音轨，原始文件不会被移动、修改或删除。
+- **不动源文件**：导入时复制音频或提取视频音轨（支持编码直拷），原始文件不会被移动、修改或删除。
 
 ```text
 音频 / 视频 / RJ 目录 → 导入作品库（自动拉取 DLsite 元数据）→ ASR → 时间轴修正 → LLM 翻译
@@ -87,15 +88,16 @@ subforge ui        # 打开 http://127.0.0.1:8765
 
 - **封面墙 / 列表视图**：按标题、RJ 号、声优、社团、`#标签` 搜索；按创作者、标签、作品类型（RJ 作品 / 录播）和字幕状态（双语就绪 / 仅中字 / 仅日文 / 未转写）筛选；
 - **DLsite 元数据**：导入时识别目录名或文件名里的 RJ 号，自动拉取标题、社团、声优、标签、发售日和封面；已有作品也可以在详情页一键“从 DLsite 同步”；
-- **多种导入方式**：单个音频、整包 RJ 目录（递归扫描，常见视频转为 M4A）、URL 导入；批量导入允许部分成功；
+- **多种导入方式**：支持桌面文件选择、手机浏览器流式上传（`POST /api/upload-media`）、无头服务端目录浏览（`/api/fs/list`）以及 URL 导入；批量导入允许部分成功；
+- **外挂字幕兼容**：支持从手机或桌面导入 `.srt`、`.vtt`、`.lrc`、`.ass`/`.ssa` 外部字幕，并支持导出为 `.srt`、`.vtt`、`.lrc`；
 - **标签管理**：新建、重命名（所有作品同步更新，改成已有标签名即合并）、删除；作品卡片上的标签点一下就能筛选；
 - **创作者管理**：声优 / 社团作为可复用实体，支持新建、编辑、合并；同名创作者自动去重合并。
 
 ### 播放与校对
 
 - **双语播放器**：双语对照 / 仅日文 / 仅中文三种台本模式，跟随播放高亮当前句，可调字号、一键定位；
-- **悬浮歌词与桌面歌词**：应用内悬浮歌词条，或画中画（PiP）独立置顶小窗，切到别的应用也能看字幕；
-- **全局播放栏**：切换页面不中断播放，支持循环、倍速和睡眠定时；
+- **悬浮歌词与系统小窗字幕**：应用内悬浮歌词条；桌面端支持 `Document Picture-in-Picture` 独立置顶小窗，Android Chrome/Edge 支持 `16:9` Canvas-to-Video 系统画中画小窗字幕；
+- **全局播放栏**：切换页面不中断播放，支持循环、倍速、睡眠定时、`MediaSession` 锁屏控制与最高 300% 音量增益；
 - **校对模式**：直接编辑字幕文本、拆分合并句子，修改前自动快照，可随时还原；
 - **片段重处理**：觉得某句不对就点“重跑”，只重新识别、翻译这一段，候选结果审阅后再替换。
 
@@ -103,7 +105,7 @@ subforge ui        # 打开 http://127.0.0.1:8765
 
 - **统一任务队列**：媒体导入、ASR、翻译和片段重处理都在一张表里，显示所用 ASR / 翻译模型、进度和耗时；
 - **可靠重试**：限流自动退避，无进展才计入失败；失败或取消的任务可以手动重试，任务和候选结果跨重启保留；
-- **并发分域**：本地 Whisper（受限于显存）与网络 ASR（受限于 API 配额）各用一个信号量，互不抢占；
+- **并发限流**：针对云端 ASR 与翻译 API 分别控制并发与退避重试，避免打爆树莓派内存或 API 配额；
 - **统一模型 Profile**：同一份配置可同时标记为 `transcribe` / `translate` / `merge` 三种能力，每张卡片显示连通检测、延迟和调用次数。
 
 | 能力 | 用途 |
@@ -112,7 +114,7 @@ subforge ui        # 打开 http://127.0.0.1:8765
 | `translate` | 文本翻译 |
 | `merge` | 分片结果的文本层校对与合并（不改时间轴） |
 
-支持本地 faster-whisper、Deepgram、OpenAI 兼容端点以及 Google `generateContent`；DeepSeek、OpenAI、Gemini、Groq、Ollama、LM Studio 等服务都可以接入。API Key 留空保存时不会覆盖已有的值。
+支持 **OpenAI Whisper 兼容**（`openai_whisper`，如 OpenAI / Groq）、**DeepSeek ASR**（`deepseek_asr`，自动按 ≤110s / ≤8 MiB 分片）、**Google Gemini 原生**（`google_native`）、**OpenAI 兼容多模态**（`openai_compatible`）以及 **Deepgram Nova-3**；翻译支持 DeepSeek、OpenAI、Gemini、Groq、Ollama、LM Studio 等。API Key 留空保存时不会覆盖已有的值。
 
 ### 字幕处理
 
@@ -176,12 +178,11 @@ subforge audio.m4a --mode retranslate --profile DeepSeek
 # 试运行（Dry-run）：预检目录并输出计划（全处理 / 仅翻译 / 断点续跑 / 跳过）
 subforge ./RJ01499022/ --dry-run
 
-# 原生音频模型 ASR（如调用已配置的 Gemini 或音频模型分片识别）
-subforge audio.m4a --asr-profile GeminiAudio
+# 原生音频模型 / 云端 ASR（如已配置的 Gemini / OpenAI Whisper / DeepSeek ASR Profile）
+subforge audio.m4a --asr-profile GeminiAudio --profile DeepSeek
 
-# GPU 加速与多文件并发
-subforge audio.m4a --asmr --device auto --compute-type float16
-subforge ./RJ01499022/ --asmr --device auto --concurrency 2
+# 多文件并发（结合云端 ASR）
+subforge ./RJ01499022/ --asmr --concurrency 2 --asr-profile GroqWhisper
 
 # 忽略已有字幕与断点状态，强制从 ASR 阶段重新处理
 subforge audio.m4a --force
@@ -189,7 +190,6 @@ subforge audio.m4a --force
 # 常用辅助命令：
 subforge status                   # 环境与服务运行状态概览
 subforge profiles list            # 查看已配置的模型 Profile 列表
-subforge models download large-v3 # 预下载 Whisper 模型
 subforge check                    # 环境依赖与 API 连通性体检
 ```
 
@@ -220,15 +220,13 @@ export DEEPGRAM_API_KEY=dg-your-key
 
 ```toml
 [asr]
-provider = "local"              # local / deepgram
-model = "large-v3"
-device = "auto"
-compute_type = "float16"
+provider = "model"              # model / deepgram
+source_lang = "ja"
 
 [translate]
 target_lang = "zh"
 batch_size = 20
-workers = 20
+workers = 4
 
 [llm]
 api_key = ""
@@ -240,19 +238,25 @@ concurrency = 2
 output_dir = ""                 # 空值表示输出到源文件目录
 ```
 
-> Deepgram 会把音频上传到云端，并可能产生 API 费用。处理隐私内容前，请先确认账号额度与数据策略。
+> 云端 ASR 会把切分后的音频片段上传到对应服务商，并可能产生 API 费用。处理隐私内容前，请先确认账号额度与数据策略。
 
-## ASR 模型选择
+## 云端 ASR 协议与树莓派部署
 
-| 模型 | 资源占用 | 速度 | 精度 | 建议场景 |
-|------|----------|------|------|----------|
-| `tiny` | 最低 | 最快 | 一般 | 测试与快速预览 |
-| `base` | 低 | 很快 | 尚可 | 简单清晰的对话 |
-| `small` | 较低 | 快 | 良好 | 日常音频 |
-| `medium` | 中 | 中等 | 很好 | 普通日语内容 |
-| `large-v3` | 高 | 慢 | 最佳 | ASMR、低语与复杂音频 |
+| 协议 (`protocol`) | 适用服务 | 说明 |
+|-------------------|----------|------|
+| `openai_whisper` | OpenAI / Groq / Fireworks | 标准 `/audio/transcriptions` (`verbose_json`)，带分段时间戳 |
+| `deepseek_asr` | DeepSeek (`/v1/tools/asr`) | 自动按 ≤110s / ≤8 MiB 切分语音区间并映射文本 |
+| `google_native` | Google Gemini | 原生 `generateContent` 音频多模态转写 |
+| `openai_compatible` | Gemini / GPT-4o Audio 代理 | OpenAI Chat Completions 音频输入格式 |
+| `deepgram` | Deepgram Nova-3 | 极速云端语音识别（流式读取磁盘文件，低内存） |
 
-首次使用本地 ASR 时会下载模型到 `~/.subforge/models/`。离线机器也可以在设置页指定包含 `model.bin` 与 `config.json` 的 CTranslate2 模型目录。
+### 树莓派 / 无头服务器部署
+
+仓库已内置 [deploy/rpi/README.md](deploy/rpi/README.md)、[deploy/rpi/subforge-ui.service](deploy/rpi/subforge-ui.service) 与 [Dockerfile](Dockerfile)，支持在树莓派（ARM64）上以约 30–50 MB 常驻内存运行，并通过 **Caddy** 或 **Tailscale Serve** 提供 HTTPS 以在手机浏览器安装为 PWA：
+
+```bash
+subforge ui --host 127.0.0.1 --port 8765 --no-browser --allowed-hosts your-domain.example
+```
 
 ## CLI 速查
 
@@ -260,27 +264,24 @@ output_dir = ""                 # 空值表示输出到源文件目录
 subforge [OPTIONS] <AUDIO_OR_DIR>... | <COMMAND> [ARGS]...
 
 命令：
-  ui                              启动本地 Library UI Web 工作台服务
-  status                          查看环境、模型、Profile 与断点运行状态
-  check (doctor)                  全面体检 Python、FFmpeg、CUDA 与 API 连通性
-  models                          查看与预下载本地 faster-whisper 模型
+  ui                              启动 Library UI Web 工作台服务（支持 --host / --allowed-hosts）
+  status                          查看环境、Profile 与断点运行状态
+  check (doctor)                  全面体检 Python、FFmpeg 与 API 连通性
   profiles                        查看已配置的模型 Profile 并测试连接
   jobs                            查看或清理批处理断点恢复记录
 
 批处理核心选项：
-  -m, --model TEXT                Whisper 模型：tiny/base/small/medium/large-v3
-  --asr-provider local|deepgram|model
+  -m, --model TEXT                云端 ASR 模型覆盖（如 Deepgram 模型名）
+  --asr-provider model|deepgram
   --asr-profile TEXT              使用指定模型 Profile 作为 ASR 识别引擎
   --profile TEXT                  直接使用 Web 配置好的翻译模型 Profile
   --mode continue|retranslate|force
                                   continue（断点续跑）/ retranslate（仅重译）/ force（从头重做）
   --retranslate-only              --mode retranslate 的快捷开关
-  --scene asmr|general            场景预设：asmr（低 VAD 阈值、响度归一化）/ general
+  --scene asmr|general            场景预设：asmr（低语音阈值、响度优化）/ general
   --asmr                          --scene asmr 的快捷开关
   --dry-run                       预检扫描目录并打印处理计划，不消耗 token
   --force                         --mode force 的快捷开关
-  --device cpu|cuda|auto          计算设备
-  --compute-type default|auto|float16|int8_float16|int8|float32
   --source-lang TEXT
   --target-lang TEXT
   --concurrency INTEGER RANGE     并行处理文件数（必须 >= 1）
@@ -357,9 +358,10 @@ subforge/
 ├── worker.py              # 独立处理 Worker / JSONL 事件
 ├── timeline.py            # 时间轴后处理
 ├── ui/                    # FastAPI 后端、任务队列、模型 Profile、前端构建产物 dist/
-├── asr/                   # faster-whisper / Deepgram / 模型缓存
-└── translate/             # 批次构建、OpenAI 兼容客户端、SRT 读写
-frontend/                  # React 19 + TypeScript + Vite 前端源码
+├── asr/                   # 音频工具（ffmpeg）/ Deepgram / 远端并发限流
+└── translate/             # 批次构建、OpenAI 兼容客户端、SRT/VTT/LRC/ASS 读写
+frontend/                  # React 19 + TypeScript + Vite 前端源码（含 PWA 与移动端适配）
+deploy/rpi/                # 树莓派 systemd 服务与部署说明
 docs/                      # Zensical 文档源（dev/ 为开发者参考，配置见 mkdocs.yml）
 tests/
 ├── unit/                  # 纯逻辑表驱动单测
@@ -378,8 +380,7 @@ tests/
 
 ## 致谢
 
-- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — 基于 CTranslate2 的 Whisper 推理实现
-- [OpenAI Whisper](https://github.com/openai/whisper) — 本地 ASR 使用的基础模型
+- [DeepSeek](https://www.deepseek.com/) / [OpenAI](https://openai.com/) / [Google Gemini](https://ai.google.dev/) — 云端 ASR 与翻译模型能力
 - [Deepgram](https://deepgram.com/) — 可选的云端 ASR 后端
 - [Zensical](https://zensical.org/) — 文档站构建工具
 

@@ -14,7 +14,7 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Optional
 
 import click
 from rich import box
@@ -318,10 +318,9 @@ def process_cmd(
         "-m",
         help="Deepgram/cloud ASR model override",
     ),
-    asr_provider: str = typer.Option(
+    asr_provider: Optional[Literal["deepgram", "model"]] = typer.Option(
         None,
         "--asr-provider",
-        click_type=click.Choice(["deepgram", "model"]),
         help="ASR provider: model / deepgram (default: model)",
     ),
     asr_profile: str = typer.Option(
@@ -334,10 +333,9 @@ def process_cmd(
         "--profile",
         help="Use configured ModelProfile for LLM translation (from ~/.subforge/model-profiles.json)",
     ),
-    mode: str = typer.Option(
+    mode: Literal["continue", "retranslate", "force"] = typer.Option(
         "continue",
         "--mode",
-        click_type=click.Choice(["continue", "retranslate", "force"]),
         help="Processing mode: continue (resume), retranslate (reuse ja.srt, re-translate zh), force (re-ASR)",
     ),
     retranslate_only: bool = typer.Option(
@@ -345,10 +343,9 @@ def process_cmd(
         "--retranslate-only",
         help="Shortcut for --mode retranslate: keep existing ja.srt and only re-translate Chinese subtitles",
     ),
-    scene: str = typer.Option(
+    scene: Optional[Literal["asmr", "general"]] = typer.Option(
         None,
         "--scene",
-        click_type=click.Choice(["asmr", "general"]),
         help="Audio scene preset: asmr (low vad, loudnorm, hallucination guard) / general",
     ),
     asmr: bool = typer.Option(
@@ -441,10 +438,9 @@ def process_cmd(
         "--output-dir",
         help="Output directory for SRT files (default: same as source)",
     ),
-    log_level: str = typer.Option(
+    log_level: Optional[Literal["DEBUG", "INFO", "WARNING", "ERROR"]] = typer.Option(
         None,
         "--log-level",
-        click_type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
         help="Log level (default: INFO)",
     ),
 ) -> None:

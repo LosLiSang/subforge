@@ -38,13 +38,13 @@ interface ColumnWidths {
 }
 
 const DEFAULT_COL_WIDTHS: ColumnWidths = {
-  index: 44,
-  play: 48,
-  title: 360,
-  duration: 90,
-  status: 110,
-  size: 96,
-  actions: 250,
+  index: 40,
+  play: 44,
+  title: 220,
+  duration: 72,
+  status: 96,
+  size: 80,
+  actions: 304,
 }
 
 const MIN_COL_WIDTHS: Record<keyof ColumnWidths, number> = {
@@ -54,7 +54,7 @@ const MIN_COL_WIDTHS: Record<keyof ColumnWidths, number> = {
   duration: 70,
   status: 80,
   size: 75,
-  actions: 180,
+  actions: 280,
 }
 
 function loadSavedColWidths(): ColumnWidths {
@@ -62,7 +62,11 @@ function loadSavedColWidths(): ColumnWidths {
     const saved = localStorage.getItem(STORAGE_KEY_COL_WIDTHS)
     if (saved) {
       const parsed = JSON.parse(saved)
-      return { ...DEFAULT_COL_WIDTHS, ...parsed }
+      const merged = { ...DEFAULT_COL_WIDTHS, ...parsed }
+      if (typeof merged.actions === 'number' && merged.actions < MIN_COL_WIDTHS.actions) {
+        merged.actions = DEFAULT_COL_WIDTHS.actions
+      }
+      return merged
     }
   } catch {}
   return { ...DEFAULT_COL_WIDTHS }

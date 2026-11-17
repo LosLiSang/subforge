@@ -1130,55 +1130,43 @@ export function ItemDetailPage() {
                     to={`/tracks/${track.track_id}/play`}
                     className="btn btn-sm"
                     style={{ background: 'var(--accent-soft)', color: 'var(--accent-base)' }}
+                    title="打开沉浸式双语台本播放器"
                   >
                     <FileText size={13} />
-                    台本
+                    播放台本
                   </Link>
                   <button
                     type="button"
                     className="btn btn-sm btn-ghost"
                     onClick={() => handleOpenProcess(track.track_id)}
+                    title="发起 ASR 识别与 LLM 翻译"
                   >
                     <Sparkles size={13} />
                     处理
                   </button>
                   <button
                     type="button"
-                    className="btn btn-sm btn-ghost"
+                    className="btn btn-sm btn-ghost btn-circle"
+                    style={{ width: 30, height: 30, padding: 0 }}
                     onClick={() => setSubImportTrack(track)}
+                    title="导入外部字幕 (.srt / .vtt / .lrc / .ass)"
                   >
                     <Upload size={13} />
-                    导入字幕
                   </button>
                   {track.has_target_sub && (
-                    <>
-                      <a
-                        href={`/tracks/${track.track_id}/subtitles/zh/download?format=srt`}
-                        download
-                        className="btn btn-sm btn-ghost"
-                      >
-                        <Download size={13} />
-                        SRT
-                      </a>
-                      <a
-                        href={`/tracks/${track.track_id}/subtitles/zh/download?format=vtt`}
-                        download
-                        className="btn btn-sm btn-ghost"
-                      >
-                        VTT
-                      </a>
-                      <a
-                        href={`/tracks/${track.track_id}/subtitles/zh/download?format=lrc`}
-                        download
-                        className="btn btn-sm btn-ghost"
-                      >
-                        LRC
-                      </a>
-                    </>
+                    <a
+                      href={`/tracks/${track.track_id}/subtitles/zh/download`}
+                      download
+                      className="btn btn-sm btn-ghost btn-circle"
+                      style={{ width: 30, height: 30, padding: 0 }}
+                      title="下载中文字幕 (.srt)"
+                    >
+                      <Download size={13} />
+                    </a>
                   )}
                   <button
                     type="button"
-                    className="btn btn-sm btn-ghost btn-danger"
+                    className="btn btn-sm btn-ghost btn-circle btn-danger"
                     onClick={() => handleDeleteTrack(track)}
                     title="删除音轨"
                   >

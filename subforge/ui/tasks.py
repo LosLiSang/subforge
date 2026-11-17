@@ -16,8 +16,6 @@ from uuid import uuid4
 from subforge.concurrency import (
     LEAVES_ASR_PHASE_EVENTS,
     LLM_POOL_DIR,
-    LOCAL,
-    LOCAL_ASR_POOL_DIR,
     REMOTE,
     REMOTE_ASR_POOL_DIR,
     AdmissionGate,
@@ -261,7 +259,6 @@ class TaskManager:
             raise ValueError("translate_workers must be at least 1")
         # 未提供 policy_resolver 时用构造参数组成静态策略（测试/脚本场景）。
         static_policy = ConcurrencyPolicy(
-            local_asr=asr_concurrency,
             remote_asr_tasks=remote_asr_task_concurrency,
             remote_asr_requests=remote_asr_concurrency,
             llm_requests=translate_workers,
@@ -270,8 +267,7 @@ class TaskManager:
         self.library = library
         self.worker = worker
         self._gates = {
-            domain: AdmissionGate(lambda d=domain: self.policy().admission_limit(d))
-            for domain in (LOCAL, REMOTE)
+            REMOTE: AdmissionGate(lambda: self.policy().admission_limit(REMOTE)),
         }
         self._translate_workers = translate_workers
         self._translate_workers_resolver = translate_workers_resolver
@@ -547,9 +543,6 @@ class TaskManager:
         output_dir = self.library.root / item.directory / "subtitles"
         output_dir.mkdir(parents=True, exist_ok=True)
         profile = self._profile_resolver(snapshot.get("llm_profile_id")) if self._profile_resolver else None
-        model_name = snapshot.get("whisper_model", "medium")
-        model_path = self._direct_model_resolver(model_name) if self._direct_model_resolver else None
-        models_dir = self._models_dir_resolver() if self._models_dir_resolver else None
         translate_workers = (
             self._translate_workers_resolver()
             if self._translate_workers_resolver is not None
@@ -567,13 +560,9 @@ class TaskManager:
         policy = self.policy()
         pools_root = (self.library.root / ".subforge").resolve()
         overrides = {
-            "asr_provider": snapshot.get("asr_provider", "local"),
-            "model": model_name,
+            "asr_provider": snapshot.get("asr_provider", "model"),
             "asr_chunk_seconds": int(snapshot.get("asr_chunk_seconds", 60)),
-            "device": "auto",
-            "compute_type": "auto",
             "output_dir": str(output_dir),
-            "models_dir": str(Path(models_dir).resolve()) if models_dir else None,
             "jobs_dir": str(resume_dir),
             "llm_base_url": profile.base_url if profile else None,
             "llm_model": profile.model if profile else None,
@@ -585,8 +574,6 @@ class TaskManager:
             "translation_global_workers": translate_workers,
             "translation_prompt": translation_prompt,
             "translation_limiter_dir": str(pools_root / LLM_POOL_DIR),
-            "local_asr_global_workers": policy.local_asr,
-            "local_asr_limiter_dir": str(pools_root / LOCAL_ASR_POOL_DIR),
             "remote_asr_global_workers": policy.remote_asr_requests,
             "remote_asr_limiter_dir": str(pools_root / REMOTE_ASR_POOL_DIR),
         }
@@ -613,7 +600,6 @@ class TaskManager:
             "media_path": str(self.library.track_media_path(task.track_id)),
             "source_lang": track.source_language,
             "target_lang": track.target_language,
-            "model": snapshot.get("whisper_model", "medium"),
             "resume_dir": str(resume_dir),
             "config_overrides": overrides,
             "llm_api_key": profile.api_key if profile else "",
@@ -621,7 +607,6 @@ class TaskManager:
             "merge_api_key": merge_profile.api_key if merge_profile else "",
             "deepgram_api_key": deepgram_api_key,
             "proxy_url": proxy_url,
-            "model_path": str(Path(model_path).resolve()) if model_path else "",
         }
 
     def _apply_event(self, task: TaskRecord, event: dict) -> None:
@@ -711,8 +696,6 @@ class TaskManager:
                 queued += 1
         policy = self.policy()
         return {
-            "local_running": local_running,
-            "local_capacity": policy.local_asr,
             "remote_running": remote_running,
             "remote_capacity": policy.remote_asr_tasks,
             "remote_request_capacity": policy.remote_asr_requests,

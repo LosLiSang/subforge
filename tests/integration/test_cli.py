@@ -32,23 +32,6 @@ def test_cli_ui_custom_options(runner):
         mock_run.assert_called_once_with(port=9999, open_browser=False)
 
 
-def test_cli_models_commands(runner, tmp_path):
-    cfg_path = tmp_path / "config.toml"
-    cfg_path.write_text("[asr]\nmodel = 'tiny'\n", encoding="utf-8")
-
-    res_list = runner.invoke(main, ["models", "list", "--config", str(cfg_path)])
-    assert res_list.exit_code == 0
-    assert "tiny" in res_list.output
-    assert "large-v3" in res_list.output
-
-    res_path = runner.invoke(main, ["models", "path", "--config", str(cfg_path)])
-    assert res_path.exit_code == 0
-    assert ".subforge" in res_path.output
-
-    res_check = runner.invoke(main, ["models", "check", "tiny", "--config", str(cfg_path)])
-    assert res_check.exit_code == 0
-
-
 def test_cli_profiles_list_and_test(runner, tmp_path, monkeypatch):
     monkeypatch.setattr("subforge.cli.DEFAULT_CONFIG_DIR", tmp_path)
 

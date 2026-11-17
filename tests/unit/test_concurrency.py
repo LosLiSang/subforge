@@ -3,7 +3,6 @@ import asyncio
 import pytest
 
 from subforge.concurrency import (
-    LOCAL,
     REMOTE,
     AdmissionGate,
     ConcurrencyPolicy,
@@ -13,12 +12,8 @@ from subforge.concurrency import (
 
 
 @pytest.mark.parametrize("kind, provider, processor, expected", [
-    ("full_process", "local", None, LOCAL),
-    ("full_process", None, None, LOCAL),
     ("full_process", "deepgram", None, REMOTE),
     ("full_process", "model", None, REMOTE),
-    ("segment_reprocess", None, "whisper", LOCAL),
-    ("segment_reprocess", None, None, LOCAL),
     ("segment_reprocess", "deepgram", "gemini", REMOTE),
 ])
 def test_task_domain(kind, provider, processor, expected):
@@ -36,12 +31,11 @@ def test_chunk_fanout_bounded_by_chunks_and_request_pool(chunks, requests, expec
 
 
 def test_policy_admission_limits_and_validation():
-    policy = ConcurrencyPolicy(local_asr=2, remote_asr_tasks=1, remote_asr_requests=6, llm_requests=8)
-    assert policy.admission_limit(LOCAL) == 2
+    policy = ConcurrencyPolicy(remote_asr_tasks=1, remote_asr_requests=6, llm_requests=8)
     assert policy.admission_limit(REMOTE) == 1
     with pytest.raises(ValueError):
         policy.admission_limit("other")
-    for field in ("local_asr", "remote_asr_tasks", "remote_asr_requests", "llm_requests"):
+    for field in ("remote_asr_tasks", "remote_asr_requests", "llm_requests"):
         with pytest.raises(ValueError):
             ConcurrencyPolicy(**{field: 0})
 

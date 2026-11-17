@@ -141,7 +141,7 @@ class TestResumeStore:
         assert state.media["size"] == media.stat().st_size
         assert state.media["mtime_ns"] == media.stat().st_mtime_ns
         assert state.config_fingerprint == {
-            "asr_provider": "local",
+            "asr_provider": "model",
             "source_lang": "ja",
             "target_lang": "zh",
             "asr_model": "medium",

@@ -18,41 +18,7 @@
 
 <form method="post" action="/settings" data-secure class="settings-dashboard">
 
-  <section id="settings-models" class="dash-section tab-panel active" :class="{ 'active': currentTab === 'models' }" x-show="currentTab === 'models'" data-tab-panel="models">
-    <div class="field-list">
-      <div class="field">
-        <div class="field-label">模型缓存/下载目录</div>
-        <div class="path-picker">
-          <input name="models_dir" value="{{ models_dir }}">
-          <input type="hidden" name="models_dir_selection">
-          <button type="button" class="pick-check-btn" data-pick-directory data-field="models_dir"><svg class="pcb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>选择</button>
-        </div>
-        <small>缺失模型会下载到这个 Hugging Face 缓存根目录。</small>
-      </div>
-      <div class="field">
-        <div class="field-label">medium 直接模型目录</div>
-        <div class="path-picker">
-          <input name="direct_medium" value="{{ direct_medium or '' }}" placeholder="（未设置，从缓存加载）">
-          <input type="hidden" name="direct_medium_selection">
-          <button type="button" class="pick-check-btn" data-pick-directory data-field="direct_medium"><svg class="pcb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>选择</button>
-          <span class="field-check"><button type="button" class="pick-check-btn" data-test-endpoint="/settings/models/medium/check"><svg class="pcb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>检查</button><output class="check-result"></output></span>
-        </div>
-        <small>设置后完全从此目录加载，不访问 Hugging Face。清空表示取消覆盖。</small>
-      </div>
-      <div class="field">
-        <div class="field-label">large-v3 直接模型目录</div>
-        <div class="path-picker">
-          <input name="direct_large-v3" value="{{ direct_large_v3 or '' }}" placeholder="（未设置，从缓存加载）">
-          <input type="hidden" name="direct_large-v3_selection">
-          <button type="button" class="pick-check-btn" data-pick-directory data-field="direct_large-v3"><svg class="pcb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>选择</button>
-          <span class="field-check"><button type="button" class="pick-check-btn" data-test-endpoint="/settings/models/large-v3/check"><svg class="pcb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>检查</button><output class="check-result"></output></span>
-        </div>
-        <small>设置后完全从此目录加载，不访问 Hugging Face。清空表示取消覆盖。</small>
-      </div>
-    </div>
-  </section>
-
-  <section id="settings-network" class="dash-section tab-panel" :class="{ 'active': currentTab === 'network' }" x-show="currentTab === 'network'" data-tab-panel="network">
+  <section id="settings-network" class="dash-section tab-panel active" :class="{ 'active': currentTab === 'network' }" x-show="currentTab === 'network'" data-tab-panel="network">
     <div class="field-list">
       <div class="field">
         <div class="field-label deepgram-key-label">Deepgram API Key <span class="badge {{ 'ok' if deepgram_key_configured else 'badge-none' }}" data-deepgram-status>{{ deepgram_key_masked if deepgram_key_configured else '未配置' }}</span>{% if deepgram_key_deletable %}<button type="button" class="key-delete-x" data-delete-deepgram aria-label="删除 Deepgram API Key">×</button>{% endif %}</div>
@@ -69,11 +35,6 @@
 
   <section id="settings-concurrency" class="dash-section tab-panel" :class="{ 'active': currentTab === 'concurrency' }" x-show="currentTab === 'concurrency'" data-tab-panel="concurrency">
     <div class="field-list">
-      <div class="field">
-        <div class="field-label">本地转写 · 同时加载模型数</div>
-        <input class="narrow" type="number" name="asr_concurrency" min="1" value="{{ asr_concurrency }}">
-        <small>每个模型占一份显存/内存，也就是同时做本地转写的作品数。显存不足时保持 1。</small>
-      </div>
       <div class="field">
         <div class="field-label">网络转写 · 同时转写作品数</div>
         <input class="narrow" type="number" name="remote_asr_task_concurrency" min="1" value="{{ remote_asr_task_concurrency }}">
@@ -107,26 +68,10 @@
       <div class="field">
         <div class="field-label">默认 ASR 引擎</div>
         <select name="default_asr_provider" data-custom-select data-asr-provider>
-          <option value="local" {% if default_processing.asr_provider == 'local' or not default_processing.asr_provider %}selected{% endif %}>本地 Whisper</option>
+          {% if audio_profiles %}<option value="model" {% if default_processing.asr_provider == 'model' or not default_processing.asr_provider %}selected{% endif %}>云端音频模型（Gemini / Whisper API / DeepSeek）</option>{% endif %}
           <option value="deepgram" {% if default_processing.asr_provider == 'deepgram' %}selected{% endif %}>Deepgram</option>
-          {% if audio_profiles %}<option value="model" {% if default_processing.asr_provider == 'model' %}selected{% endif %}>音频模型（Gemini 等）</option>{% endif %}
         </select>
         <small>自动处理任务默认采用的语音识别引擎。</small>
-      </div>
-      <div class="field" data-local-asr-field>
-        <div class="field-label">默认场景（Whisper）</div>
-        <select name="default_scene" data-custom-select>
-          <option value="asmr" {% if default_processing.scene == 'asmr' or not default_processing.scene %}selected{% endif %}>ASMR（针对环境音、耳语与拟音优化）</option>
-          <option value="normal" {% if default_processing.scene == 'normal' %}selected{% endif %}>普通语音（清晰讲话、播客、朗读）</option>
-        </select>
-      </div>
-      <div class="field" data-whisper-field>
-        <div class="field-label">默认 Whisper 模型</div>
-        <select name="default_whisper_model" data-custom-select>
-          {% for m in models %}
-          <option value="{{ m }}" {% if default_processing.whisper_model == m %}selected{% endif %}>{{ m }}</option>
-          {% endfor %}
-        </select>
       </div>
       {% if audio_profiles %}
       <div class="field" data-asr-profile-field>

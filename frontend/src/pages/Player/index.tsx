@@ -12,11 +12,13 @@ import {
   Trash2,
   PictureInPicture,
   FileText,
+  Upload,
 } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Track, Item } from '../../types'
 import { usePlayer } from '../../context/PlayerContext'
 import { useFont } from '../../context/FontContext'
+import { CustomSelect } from '../../components/CustomSelect'
 
 function fmtTime(sec: number): string {
   if (!sec || isNaN(sec)) return '00:00'
@@ -36,6 +38,7 @@ export function PlayerPage() {
     floatLyricsOpen,
     toggleFloatLyrics,
     isDesktopPipActive,
+    isDesktopPipSupported,
     toggleDesktopPip,
     playTrack,
     seek,
@@ -60,10 +63,11 @@ export function PlayerPage() {
   const [llmProfiles, setLlmProfiles] = useState<any[]>([])
   const [selectedAsr, setSelectedAsr] = useState('')
   const [selectedLlm, setSelectedLlm] = useState('')
-  // selectedAsr: 'whisper:<model>' 表示本地 Whisper，否则为音频模型 Profile ID
-  const [selectedScene, setSelectedScene] = useState<'asmr' | 'normal'>('asmr')
-  const [defaultScene, setDefaultScene] = useState<'asmr' | 'normal'>('asmr')
   const [submittingReprocess, setSubmittingReprocess] = useState(false)
+  const [subImportOpen, setSubImportOpen] = useState(false)
+  const [subImportLang, setSubImportLang] = useState<'target' | 'source'>('target')
+  const [subUploading, setSubUploading] = useState(false)
+  const subInputRef = useRef<HTMLInputElement | null>(null)
 
   const activeLineRef = useRef<HTMLDivElement | null>(null)
 
@@ -124,17 +128,12 @@ export function PlayerPage() {
         setAsrProfiles(res.asr_profiles || [])
         setLlmProfiles(res.llm_profiles || [])
         const defProc = sets?.default_processing
-        const scene = defProc?.scene === 'normal' ? 'normal' : 'asmr'
-        setDefaultScene(scene)
-        setSelectedScene(scene)
-        if (defProc?.asr_provider === 'local') {
-          setSelectedAsr(`whisper:${defProc.whisper_model || 'large-v3'}`)
-        } else if (defProc?.asr_profile_id) {
+        if (defProc?.asr_profile_id) {
           setSelectedAsr(defProc.asr_profile_id)
         } else if (res.asr_profiles?.length > 0) {
           setSelectedAsr(res.asr_profiles[0].profile_id)
         } else {
-          setSelectedAsr('whisper:large-v3')
+          setSelectedAsr('')
         }
         if (defProc?.llm_profile_id) {
           setSelectedLlm(defProc.llm_profile_id)
@@ -258,14 +257,13 @@ export function PlayerPage() {
       formData.append('end_time', String(reprocessEnd))
       formData.append('start_seconds', String(reprocessStart))
       formData.append('end_seconds', String(reprocessEnd))
-      if (selectedAsr.startsWith('whisper:')) {
-        formData.append('processor', 'whisper')
-        formData.append('whisper_model', selectedAsr.replace('whisper:', ''))
-        formData.append('scene', selectedScene)
-      } else {
-        formData.append('processor', 'gemini')
-        formData.append('asr_profile_id', selectedAsr)
+      if (!selectedAsr) {
+        alert('请先在「翻译配置」中添加一个支持转写的音频模型')
+        setSubmittingReprocess(false)
+        return
       }
+      formData.append('processor', 'gemini')
+      formData.append('asr_profile_id', selectedAsr)
       if (selectedLlm) formData.append('llm_profile_id', selectedLlm)
 
       await api.postForm(`/api/tracks/${trackId}/segments/reprocess`, formData)
@@ -303,19 +301,22 @@ export function PlayerPage() {
       {/* Sticky Top Header & Controls Toolbar */}
       <div className="player-sticky-header">
         {/* Navigation */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 12, minWidth: 0 }}>
           <Link
             to={item ? `/items/${item.item_id}` : '/'}
-            className="btn btn-ghost btn-sm"
+            className="btn btn-ghost btn-sm player-back-link"
+            title={item ? `返回《${item.title}》` : '返回作品库'}
           >
-            <ArrowLeft size={16} />
-            {item ? `返回《${item.title}》` : '返回作品库'}
+            <ArrowLeft size={16} style={{ flexShrink: 0 }} />
+            <span className="player-back-link-text">
+              {item ? `返回《${item.title}》` : '返回作品库'}
+            </span>
           </Link>
 
           {/* Track Title Info */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {item?.rj_code && <span className="chip chip-rj">{item.rj_code}</span>}
-            <span style={{ fontWeight: 600, color: 'var(--fg-main)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, maxWidth: '100%' }}>
+            {item?.rj_code && <span className="chip chip-rj" style={{ flexShrink: 0 }}>{item.rj_code}</span>}
+            <span style={{ fontWeight: 600, color: 'var(--fg-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {track?.title || '正在播放'}
             </span>
           </div>
@@ -336,7 +337,7 @@ export function PlayerPage() {
             flexWrap: 'wrap',
           }}
         >
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <button
             type="button"
             className={`btn btn-sm ${displayMode === 'bilingual' ? 'btn-primary' : 'btn-ghost'}`}
@@ -361,20 +362,22 @@ export function PlayerPage() {
 
           <span style={{ width: 1, height: 18, background: 'var(--border-subtle)', margin: '0 4px', alignSelf: 'center' }} />
 
-          <button
-            type="button"
-            className={`btn btn-sm ${isDesktopPipActive ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={toggleDesktopPip}
-            title={
-              isDesktopPipActive
-                ? '关闭独立桌面歌词小窗'
-                : '开启独立桌面歌词小窗（置顶悬浮在其他所有应用与桌面之上）'
-            }
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-          >
-            <PictureInPicture size={14} />
-            {isDesktopPipActive ? '关闭桌面歌词' : '桌面歌词'}
-          </button>
+          {isDesktopPipSupported && (
+            <button
+              type="button"
+              className={`btn btn-sm ${isDesktopPipActive ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={toggleDesktopPip}
+              title={
+                isDesktopPipActive
+                  ? '关闭独立桌面歌词小窗'
+                  : '开启独立桌面歌词小窗（置顶悬浮在其他所有应用与桌面之上）'
+              }
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <PictureInPicture size={14} />
+              {isDesktopPipActive ? '关闭桌面歌词' : '桌面歌词'}
+            </button>
+          )}
 
           <button
             type="button"
@@ -388,7 +391,7 @@ export function PlayerPage() {
           </button>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255, 255, 255, 0.05)', borderRadius: 'var(--radius-sm)', padding: 2 }}>
             <button
               type="button"
@@ -433,6 +436,16 @@ export function PlayerPage() {
           >
             <Edit3 size={14} />
             {editMode ? '完成校对' : '校对模式'}
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={() => setSubImportOpen(true)}
+            title="导入外部字幕 (.srt / .vtt / .lrc / .ass)"
+          >
+            <Upload size={14} />
+            导入字幕
           </button>
         </div>
       </div>
@@ -618,6 +631,92 @@ export function PlayerPage() {
         )}
       </div>
 
+      {/* External Subtitle Import Modal */}
+      {subImportOpen && trackId && (
+        <div className="modal-overlay" onClick={() => !subUploading && setSubImportOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">导入外部字幕</h3>
+              <button
+                type="button"
+                className="btn btn-ghost btn-circle"
+                onClick={() => !subUploading && setSubImportOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 12.5, color: 'var(--fg-dim)' }}>
+                支持 <code>.srt</code>、<code>.vtt</code>、<code>.lrc</code>、<code>.ass</code> / <code>.ssa</code> 格式，导入后将立即刷新当前台本。
+              </p>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+                  <input
+                    type="radio"
+                    name="playerSubImportLang"
+                    checked={subImportLang === 'target'}
+                    onChange={() => setSubImportLang('target')}
+                  />
+                  译文字幕（中字）
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+                  <input
+                    type="radio"
+                    name="playerSubImportLang"
+                    checked={subImportLang === 'source'}
+                    onChange={() => setSubImportLang('source')}
+                  />
+                  原文字幕（日文）
+                </label>
+              </div>
+              <input
+                ref={subInputRef}
+                type="file"
+                accept=".srt,.vtt,.lrc,.ass,.ssa"
+                style={{ display: 'none' }}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ''
+                  if (!file) return
+                  setSubUploading(true)
+                  try {
+                    const formData = new FormData()
+                    formData.append('file', file)
+                    formData.append('language', subImportLang)
+                    await api.postForm(`/api/tracks/${trackId}/subtitles/upload`, formData)
+                    await loadSubtitles(trackId)
+                    setSubImportOpen(false)
+                  } catch (err: any) {
+                    alert('导入字幕失败: ' + (err.message || '未知错误'))
+                  } finally {
+                    setSubUploading(false)
+                  }
+                }}
+              />
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setSubImportOpen(false)}
+                disabled={subUploading}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => subInputRef.current?.click()}
+                disabled={subUploading}
+              >
+                <Upload size={14} />
+                {subUploading ? '正在导入…' : '选择字幕文件'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Segment Reprocess Modal */}
       {reprocessOpen && (
         <div className="modal-overlay" onClick={() => setReprocessOpen(false)}>
@@ -670,61 +769,46 @@ export function PlayerPage() {
                   <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
                     ASR 引擎
                   </label>
-                  <select
-                    className="select-field"
+                  <CustomSelect
+                    ariaLabel="ASR 引擎"
                     style={{ width: '100%' }}
                     value={selectedAsr}
-                    onChange={(e) => setSelectedAsr(e.target.value)}
-                  >
-                    <optgroup label="本地 Whisper">
-                      <option value="whisper:large-v3">本地 Faster-Whisper (large-v3)</option>
-                      <option value="whisper:medium">本地 Faster-Whisper (medium)</option>
-                    </optgroup>
-                    {asrProfiles.length > 0 && (
-                      <optgroup label="音频模型">
-                        {asrProfiles.map((p) => (
-                          <option key={p.profile_id} value={p.profile_id}>
-                            {p.name} ({p.model})
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
+                    onChange={setSelectedAsr}
+                    groups={
+                      asrProfiles.length > 0
+                        ? [
+                            {
+                              label: '云端音频模型',
+                              options: asrProfiles.map((p) => ({
+                                value: p.profile_id,
+                                label: `${p.name} (${p.model})`,
+                              })),
+                            },
+                          ]
+                        : []
+                    }
+                    options={
+                      asrProfiles.length === 0
+                        ? [{ value: '', label: '请先在「翻译配置」添加 ASR 模型' }]
+                        : []
+                    }
+                  />
                 </div>
-
-                {selectedAsr.startsWith('whisper:') && (
-                  <div>
-                    <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
-                      场景识别优化（仅本地 Whisper）
-                    </label>
-                    <select
-                      className="select-field"
-                      style={{ width: '100%' }}
-                      value={selectedScene}
-                      onChange={(e) => setSelectedScene(e.target.value as 'asmr' | 'normal')}
-                    >
-                      <option value="asmr">ASMR 悄悄话强化（降低静音截断，保留呼吸声）{defaultScene === 'asmr' ? ' ★ [默认]' : ''}</option>
-                      <option value="normal">标准人声对话（普通播客/影视人声）{defaultScene === 'normal' ? ' ★ [默认]' : ''}</option>
-                    </select>
-                  </div>
-                )}
 
                 <div>
                   <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
                     LLM 翻译模型
                   </label>
-                  <select
-                    className="select-field"
+                  <CustomSelect
+                    ariaLabel="LLM 翻译模型"
                     style={{ width: '100%' }}
                     value={selectedLlm}
-                    onChange={(e) => setSelectedLlm(e.target.value)}
-                  >
-                    {llmProfiles.map((p) => (
-                      <option key={p.profile_id} value={p.profile_id}>
-                        {p.name} ({p.model})
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setSelectedLlm}
+                    options={llmProfiles.map((p) => ({
+                      value: p.profile_id,
+                      label: `${p.name} (${p.model})`,
+                    }))}
+                  />
                 </div>
               </div>
 

@@ -23,7 +23,7 @@ from uuid import uuid4
 from subforge.ui.profiles import mask_secret
 
 CAPABILITIES = ("transcribe", "translate", "merge")
-PROTOCOLS = ("openai_compatible", "google_native")
+PROTOCOLS = ("openai_compatible", "google_native", "openai_whisper", "deepseek_asr")
 
 
 def _normalize_capabilities(value) -> list[str]:

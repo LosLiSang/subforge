@@ -58,35 +58,6 @@ class UiSettingsStore:
         data.pop("deepgram_api_key", None)
         self._save(data)
 
-    def get_models_dir(self) -> Path:
-        value = self._load().get("models_dir")
-        return Path(value).resolve() if value else (Path.home() / ".subforge" / "models")
-
-    def set_models_dir(self, value: Path) -> None:
-        value = value.resolve()
-        value.mkdir(parents=True, exist_ok=True)
-        data = self._load()
-        data["models_dir"] = str(value)
-        self._save(data)
-
-    def get_direct_model_path(self, model: str) -> Path | None:
-        value = self._load().get("direct_model_paths", {}).get(model)
-        return Path(value).resolve() if value else None
-
-    def set_direct_model_path(self, model: str, value: Path | None) -> None:
-        if model not in {"medium", "large-v3"}:
-            raise ValueError("unsupported model")
-        data = self._load()
-        paths = data.setdefault("direct_model_paths", {})
-        if value is None:
-            paths.pop(model, None)
-        else:
-            value = value.resolve()
-            if not (value / "model.bin").is_file() or not (value / "config.json").is_file():
-                raise ValueError("direct model directory must contain model.bin and config.json")
-            paths[model] = str(value)
-        self._save(data)
-
     def get_proxy_url(self) -> str:
         return str(self._load().get("proxy_url", ""))
 
@@ -103,22 +74,9 @@ class UiSettingsStore:
             data.pop("proxy_url", None)
         self._save(data)
 
-    def get_asr_concurrency(self) -> int:
-        data = self._load()
-        value = int(data.get("asr_concurrency", data.get("media_concurrency", 1)))
-        return max(1, value)
-
-    def set_asr_concurrency(self, value: int) -> None:
-        if value < 1:
-            raise ValueError("asr_concurrency must be at least 1")
-        data = self._load()
-        data["asr_concurrency"] = value
-        data.pop("media_concurrency", None)
-        self._save(data)
-
     def get_remote_asr_task_concurrency(self) -> int:
-        """同时处于网络 ASR 阶段的大任务数（准入），默认 20。"""
-        value = int(self._load().get("remote_asr_task_concurrency", 20))
+        """同时处于网络 ASR 阶段的大任务数（准入），默认 2。"""
+        value = int(self._load().get("remote_asr_task_concurrency", 2))
         return max(1, value)
 
     def set_remote_asr_task_concurrency(self, value: int) -> None:
@@ -131,15 +89,14 @@ class UiSettingsStore:
     def concurrency_policy(self):
         from subforge.concurrency import ConcurrencyPolicy
         return ConcurrencyPolicy(
-            local_asr=self.get_asr_concurrency(),
             remote_asr_tasks=self.get_remote_asr_task_concurrency(),
             remote_asr_requests=self.get_remote_asr_concurrency(),
             llm_requests=self.get_translate_workers(),
         )
 
     def get_remote_asr_concurrency(self) -> int:
-        """全局在途网络 ASR HTTP 请求数（跨进程请求池）。"""
-        value = int(self._load().get("remote_asr_concurrency", 20))
+        """全局在途网络 ASR HTTP 请求数（跨进程请求池），默认 4。"""
+        value = int(self._load().get("remote_asr_concurrency", 4))
         return max(1, value)
 
     def set_remote_asr_concurrency(self, value: int) -> None:
@@ -153,9 +110,13 @@ class UiSettingsStore:
         value = self._load().get("last_processing_snapshot")
         if not isinstance(value, dict):
             return None
-        core = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
-        keys = (*core, "asr_profile_id", "merge_profile_id")
+        core = ("asr_provider", "llm_profile_id")
+        keys = ("asr_provider", "scene", "whisper_model", "llm_profile_id", "asr_profile_id", "merge_profile_id")
         snapshot = {key: str(value.get(key, "")) for key in keys}
+        if not snapshot["scene"]:
+            snapshot["scene"] = "asmr"
+        if snapshot["asr_provider"] == "local":
+            snapshot["asr_provider"] = "model"
         try:
             snapshot["asr_chunk_seconds"] = int(value.get("asr_chunk_seconds", 60))
         except (TypeError, ValueError):
@@ -163,9 +124,11 @@ class UiSettingsStore:
         return snapshot if all(snapshot[key] for key in core) else None
 
     def set_last_processing_snapshot(self, snapshot: dict[str, object]) -> None:
-        core = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
-        keys = (*core, "asr_profile_id", "merge_profile_id")
+        core = ("asr_provider", "llm_profile_id")
+        keys = ("asr_provider", "scene", "whisper_model", "llm_profile_id", "asr_profile_id", "merge_profile_id")
         normalized = {key: str(snapshot.get(key, "")).strip() for key in keys}
+        if not normalized["scene"]:
+            normalized["scene"] = "asmr"
         try:
             normalized["asr_chunk_seconds"] = max(10, min(3600, int(snapshot.get("asr_chunk_seconds", 60))))
         except (TypeError, ValueError):
@@ -180,9 +143,13 @@ class UiSettingsStore:
         value = self._load().get("default_processing_snapshot")
         if not isinstance(value, dict):
             return None
-        core = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
-        keys = (*core, "asr_profile_id", "merge_profile_id")
+        core = ("asr_provider", "llm_profile_id")
+        keys = ("asr_provider", "scene", "whisper_model", "llm_profile_id", "asr_profile_id", "merge_profile_id")
         snapshot = {key: str(value.get(key, "")) for key in keys}
+        if not snapshot["scene"]:
+            snapshot["scene"] = "asmr"
+        if snapshot["asr_provider"] == "local":
+            snapshot["asr_provider"] = "model"
         try:
             snapshot["asr_chunk_seconds"] = int(value.get("asr_chunk_seconds", 60))
         except (TypeError, ValueError):
@@ -190,15 +157,12 @@ class UiSettingsStore:
         return snapshot if all(snapshot[key] for key in core) else None
 
     def set_default_processing_snapshot(self, snapshot: dict[str, object]) -> None:
-        core = ("asr_provider", "scene", "whisper_model", "llm_profile_id")
-        keys = (*core, "asr_profile_id", "merge_profile_id")
+        keys = ("asr_provider", "scene", "whisper_model", "llm_profile_id", "asr_profile_id", "merge_profile_id")
         normalized = {key: str(snapshot.get(key, "")).strip() for key in keys}
-        if not normalized["whisper_model"]:
-            normalized["whisper_model"] = "large-v3"
         if not normalized["scene"]:
             normalized["scene"] = "asmr"
-        if not normalized["asr_provider"]:
-            normalized["asr_provider"] = "local"
+        if not normalized["asr_provider"] or normalized["asr_provider"] == "local":
+            normalized["asr_provider"] = "model"
         try:
             normalized["asr_chunk_seconds"] = max(10, min(3600, int(snapshot.get("asr_chunk_seconds", 60))))
         except (TypeError, ValueError):

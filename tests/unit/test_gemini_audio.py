@@ -475,3 +475,78 @@ def test_clean_reasoning_and_prompt_leak_unit():
     cleaned_empty = GeminiAudioAdapter._clean_reasoning_and_prompt_leak(pure_cot)
     assert cleaned_empty == ""
 
+
+@pytest.mark.asyncio
+async def test_openai_whisper_transport_multipart_and_segments():
+    import httpx
+    from subforge.gemini_audio import OpenAIWhisperTransport
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization")
+        seen["content_type"] = request.headers.get("content-type", "")
+        return httpx.Response(200, json={
+            "text": "こんにちは。お元気ですか。",
+            "segments": [
+                {"start": 0.0, "end": 1.2, "text": "こんにちは。"},
+                {"start": 1.3, "end": 2.5, "text": "お元気ですか。"},
+            ],
+        })
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        profile = GeminiAudioProfile(
+            "w1", "Groq Whisper", "openai_whisper",
+            "https://api.groq.com/openai/v1", "whisper-large-v3-turbo", "gsk-test",
+        )
+        transport = OpenAIWhisperTransport(profile, client=client)
+        raw = await transport.generate(b"RIFFdemo", "audio/wav", "")
+
+    assert seen["url"] == "https://api.groq.com/openai/v1/audio/transcriptions"
+    assert seen["auth"] == "Bearer gsk-test"
+    assert "multipart/form-data" in seen["content_type"]
+    data = json.loads(raw)
+    assert len(data["segments"]) == 2
+    assert data["segments"][0]["text"] == "こんにちは。"
+
+
+@pytest.mark.asyncio
+async def test_deepseek_asr_transport_and_110s_clamp():
+    import httpx
+    from subforge.gemini_audio import DeepSeekAsrTransport, gemini_profile_from_mapping
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization")
+        seen["content_type"] = request.headers.get("content-type", "")
+        return httpx.Response(200, json={
+            "request_id": "req-1",
+            "text": "深呼吸してください",
+            "duration_ms": 4500,
+        })
+
+    mapped = gemini_profile_from_mapping({
+        "profile_id": "ds1",
+        "name": "DeepSeek ASR",
+        "protocol": "deepseek_asr",
+        "base_url": "https://api.deepseek.com/v1",
+        "model": "deepseek-asr",
+        "api_key": "ds-key",
+        "max_request_seconds": 300,
+    })
+    assert mapped.max_segment_seconds == 110
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transport = DeepSeekAsrTransport(mapped, client=client)
+        raw = await transport.generate(b"RIFFdemo", "audio/wav", "")
+
+    assert seen["url"] == "https://api.deepseek.com/v1/tools/asr"
+    assert seen["auth"] == "Bearer ds-key"
+    assert "multipart/form-data" in seen["content_type"]
+    data = json.loads(raw)
+    assert data["segments"] == [{"start": 0.0, "end": 4.5, "text": "深呼吸してください"}]
+
+

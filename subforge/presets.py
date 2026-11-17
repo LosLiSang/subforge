@@ -1,15 +1,5 @@
-# ASMR 预设只作用于本地 faster-whisper（VAD / 静音阈值 / 响度预处理 / 双声道拆分）；
-# Deepgram 与音频模型 Profile 不读取这些参数。
-ASMR_PRESET = {
-    "vad_threshold": 0.2,
-    "vad_min_speech_duration_ms": 100,
-    "vad_min_silence_duration_ms": 300,
-    "vad_speech_pad_ms": 600,
-    "vad_max_speech_duration_s": 20.0,
-    "condition_on_previous_text": False,
-    "no_speech_threshold": 0.3,
-    "preprocess_audio": True,
-}
+# 场景标识（云端 ASR 不使用本地 Whisper VAD 参数）
+ASMR_PRESET: dict[str, object] = {}
 
 SCENES = ("asmr", "normal")
 DEFAULT_SCENE = "asmr"

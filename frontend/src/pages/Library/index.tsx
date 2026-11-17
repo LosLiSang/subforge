@@ -19,6 +19,7 @@ import { ImportModal } from './ImportModal'
 import { ImportFolderModal } from './ImportFolderModal'
 import { ImportUrlModal } from './ImportUrlModal'
 import { WorkCard } from '../../components/WorkCard'
+import { CustomSelect } from '../../components/CustomSelect'
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B'
@@ -248,8 +249,8 @@ export function LibraryPage() {
           flexWrap: 'wrap',
         }}
       >
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flex: 1, minWidth: 260 }}>
-          <div style={{ position: 'relative', width: 260 }}>
+        <div className="library-filter-primary">
+          <div className="library-search-wrap">
             <Search
               size={15}
               style={{ position: 'absolute', left: 10, top: 10, color: 'var(--fg-faint)' }}
@@ -257,7 +258,7 @@ export function LibraryPage() {
             <input
               type="text"
               className="input-field"
-              style={{ paddingLeft: 32, paddingRight: searchQuery ? 28 : 10 }}
+              style={{ paddingLeft: 32, paddingRight: searchQuery ? 28 : 10, width: '100%' }}
               placeholder="搜索标题、RJ 号、声优、社团、标签(#tag)…"
               value={searchQuery}
               onChange={(e) => {
@@ -290,37 +291,41 @@ export function LibraryPage() {
             )}
           </div>
 
-          <select
-            className="select-field"
-            value={selectedCreator}
-            onChange={(e) => {
-              setSelectedCreator(e.target.value)
-              setPage(1)
-            }}
-          >
-            <option value="">全部创作者 ({creators.length})</option>
-            {creators.map((c) => (
-              <option key={c.creator_id} value={c.creator_id}>
-                {c.name} {c.kind === 'voice_actor' ? '(CV)' : '(社团)'} {c.item_count ? `(${c.item_count})` : ''}
-              </option>
-            ))}
-          </select>
+          <div className="library-selects-wrap">
+            <CustomSelect
+              ariaLabel="筛选创作者"
+              value={selectedCreator}
+              onChange={(val) => {
+                setSelectedCreator(val)
+                setPage(1)
+              }}
+              style={{ width: '100%' }}
+              options={[
+                { value: '', label: `全部创作者 (${creators.length})` },
+                ...creators.map((c) => ({
+                  value: c.creator_id,
+                  label: `${c.name} ${c.kind === 'voice_actor' ? '(CV)' : '(社团)'}${c.item_count ? ` (${c.item_count})` : ''}`,
+                })),
+              ]}
+            />
 
-          <select
-            className="select-field"
-            value={selectedTag}
-            onChange={(e) => {
-              setSelectedTag(e.target.value)
-              setPage(1)
-            }}
-          >
-            <option value="">全部标签 ({allTags.length})</option>
-            {allTags.map((tag) => (
-              <option key={tag} value={tag}>
-                🏷️ {tag} {tagCounts[tag] ? `(${tagCounts[tag]})` : ''}
-              </option>
-            ))}
-          </select>
+            <CustomSelect
+              ariaLabel="筛选标签"
+              value={selectedTag}
+              onChange={(val) => {
+                setSelectedTag(val)
+                setPage(1)
+              }}
+              style={{ width: '100%' }}
+              options={[
+                { value: '', label: `全部标签 (${allTags.length})` },
+                ...allTags.map((tag) => ({
+                  value: tag,
+                  label: `${tag}${tagCounts[tag] ? ` (${tagCounts[tag]})` : ''}`,
+                })),
+              ]}
+            />
+          </div>
 
           {selectedTag && (
             <span
@@ -334,12 +339,13 @@ export function LibraryPage() {
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', maxWidth: '100%' }}>
           {/* Work kind pills (RJ作品 / 录播作品 / 全部) */}
           <div
             style={{
               display: 'flex',
               gap: 4,
+              flexWrap: 'wrap',
               background: 'rgba(255, 255, 255, 0.04)',
               padding: 3,
               borderRadius: 'var(--radius-sm)',
@@ -367,7 +373,7 @@ export function LibraryPage() {
           </div>
 
           {/* Subtitle status pills */}
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {[
               { key: 'all', label: '全部' },
               { key: 'bilingual', label: '双语已就绪 ✓' },
@@ -421,7 +427,8 @@ export function LibraryPage() {
           </small>
         </div>
       ) : viewMode === 'list' ? (
-        <div className="works-table-container">
+        <>
+        <div className="works-table-container works-desktop-table">
           <table className="works-table">
             <thead>
               <tr>
@@ -521,6 +528,84 @@ export function LibraryPage() {
             </tbody>
           </table>
         </div>
+
+        <div className="works-mobile-list">
+          {filteredItems.map((item) => {
+            const coverSrc = item.cover_url
+              ? `${item.cover_url}${item.updated_at ? (item.cover_url.includes('?') ? `&v=${encodeURIComponent(item.updated_at)}` : `?v=${encodeURIComponent(item.updated_at)}`) : ''}`
+              : '/covers/default'
+            return (
+              <div key={item.item_id} className="work-mobile-item">
+                <Link to={`/items/${item.item_id}`} className="work-mobile-cover">
+                  <img
+                    src={coverSrc}
+                    alt=""
+                    onError={(e) => ((e.target as HTMLElement).style.opacity = '0.3')}
+                  />
+                </Link>
+                <div className="work-mobile-body">
+                  <Link to={`/items/${item.item_id}`} className="work-mobile-title" title={item.title}>
+                    {item.title}
+                  </Link>
+                  <div className="work-mobile-chips">
+                    {item.rj_code ? (
+                      <span className="chip chip-rj">{item.rj_code}</span>
+                    ) : item.kind === 'stream_archive' ? (
+                      <span
+                        className="chip"
+                        style={{
+                          background: 'rgba(14, 42, 71, 0.85)',
+                          color: '#38bdf8',
+                          borderColor: 'rgba(56, 189, 248, 0.3)',
+                        }}
+                      >
+                        录播
+                      </span>
+                    ) : null}
+                    {item.creators &&
+                      item.creators.slice(0, 3).map((c) => (
+                        <span
+                          key={c.creator_id}
+                          className={`chip ${c.kind === 'voice_actor' ? 'chip-creator' : 'chip-circle'}`}
+                        >
+                          {c.name}
+                        </span>
+                      ))}
+                  </div>
+                  <div className="work-mobile-footer">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
+                      {item.subtitle_status === 'bilingual' && (
+                        <span className="sub-badge sub-bilingual">双语 ✓</span>
+                      )}
+                      {item.subtitle_status === 'zh' && (
+                        <span className="sub-badge sub-zh">中字 ✓</span>
+                      )}
+                      {item.subtitle_status === 'jp' && (
+                        <span className="sub-badge sub-jp">日字 ✓</span>
+                      )}
+                      {item.subtitle_status === 'none' && (
+                        <span className="sub-badge sub-none">未转写</span>
+                      )}
+                      <span style={{ fontSize: 11.5, color: 'var(--fg-dim)', fontFamily: 'var(--font-mono)' }}>
+                        {item.track_count} 轨 · {formatBytes(item.total_size)}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary btn-circle"
+                      onClick={(e) => handleQuickPlay(e, item)}
+                      title="快捷播放"
+                      style={{ flexShrink: 0 }}
+                    >
+                      <Play size={13} fill="currentColor" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        </>
       ) : (
         <div className="works-grid">
           {filteredItems.map((item) => (

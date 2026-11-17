@@ -42,15 +42,16 @@ def runner():
 @pytest.fixture
 def config_path(tmp_path, monkeypatch):
     """Keep CLI tests isolated from the user's ~/.subforge state."""
-    monkeypatch.setattr("subforge.config.DEFAULT_MODELS_DIR", tmp_path / "models")
     monkeypatch.setattr("subforge.config.DEFAULT_JOBS_DIR", tmp_path / "jobs")
 
     path = tmp_path / "config.toml"
     path.write_text(
         f"""\
 [asr]
-provider = "local"
-model = "tiny"
+provider = "deepgram"
+
+[deepgram]
+api_key = "dg-test-key"
 
 [llm]
 api_key = "test-key"
@@ -81,8 +82,6 @@ class TestE2EWithMockedASRandLLM:
         result = runner.invoke(main, ["--help"])
 
         assert result.exit_code == 0
-        assert "large-v3" in result.output
-        assert "subforge ./RJ01499022/ --asmr" in result.output
         assert "--asr-provider" in result.output
         assert "--deepgram-api-key" in result.output
         assert "--deepgram-model" in result.output
@@ -112,7 +111,7 @@ class TestE2EWithMockedASRandLLM:
 
         with (
             patch(
-                "subforge.orchestrator.asr_transcribe",
+                "subforge.orchestrator.deepgram_transcribe",
                 return_value=sample_entries,
             ),
             patch(
@@ -158,7 +157,7 @@ class TestE2EWithMockedASRandLLM:
             return "[1] 翻译"
 
         with (
-            patch("subforge.orchestrator.asr_transcribe", return_value=sample) as mock_asr,
+            patch("subforge.orchestrator.deepgram_transcribe", return_value=sample) as mock_asr,
             patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
         ):
             result = runner.invoke(
@@ -216,14 +215,13 @@ class TestE2EWithMockedASRandLLM:
             return "[1] translation"
 
         with (
-            patch("subforge.orchestrator.asr_transcribe", return_value=sample),
+            patch("subforge.orchestrator.deepgram_transcribe", return_value=sample),
             patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
         ):
             result = runner.invoke(main, _with_config(
                 config_path,
                 str(audio),
-                "--model", "tiny",
-                "--asr-provider", "local",
+                "--asr-provider", "deepgram",
                 "--source-lang", "ja",
                 "--target-lang", "en",
                 "--concurrency", "1",
@@ -245,7 +243,7 @@ class TestE2EWithMockedASRandLLM:
             return "[1] ok"
 
         with (
-            patch("subforge.orchestrator.asr_transcribe", return_value=sample),
+            patch("subforge.orchestrator.deepgram_transcribe", return_value=sample),
             patch("subforge.orchestrator.translate_batch", side_effect=fake_translate),
         ):
             result = runner.invoke(main, _with_config(

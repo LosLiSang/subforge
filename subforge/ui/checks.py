@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import httpx
 
-from subforge.asr.model_manager import cached_models
 from subforge.ui.model_profiles import ModelProfile
 
 
@@ -28,17 +25,3 @@ async def test_profile_connection(profile: ModelProfile) -> tuple[bool, str]:
     except Exception as exc:
         from subforge.translate.llm_client import _describe_exception
         return False, _describe_exception(exc)
-
-
-def check_model_configuration(
-    model: str,
-    models_dir: Path,
-    direct_path: Path | None,
-) -> tuple[bool, str]:
-    if direct_path:
-        if (direct_path / "model.bin").is_file() and (direct_path / "config.json").is_file():
-            return True, f"直接模型目录可用：{direct_path}"
-        return False, "直接模型目录缺少 model.bin 或 config.json"
-    if model in cached_models(models_dir, [model]):
-        return True, f"模型已缓存在：{models_dir}"
-    return False, f"模型未缓存，运行时将下载到：{models_dir}"

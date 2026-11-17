@@ -35,6 +35,7 @@ interface PlayerContextType {
   setPlaybackRate: (rate: number) => void
   toggleLoop: () => void
   toggleFloatLyrics: () => void
+  isDesktopPipSupported: boolean
   toggleDesktopPip: () => Promise<void>
   setSleepTimer: (option: number | 'end-of-track' | null) => void
   loadSubtitles: (trackId: string) => Promise<void>
@@ -382,6 +383,48 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setFloatLyricsOpen((prev) => !prev)
   }
 
+  // Mobile / PWA lock-screen & notification MediaSession controls
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !currentTrack) return
+    const coverSrc = currentItem?.item_id
+      ? `${window.location.origin}/covers/${currentItem.item_id}`
+      : `${window.location.origin}/icons/icon-512.png`
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentTrack.title || 'SubForge',
+        artist: currentItem?.creators?.map((c) => c.name).join(', ') || currentItem?.author || currentItem?.title || 'SubForge',
+        album: currentItem?.title || '',
+        artwork: [
+          { src: coverSrc, sizes: '512x512', type: 'image/png' },
+        ],
+      })
+    } catch {}
+  }, [currentTrack, currentItem])
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused'
+  }, [isPlaying])
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    const ms = navigator.mediaSession
+    const safeSet = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      try {
+        ms.setActionHandler(action, handler)
+      } catch {}
+    }
+    safeSet('play', () => resume())
+    safeSet('pause', () => pause())
+    safeSet('seekbackward', (details) => skipBackward(details.seekOffset || 10))
+    safeSet('seekforward', (details) => skipForward(details.seekOffset || 30))
+    safeSet('seekto', (details) => {
+      if (typeof details.seekTime === 'number') seek(details.seekTime)
+    })
+    safeSet('previoustrack', hasPrevTrack ? () => playPrevTrack() : null)
+    safeSet('nexttrack', hasNextTrack ? () => playNextTrack() : null)
+  }, [hasPrevTrack, hasNextTrack, playPrevTrack, playNextTrack, skipBackward, skipForward])
+
   const activeSubtitleIndex = useMemo(() => {
     if (!subtitles) return -1
     const entries = subtitles.target.length > 0 ? subtitles.target : subtitles.source
@@ -407,38 +450,90 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     (canvas: HTMLCanvasElement, title: string, timeStr: string, srcText: string, tgtText: string) => {
       const ctx = canvas.getContext('2d')
       if (!ctx) return
+      const w = canvas.width
+      const h = canvas.height
       ctx.fillStyle = '#080c14'
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.fillRect(0, 0, w, h)
 
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.08)'
-      ctx.fillRect(16, 34, canvas.width - 32, 1)
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.1)'
+      ctx.fillRect(28, 56, w - 56, 1)
 
-      ctx.font = '13px -apple-system, sans-serif'
+      ctx.font = '18px -apple-system, sans-serif'
       ctx.fillStyle = '#94a3b8'
       ctx.textAlign = 'left'
-      ctx.fillText(title.length > 32 ? title.slice(0, 32) + '…' : title, 20, 22)
+      ctx.fillText(title.length > 34 ? title.slice(0, 34) + '…' : title, 28, 38)
 
       ctx.textAlign = 'right'
-      ctx.font = '12px ui-monospace, monospace'
-      ctx.fillStyle = '#64748b'
-      ctx.fillText(timeStr, canvas.width - 20, 22)
+      ctx.font = '16px ui-monospace, monospace'
+      ctx.fillStyle = '#94a3b8'
+      ctx.fillText(timeStr, w - 28, 38)
 
       const root = document.documentElement
       const cs = getComputedStyle(root)
       const fontJa = cs.getPropertyValue('--font-ja') || '-apple-system, sans-serif'
       const fontZh = cs.getPropertyValue('--font-zh') || fontJa
 
+      const wrapText = (text: string, maxWidth: number, maxLines: number): string[] => {
+        const lines: string[] = []
+        let line = ''
+        for (const ch of text) {
+          const test = line + ch
+          if (ctx.measureText(test).width > maxWidth && line.length > 0) {
+            lines.push(line)
+            line = ch
+            if (lines.length === maxLines) {
+              lines[maxLines - 1] = lines[maxLines - 1].slice(0, -1) + '…'
+              return lines
+            }
+          } else {
+            line = test
+          }
+        }
+        if (line) lines.push(line)
+        return lines
+      }
+
+      const maxTextWidth = w - 72
+      ctx.font = `24px ${fontJa}`
+      const srcLines = srcText ? wrapText(srcText, maxTextWidth, 3) : []
+      const displayTgt = tgtText || (srcText ? '' : '暂无台本')
+      ctx.font = `bold 32px ${fontZh}`
+      const tgtLines = displayTgt ? wrapText(displayTgt, maxTextWidth, 3) : []
+
+      const srcLineHeight = 34
+      const tgtLineHeight = 44
+      const gapBetween = srcLines.length > 0 && tgtLines.length > 0 ? 18 : 0
+      const totalHeight = srcLines.length * srcLineHeight + gapBetween + tgtLines.length * tgtLineHeight
+      const bodyTop = 64
+      const bodyBottom = h - 18
+      let y = Math.max(bodyTop + 32, Math.round((bodyTop + bodyBottom - totalHeight) / 2) + 24)
+
       ctx.textAlign = 'center'
-      if (srcText) {
-        ctx.font = `16px ${fontJa}`
+      if (srcLines.length > 0) {
+        ctx.font = `24px ${fontJa}`
         ctx.fillStyle = '#93c5fd'
-        ctx.fillText(srcText.length > 40 ? srcText.slice(0, 40) + '…' : srcText, canvas.width / 2, 70)
+        for (const line of srcLines) {
+          ctx.fillText(line, w / 2, y)
+          y += srcLineHeight
+        }
+        y += gapBetween
       }
-      if (tgtText) {
-        ctx.font = `bold 20px ${fontZh}`
+      if (tgtLines.length > 0) {
+        ctx.font = `bold 32px ${fontZh}`
         ctx.fillStyle = '#ffffff'
-        ctx.fillText(tgtText.length > 36 ? tgtText.slice(0, 36) + '…' : tgtText, canvas.width / 2, 110)
+        for (const line of tgtLines) {
+          ctx.fillText(line, w / 2, y + 4)
+          y += tgtLineHeight
+        }
       }
+
+      // Subtle progress bar at bottom
+      const dur = durationRef.current || 0
+      const pct = dur > 0 ? Math.min(1, Math.max(0, currentTimeRef.current / dur)) : 0
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.14)'
+      ctx.fillRect(0, h - 6, w, 6)
+      ctx.fillStyle = '#38bdf8'
+      ctx.fillRect(0, h - 6, Math.round(w * pct), 6)
     },
     []
   )
@@ -809,9 +904,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
         if (!video.srcObject) {
           // @ts-ignore
-          video.srcObject = canvas.captureStream(15)
-          await video.play().catch(() => {})
+          video.srcObject = canvas.captureStream(4)
         }
+        await video.play().catch(() => {})
 
         await video.requestPictureInPicture()
         setIsCanvasPipActive(true)
@@ -831,10 +926,32 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // 3. Fallback: Open in-app floating bar
+    // 3. Fallback: Open in-app floating bar silently (no jarring alert on mobile)
     setFloatLyricsOpen(true)
-    alert('当前浏览器环境未能唤起系统独立画中画小窗，已为您在应用内开启悬浮台本歌词。')
   }, [setupPipWindow, drawCanvas])
+
+  useEffect(() => {
+    if (!isCanvasPipActive) return
+    const timer = setInterval(() => {
+      if (!canvasRef.current) return
+      const timeStr = `${formatSeconds(currentTimeRef.current)} / ${formatSeconds(durationRef.current)}`
+      const titleStr = currentTrackRef.current ? currentTrackRef.current.title : 'SubForge 桌面悬浮歌词'
+      const curSub = subtitlesRef.current
+      const idx = activeSubtitleIndexRef.current
+      const srcText = curSub && idx >= 0 && curSub.source.length > 0 ? curSub.source[idx]?.text || '' : ''
+      const tgtText = curSub && idx >= 0 && curSub.target.length > 0 ? curSub.target[idx]?.text || '' : '··· 正在播放间隙 ···'
+      drawCanvas(canvasRef.current, titleStr, timeStr, srcText, tgtText)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [isCanvasPipActive, drawCanvas])
+
+  const isDesktopPipSupported =
+    typeof window !== 'undefined' &&
+    (Boolean((window as any).documentPictureInPicture?.requestWindow) ||
+      (typeof document !== 'undefined' &&
+        Boolean(document.pictureInPictureEnabled) &&
+        typeof HTMLVideoElement !== 'undefined' &&
+        'requestPictureInPicture' in HTMLVideoElement.prototype))
 
   return (
     <PlayerContext.Provider
@@ -870,13 +987,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setPlaybackRate,
         toggleLoop,
         toggleFloatLyrics,
+        isDesktopPipSupported,
         toggleDesktopPip,
         setSleepTimer,
         loadSubtitles,
       }}
     >
       {children}
-      <canvas ref={canvasRef} width={640} height={160} style={{ display: 'none' }} />
+      <canvas ref={canvasRef} width={800} height={450} style={{ display: 'none' }} />
       <video
         ref={videoRef}
         playsInline

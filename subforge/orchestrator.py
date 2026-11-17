@@ -5,16 +5,14 @@ import logging
 import time
 
 
+from subforge.asr.audio import _audio_duration_seconds
 from subforge.asr.deepgram import transcribe as deepgram_transcribe, transcribe_chunked as deepgram_transcribe_chunked
-from subforge.asr.remote_limiter import LocalAsrModelLimiter, RemoteAsrRequestLimiter
-from subforge.asr.engine import _audio_duration_seconds, transcribe as asr_transcribe
-from subforge.asr.model_manager import ensure_model
+from subforge.asr.remote_limiter import RemoteAsrRequestLimiter
 from subforge.config import Config
 from subforge.events import EventSink, EventType, emit_event, make_event
 from subforge.gemini_audio import (
     GeminiAudioAdapter,
-    GoogleGeminiTransport,
-    OpenAICompatibleAudioTransport,
+    build_audio_transport,
     gemini_profile_from_mapping,
 )
 from subforge.models import Job, JobStatus, SubtitleEntry
@@ -72,37 +70,6 @@ def _target_srt_is_complete(source_entries: list, target_entries: list) -> bool:
 
 
 def _run_asr(job: Job, config: Config, progress_callback, model_ready_callback=None, resume_state=None, resume_store=None) -> list:
-    if config.asr_provider == "local":
-        if config.direct_model_path:
-            model_reference = str(config.direct_model_path)
-            local_only = True
-        else:
-            _available, local_only = ensure_model(job.model_size, config.models_dir)
-            model_reference = job.model_size
-        return asr_transcribe(
-            job.file_path,
-            model_size=model_reference,
-            language=job.source_lang,
-            models_dir=config.models_dir,
-            local_files_only=local_only,
-            device=config.device,
-            compute_type=config.compute_type,
-            vad_filter=config.vad_filter,
-            vad_threshold=config.vad_threshold,
-            vad_min_speech_duration_ms=config.vad_min_speech_duration_ms,
-            vad_min_silence_duration_ms=config.vad_min_silence_duration_ms,
-            vad_speech_pad_ms=config.vad_speech_pad_ms,
-            vad_max_speech_duration_s=config.vad_max_speech_duration_s,
-            condition_on_previous_text=config.condition_on_previous_text,
-            no_speech_threshold=config.no_speech_threshold,
-            preprocess_audio=config.preprocess_audio,
-            progress_callback=progress_callback,
-            model_ready_callback=model_ready_callback,
-            model_limiter=(
-                LocalAsrModelLimiter(config.local_asr_limiter_dir, config.local_asr_global_workers)
-                if config.local_asr_global_workers > 0 else None
-            ),
-        )
     if config.asr_provider == "deepgram":
         if model_ready_callback:
             model_ready_callback()
@@ -173,11 +140,7 @@ async def _run_asr_model(job: Job, config: Config, progress_callback, model_read
         RemoteAsrRequestLimiter(config.remote_asr_limiter_dir, config.remote_asr_global_workers)
         if config.remote_asr_global_workers > 0 else None
     )
-    transport = (
-        GoogleGeminiTransport(gemini_profile, request_limiter=remote_limiter)
-        if gemini_profile.protocol == "google_native"
-        else OpenAICompatibleAudioTransport(gemini_profile, request_limiter=remote_limiter)
-    )
+    transport = build_audio_transport(gemini_profile, request_limiter=remote_limiter)
     if model_ready_callback:
         model_ready_callback()
     duration = _audio_duration_seconds(job.file_path)

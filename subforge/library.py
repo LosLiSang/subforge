@@ -1024,9 +1024,29 @@ class LibraryStore:
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg is None:
             raise ValueError("ffmpeg is required to import video files")
+        ffprobe = shutil.which("ffprobe")
+        audio_codec = ""
+        if ffprobe is not None:
+            try:
+                probe = subprocess.run([
+                    ffprobe, "-v", "error", "-select_streams", "a:0",
+                    "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(source),
+                ], capture_output=True, text=True, timeout=15)
+                if probe.returncode == 0:
+                    audio_codec = probe.stdout.strip().lower()
+            except (subprocess.SubprocessError, OSError):
+                audio_codec = ""
+        if audio_codec == "aac":
+            copy_result = subprocess.run([
+                ffmpeg, "-y", "-loglevel", "error", "-i", str(source),
+                "-vn", "-c:a", "copy", str(destination),
+            ], capture_output=True, timeout=600)
+            if copy_result.returncode == 0 and destination.exists() and destination.stat().st_size > 0:
+                return
         result = subprocess.run([
-            ffmpeg, "-y", "-loglevel", "error", "-i", str(source),
-            "-vn", "-c:a", "aac", "-b:a", "192k", str(destination),
+            ffmpeg, "-y", "-threads", "1", "-loglevel", "error", "-i", str(source),
+            "-vn", "-c:a", "aac", "-b:a", "128k", str(destination),
         ], capture_output=True, timeout=1800)
         if result.returncode != 0 or not destination.exists() or destination.stat().st_size == 0:
             detail = result.stderr.decode("utf-8", errors="replace").strip()[-300:]

@@ -1,9 +1,12 @@
-import React, { Component, type ErrorInfo, type ReactNode } from 'react'
-import { Outlet } from 'react-router-dom'
+import React, { Component, useState, type ErrorInfo, type ReactNode } from 'react'
+import { Link, Outlet } from 'react-router-dom'
+import { Menu } from 'lucide-react'
 import { Sidebar } from './Sidebar'
 import { GlobalPlayerBar } from './GlobalPlayerBar'
 import { FloatLyrics } from './FloatLyrics'
 import { usePlayer } from '../../context/PlayerContext'
+import { useTasks } from '../../context/TaskContext'
+import subforgeLogo from '../../assets/subforge-icon.svg'
 
 class FloatLyricsErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
   state = { hasError: false }
@@ -59,16 +62,44 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { hasError: b
 
 export function Shell() {
   const { currentTrack } = usePlayer()
+  const { activeTaskCount } = useTasks()
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   return (
     <>
       <div className={`shell ${currentTrack ? 'has-player' : ''}`}>
-      <Sidebar />
-        <main id="main-content" className="frame-main">
-        <PageErrorBoundary>
-        <Outlet />
-        </PageErrorBoundary>
-      </main>
+        {mobileNavOpen && (
+          <div
+            className="sidebar-backdrop"
+            onClick={() => setMobileNavOpen(false)}
+            aria-hidden="true"
+          />
+        )}
+        <Sidebar isOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
+        <div className="shell-content-wrap">
+          <header className="mobile-topbar">
+            <button
+              type="button"
+              className="mobile-menu-btn"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="打开导航菜单"
+            >
+              <Menu size={20} />
+            </button>
+            <Link className="mobile-brand" to="/" onClick={() => setMobileNavOpen(false)}>
+              <img src={subforgeLogo} alt="SubForge" width={24} height={24} />
+              <span>SubForge</span>
+            </Link>
+            <Link className="mobile-tasks-link" to="/tasks">
+              {activeTaskCount > 0 ? <span className="nav-badge">{activeTaskCount}</span> : null}
+            </Link>
+          </header>
+          <main id="main-content" className="frame-main">
+            <PageErrorBoundary>
+              <Outlet />
+            </PageErrorBoundary>
+          </main>
+        </div>
       </div>
       <GlobalPlayerBar />
       <FloatLyricsErrorBoundary>

@@ -151,8 +151,6 @@ async def test_asr_capacity_is_released_before_translation_finishes(tmp_path):
     overrides = worker.requests[0]["config_overrides"]
     assert overrides["remote_asr_global_workers"] == 4
     assert overrides["remote_asr_limiter_dir"].endswith("remote-asr-slots")
-    assert overrides["local_asr_global_workers"] == 1
-    assert overrides["local_asr_limiter_dir"].endswith("local-asr-slots")
 
     first_translation_gate.set()
     await _wait_until(lambda: manager.get_task(first.task_id).status == "completed")
@@ -311,38 +309,6 @@ async def test_task_request_reads_translate_workers_for_each_new_task(tmp_path):
     await manager.close()
 
 
-async def test_task_request_uses_direct_model_path_when_configured(tmp_path):
-    store = LibraryStore.initialize(tmp_path / "Library")
-    audio = tmp_path / "audio.m4a"
-    audio.write_bytes(b"audio")
-    imported = store.import_audio(ImportRequest(
-        source=audio, kind=ItemKind.RJ_WORK, title="Work", rj_code="RJ00000105"
-    ))
-    captured = {}
-    direct = tmp_path / "large-v3"
-    direct.mkdir()
-
-    class CaptureWorker(FakeWorkerAdapter):
-        async def events(self, task, request):
-            captured.update(request)
-            async for event in super().events(task, request):
-                yield event
-
-    manager = TaskManager(
-        store, CaptureWorker([{"type": "task_completed", "stage": "complete"}]),
-        models_dir_resolver=lambda: tmp_path / "cache",
-        direct_model_resolver=lambda model: direct if model == "large-v3" else None,
-    )
-    task = await manager.enqueue(imported.track_id, ProcessingSnapshot(
-        asr_provider="local", scene="normal", whisper_model="large-v3", llm_profile_id="p"
-    ))
-    await _wait_until(lambda: manager.get_task(task.task_id).status == "completed")
-
-    assert captured["model_path"] == str(direct.resolve())
-    assert captured["config_overrides"]["models_dir"] == str((tmp_path / "cache").resolve())
-    await manager.close()
-
-
 async def test_task_request_passes_configured_proxy_to_worker(tmp_path):
     store = LibraryStore.initialize(tmp_path / "Library")
     audio = tmp_path / "audio.m4a"
@@ -406,36 +372,6 @@ async def test_task_request_passes_profile_proxy_and_tls_to_worker(tmp_path):
     assert overrides["llm_verify_tls"] is False
     assert overrides["llm_ca_bundle"] == "C:/ca.pem"
     assert captured["llm_api_key"] == "secret"
-    await manager.close()
-
-
-async def test_asmr_task_request_uses_full_shared_preset(tmp_path):
-    store = LibraryStore.initialize(tmp_path / "Library")
-    audio = tmp_path / "audio.m4a"
-    audio.write_bytes(b"audio")
-    imported = store.import_audio(ImportRequest(
-        source=audio, kind=ItemKind.RJ_WORK, title="Work", rj_code="RJ00000102"
-    ))
-    captured = {}
-
-    class CaptureWorker(FakeWorkerAdapter):
-        async def events(self, task, request):
-            captured.update(request)
-            async for event in super().events(task, request):
-                yield event
-
-    manager = TaskManager(store, CaptureWorker([{"type": "task_completed", "stage": "complete"}]))
-    task = await manager.enqueue(imported.track_id, ProcessingSnapshot(
-        asr_provider="local", scene="asmr", whisper_model="large-v3", llm_profile_id="p"
-    ))
-    await _wait_until(lambda: manager.get_task(task.task_id).status == "completed")
-
-    overrides = captured["config_overrides"]
-    assert overrides["device"] == "auto"
-    assert overrides["compute_type"] == "auto"
-    assert overrides["vad_threshold"] == 0.2
-    assert overrides["condition_on_previous_text"] is False
-    assert overrides["preprocess_audio"] is True
     await manager.close()
 
 
@@ -755,11 +691,11 @@ class _GatedWorker(FakeWorkerAdapter):
         self.gate.set()
 
 
-async def test_summary_splits_local_and_remote_worker_counts(tmp_path):
-    """Worker 摘要按本地/网络 ASR 分域计数；本地占满时网络任务照常运行。"""
+async def test_summary_tracks_remote_worker_counts_and_queue(tmp_path):
+    """Worker 摘要统计网络 ASR 并发与排队数量。"""
     store = LibraryStore.initialize(tmp_path / "Library")
     tracks = []
-    for index in range(4):
+    for index in range(3):
         audio = tmp_path / f"a{index}.m4a"
         audio.write_bytes(b"audio")
         imported = store.import_audio(ImportRequest(
@@ -776,38 +712,32 @@ async def test_summary_splits_local_and_remote_worker_counts(tmp_path):
 
     manager = TaskManager(
         store, worker,
-        asr_concurrency=1, remote_asr_task_concurrency=2, remote_asr_concurrency=5,
+        remote_asr_task_concurrency=2, remote_asr_concurrency=5,
         segment_runner=runner,
     )
-    local_full = await manager.enqueue(tracks[0], ProcessingSnapshot(
-        asr_provider="local", scene="normal", whisper_model="medium", llm_profile_id="p"))
-    remote_full = await manager.enqueue(tracks[1], ProcessingSnapshot(
-        asr_provider="deepgram", scene="normal", whisper_model="medium", llm_profile_id="p"))
-    seg_whisper = await manager.enqueue_segment_reprocess(
-        tracks[2], {"processor": "whisper", "start_index": "1", "end_index": "1"})
+    remote_1 = await manager.enqueue(tracks[0], ProcessingSnapshot(
+        asr_provider="model", scene="normal", whisper_model="", llm_profile_id="p"))
+    remote_2 = await manager.enqueue(tracks[1], ProcessingSnapshot(
+        asr_provider="deepgram", scene="normal", whisper_model="", llm_profile_id="p"))
     seg_gemini = await manager.enqueue_segment_reprocess(
-        tracks[3], {"processor": "gemini", "start_index": "1", "end_index": "1"})
+        tracks[2], {"processor": "gemini", "start_index": "1", "end_index": "1"})
 
     def _statuses():
         return {
             task.task_id: manager.get_task(task.task_id).status
-            for task in (local_full, remote_full, seg_whisper, seg_gemini)
+            for task in (remote_1, remote_2, seg_gemini)
         }
 
-    # 本地全轨 running、网络全轨 running、网络片段 running、本地片段排队
     await _wait_until(lambda: _statuses() == {
-        local_full.task_id: "running",
-        remote_full.task_id: "running",
-        seg_whisper.task_id: "queued",
-        seg_gemini.task_id: "running",
+        remote_1.task_id: "running",
+        remote_2.task_id: "running",
+        seg_gemini.task_id: "queued",
     })
     summary = manager.summary()
-    assert summary["local_running"] == 1
-    assert summary["local_capacity"] == 1
     assert summary["remote_running"] == 2
     assert summary["remote_capacity"] == 2
     assert summary["remote_request_capacity"] == 5
-    assert summary["queued"] == 1  # whisper 片段任务在等本地信号量
+    assert summary["queued"] == 1
     worker.gate.set()
     await manager.close()
 

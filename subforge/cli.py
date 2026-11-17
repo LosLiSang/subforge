@@ -14,7 +14,7 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Optional
 
 import click
 from rich import box
@@ -34,13 +34,11 @@ import typer
 from typer.core import TyperGroup
 
 from subforge import __version__
-from subforge.asr.model_manager import cached_models
 from subforge.config import (
     DEFAULT_CONFIG_DIR,
     DEFAULT_CONFIG_PATH,
     DEFAULT_CONFIG_TOML,
     DEFAULT_JOBS_DIR,
-    DEFAULT_MODELS_DIR,
     Config,
     load_config,
     setup_logging,
@@ -51,7 +49,7 @@ from subforge.orchestrator import process_all
 from subforge.presets import ASMR_PRESET
 from subforge.resume import ResumeStore, read_reusable_srt
 from subforge.scanner import SUPPORTED_EXTENSIONS, scan_paths
-from subforge.ui.checks import check_model_configuration, test_profile_connection
+from subforge.ui.checks import test_profile_connection
 from subforge.ui.model_profiles import ModelProfileStore
 from subforge.ui.settings import UiSettingsStore
 
@@ -205,10 +203,9 @@ def _render_root_help() -> str:
     t_cmds = Table(box=None, show_header=False, padding=(0, 2))
     t_cmds.add_column(style="bold cyan", width=12)
     t_cmds.add_column(style="white")
-    t_cmds.add_row("ui", "Launch the local Library UI web server")
-    t_cmds.add_row("status", "Show overview status of system, models, and jobs")
+    t_cmds.add_row("ui", "Launch the Library UI web server")
+    t_cmds.add_row("status", "Show overview status of system, profiles, and jobs")
     t_cmds.add_row("check", "Run system and environment diagnostic checks (alias: doctor)")
-    t_cmds.add_row("models", "Manage faster-whisper ASR models (list, download, check)")
     t_cmds.add_row("profiles", "Inspect and test configured model profiles")
     t_cmds.add_row("jobs", "Inspect and manage batch resume checkpoints")
     p_cmds = Panel(t_cmds, title="Commands", title_align="left", border_style="cyan")
@@ -216,8 +213,8 @@ def _render_root_help() -> str:
     t_opts = Table(box=None, show_header=False, padding=(0, 2))
     t_opts.add_column(style="bold yellow", width=26)
     t_opts.add_column(style="white")
-    t_opts.add_row("-m, --model TEXT", "ASR model size: tiny/base/small/medium/large-v3 (default: medium)")
-    t_opts.add_row("--asr-provider TEXT", "ASR provider: local / deepgram / model (default: local)")
+    t_opts.add_row("-m, --model TEXT", "Deepgram/cloud ASR model override")
+    t_opts.add_row("--asr-provider TEXT", "ASR provider: model / deepgram (default: model)")
     t_opts.add_row("--deepgram-api-key TEXT", "Deepgram API key (env: DEEPGRAM_API_KEY)")
     t_opts.add_row("--deepgram-model TEXT", "Deepgram ASR model name (default: nova-3)")
     t_opts.add_row("--profile TEXT", "ModelProfile for translation (from ~/.subforge/model-profiles.json)")
@@ -319,13 +316,12 @@ def process_cmd(
         None,
         "--model",
         "-m",
-        help="ASR model size: tiny/base/small/medium/large-v3 (default: medium)",
+        help="Deepgram/cloud ASR model override",
     ),
-    asr_provider: str = typer.Option(
+    asr_provider: Optional[Literal["deepgram", "model"]] = typer.Option(
         None,
         "--asr-provider",
-        click_type=click.Choice(["local", "deepgram", "model"]),
-        help="ASR provider: local / deepgram / model (default: local)",
+        help="ASR provider: model / deepgram (default: model)",
     ),
     asr_profile: str = typer.Option(
         None,
@@ -337,10 +333,9 @@ def process_cmd(
         "--profile",
         help="Use configured ModelProfile for LLM translation (from ~/.subforge/model-profiles.json)",
     ),
-    mode: str = typer.Option(
+    mode: Literal["continue", "retranslate", "force"] = typer.Option(
         "continue",
         "--mode",
-        click_type=click.Choice(["continue", "retranslate", "force"]),
         help="Processing mode: continue (resume), retranslate (reuse ja.srt, re-translate zh), force (re-ASR)",
     ),
     retranslate_only: bool = typer.Option(
@@ -348,10 +343,9 @@ def process_cmd(
         "--retranslate-only",
         help="Shortcut for --mode retranslate: keep existing ja.srt and only re-translate Chinese subtitles",
     ),
-    scene: str = typer.Option(
+    scene: Optional[Literal["asmr", "general"]] = typer.Option(
         None,
         "--scene",
-        click_type=click.Choice(["asmr", "general"]),
         help="Audio scene preset: asmr (low vad, loudnorm, hallucination guard) / general",
     ),
     asmr: bool = typer.Option(
@@ -368,18 +362,6 @@ def process_cmd(
         False,
         "--dry-run",
         help="Scan inputs and display planned actions without running processing",
-    ),
-    device: str = typer.Option(
-        None,
-        "--device",
-        click_type=click.Choice(["cpu", "cuda", "auto"]),
-        help="Compute device: cpu / cuda / auto (default: cpu)",
-    ),
-    compute_type: str = typer.Option(
-        None,
-        "--compute-type",
-        click_type=click.Choice(["default", "auto", "float16", "int8_float16", "int8", "float32"]),
-        help="Compute type: float16 is fastest on GPU, int8 best on CPU (default: default)",
     ),
     source_lang: str = typer.Option(
         None,
@@ -456,10 +438,9 @@ def process_cmd(
         "--output-dir",
         help="Output directory for SRT files (default: same as source)",
     ),
-    log_level: str = typer.Option(
+    log_level: Optional[Literal["DEBUG", "INFO", "WARNING", "ERROR"]] = typer.Option(
         None,
         "--log-level",
-        click_type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
         help="Log level (default: INFO)",
     ),
 ) -> None:
@@ -485,9 +466,6 @@ def process_cmd(
         proxy = ui_settings.get_proxy_url()
         if proxy:
             cli_overrides.setdefault("llm_proxy_url", proxy)
-        models_d = ui_settings.get_models_dir()
-        if models_d:
-            cli_overrides.setdefault("models_dir", models_d)
         default_prompt = ui_settings.get_translation_prompt()
         if default_prompt:
             cli_overrides.setdefault("translation_prompt", default_prompt)
@@ -545,17 +523,9 @@ def process_cmd(
 
     if model is not None:
         cli_overrides["model"] = model
-        if ui_settings.path.is_file() and model in {"medium", "large-v3"}:
-            direct_p = ui_settings.get_direct_model_path(model)
-            if direct_p and (direct_p / "model.bin").is_file():
-                cli_overrides["direct_model_path"] = direct_p
 
     if asr_provider is not None:
         cli_overrides["asr_provider"] = asr_provider
-    if device is not None:
-        cli_overrides["device"] = device
-    if compute_type is not None:
-        cli_overrides["compute_type"] = compute_type
     if source_lang is not None:
         cli_overrides["source_lang"] = source_lang
     if target_lang is not None:
@@ -762,13 +732,14 @@ def process_cmd(
     help="Launch the local Library UI web server",
 )
 def ui_cmd(
-    host: str = typer.Option(None, "--host", help="Host to bind (default: 127.0.0.1)"),
+    host: str = typer.Option(None, "--host", help="Host to bind (default: 127.0.0.1; use 0.0.0.0 for LAN)"),
     port: int = typer.Option(None, "--port", "-p", help="Port to listen on (default: 8765)"),
     no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser automatically"),
     token: str = typer.Option(None, "--token", help="Fixed startup token for authentication (or env: SUBFORGE_TOKEN)"),
     no_auth: bool | None = typer.Option(None, "--no-auth/--auth", help="Disable token authentication for local access (default: True)"),
+    allowed_hosts: str = typer.Option(None, "--allowed-hosts", help="Comma-separated allowed Host headers (e.g. rpi.ts.net)"),
 ) -> None:
-    """Launch the local Library UI web server."""
+    """Launch the Library UI web server."""
     from subforge.ui.server import run_ui
 
     kwargs: dict[str, Any] = {}
@@ -784,6 +755,8 @@ def ui_cmd(
             kwargs["no_auth"] = False
     if no_auth is not None:
         kwargs["no_auth"] = no_auth
+    if allowed_hosts is not None:
+        kwargs["allowed_hosts"] = {h.strip() for h in allowed_hosts.split(",") if h.strip()}
     try:
         run_ui(**kwargs)
     except KeyboardInterrupt:
@@ -805,29 +778,14 @@ def status_cmd() -> None:
     profiles = p_store.list_public()
     p_names = [p.get("name") for p in profiles if p.get("name")]
 
-    candidates = ["tiny", "base", "small", "medium", "large-v3"]
-    cached = sorted(cached_models(DEFAULT_MODELS_DIR, candidates))
-
     jobs_count = len(list(DEFAULT_JOBS_DIR.glob("*.json"))) if DEFAULT_JOBS_DIR.is_dir() else 0
-
-    cuda_devices = 0
-    try:
-        import ctranslate2
-
-        cuda_devices = ctranslate2.get_cuda_device_count()
-    except Exception:
-        pass
 
     table = Table(box=box.SIMPLE_HEAVY, show_header=False)
     table.add_column("Component", style="bold cyan", width=22)
     table.add_column("Status / Details", style="white")
 
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    accel = f"[green]CUDA GPU ({cuda_devices} device(s))[/]" if cuda_devices > 0 else "[blue]CPU mode[/]"
-    table.add_row("Runtime", f"Python {py_ver} | {accel}")
-
-    whisper_str = f"[green]{', '.join(cached)}[/]" if cached else "[dim]None cached[/]"
-    table.add_row("Whisper Models", whisper_str)
+    table.add_row("Runtime", f"Python {py_ver} | Cloud ASR")
 
     prof_str = f"[green]{', '.join(p_names[:4])}[/]" if p_names else "[dim]None configured[/]"
     if len(p_names) > 4:
@@ -842,124 +800,6 @@ def status_cmd() -> None:
     table.add_row("HTTP Proxy", proxy if proxy else "[dim](not set)[/]")
 
     console.print(Panel(table, title="[bold]SubForge Status Overview[/]", border_style="cyan"))
-
-
-# ── Models Management ───────────────────────────────────────────────────────
-
-models_app = typer.Typer(
-    help="Manage faster-whisper ASR models",
-    add_completion=False,
-    context_settings=CONTEXT_SETTINGS,
-)
-app.add_typer(models_app, name="models")
-app.add_typer(models_app, name="model", hidden=True)
-
-
-@models_app.command("list", context_settings=CONTEXT_SETTINGS, help="List faster-whisper models and their cache status")
-def models_list(
-    config_path: Path = typer.Option(
-        None,
-        "--config",
-        help="Path to config.toml",
-    ),
-) -> None:
-    """List candidate faster-whisper models and cache status."""
-    config = load_config(config_path=config_path)
-    models_dir = config.models_dir
-    candidates = ["tiny", "base", "small", "medium", "large-v3"]
-    cached = cached_models(models_dir, candidates)
-
-    ui_settings = UiSettingsStore(DEFAULT_CONFIG_DIR / "ui.json")
-
-    table = Table(
-        title=f"Faster-Whisper Models ({models_dir})",
-        box=box.ROUNDED,
-        header_style="bold cyan",
-    )
-    table.add_column("Model", style="bold")
-    table.add_column("Status")
-    table.add_column("Disk Size", justify="right")
-    table.add_column("Location / Snapshot", style="dim")
-
-    for m in candidates:
-        direct = ui_settings.get_direct_model_path(m) if ui_settings.path.is_file() else None
-        if direct and (direct / "model.bin").is_file():
-            size = _format_size(_dir_size(direct))
-            table.add_row(m, "[green]Direct[/]", size, str(direct))
-        elif m in cached:
-            m_dir = models_dir / f"models--Systran--faster-whisper-{m}"
-            size = _format_size(_dir_size(m_dir))
-            table.add_row(m, "[cyan]Cached[/]", size, str(m_dir))
-        else:
-            table.add_row(m, "[dim]Not cached[/]", "-", "-")
-
-    console.print(table)
-
-
-@models_app.command("download", context_settings=CONTEXT_SETTINGS, help="Pre-download a faster-whisper model for offline use")
-def models_download(
-    model_size: str = typer.Argument(
-        ...,
-        help="Model size: tiny, base, small, medium, large-v3",
-    ),
-    config_path: Path = typer.Option(
-        None,
-        "--config",
-        help="Path to config.toml",
-    ),
-) -> None:
-    """Download a faster-whisper model snapshot to the local models directory."""
-    if model_size not in {"tiny", "base", "small", "medium", "large-v3"}:
-        raise click.BadParameter(
-            f"Model '{model_size}' must be one of: tiny, base, small, medium, large-v3",
-            param_hint="MODEL_SIZE",
-        )
-    config = load_config(config_path=config_path)
-    models_dir = config.models_dir
-    console.print(f"Downloading faster-whisper model '[bold cyan]{model_size}[/]' to {models_dir}...")
-    try:
-        import faster_whisper
-
-        target = faster_whisper.download_model(model_size, output_dir=str(models_dir))
-        console.print(f"[bold green]✓ Model '{model_size}' downloaded successfully:[/] {target}")
-    except Exception as exc:
-        raise click.ClickException(f"Failed to download model '{model_size}': {exc}") from exc
-
-
-@models_app.command("check", context_settings=CONTEXT_SETTINGS, help="Check status of a specific Whisper model")
-def models_check(
-    model_size: str = typer.Argument(
-        ...,
-        help="Model size: tiny, base, small, medium, large-v3",
-    ),
-    config_path: Path = typer.Option(
-        None,
-        "--config",
-        help="Path to config.toml",
-    ),
-) -> None:
-    """Check if model is ready locally or direct path is valid."""
-    config = load_config(config_path=config_path)
-    ui_settings = UiSettingsStore(DEFAULT_CONFIG_DIR / "ui.json")
-    direct = ui_settings.get_direct_model_path(model_size) if (ui_settings.path.is_file() and model_size in {"medium", "large-v3"}) else None
-    ok, msg = check_model_configuration(model_size, config.models_dir, direct)
-    if ok:
-        console.print(f"[green]✓ {msg}[/]")
-    else:
-        console.print(f"[yellow]! {msg}[/]")
-
-
-@models_app.command("path", context_settings=CONTEXT_SETTINGS, help="Print the Whisper models cache directory")
-def models_path(
-    config_path: Path = typer.Option(
-        None,
-        "--config",
-        help="Path to config.toml",
-    ),
-) -> None:
-    """Print active models cache path."""
-    config = load_config(config_path=config_path)
-    console.print(str(config.models_dir))
 
 
 # ── Model Profiles (Inspection & Connectivity Test) ─────────────────────────
@@ -1239,24 +1079,10 @@ def check_cmd(
         )
         warnings += 1
 
-    # 3. GPU / CTranslate2 acceleration
-    try:
-        import ctranslate2
-
-        cuda_devices = ctranslate2.get_cuda_device_count()
-        if cuda_devices > 0:
-            console.print(f"  [green]✓[/] CUDA GPU acceleration available ({cuda_devices} device(s) detected)")
-        else:
-            console.print("  [blue]ℹ[/] CUDA GPU not detected; running in CPU mode")
-    except Exception as exc:
-        console.print(f"  [yellow]![/] Could not inspect ctranslate2: {exc}")
-        warnings += 1
-
-    # 4. Storage paths
+    # 3. Storage paths
     config = load_config(config_path=config_path)
     for name, p in [
         ("Config dir", DEFAULT_CONFIG_DIR),
-        ("Models dir", config.models_dir),
         ("Jobs dir", config.jobs_dir),
     ]:
         try:
@@ -1266,17 +1092,7 @@ def check_cmd(
             console.print(f"  [bold red]✗[/] {name}: {p} ({exc})")
             errors += 1
 
-    # 5. Cached models
-    candidates = ["tiny", "base", "small", "medium", "large-v3"]
-    cached = sorted(cached_models(config.models_dir, candidates))
-    if cached:
-        console.print(f"  [green]✓[/] Cached Whisper models: {', '.join(cached)}")
-    else:
-        console.print(
-            "  [blue]ℹ[/] No Whisper models cached locally yet (download with: subforge models download <model>)"
-        )
-
-    # 6. LLM API connectivity
+    # 4. LLM API connectivity
     if config.llm_api_key or config.llm_base_url:
         console.print(
             f"  [blue]ℹ[/] LLM Config: model={config.llm_model}, endpoint={config.llm_base_url}"

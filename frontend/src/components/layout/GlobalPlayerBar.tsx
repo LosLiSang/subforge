@@ -54,27 +54,33 @@ export function GlobalPlayerBar() {
     toggleLoop,
     toggleFloatLyrics,
     isDesktopPipActive,
+    isDesktopPipSupported,
     toggleDesktopPip,
     setSleepTimer,
   } = usePlayer()
 
   const [sleepMenuOpen, setSleepMenuOpen] = useState(false)
+  const [volumeMenuOpen, setVolumeMenuOpen] = useState(false)
   const [prevVolume, setPrevVolume] = useState(1.0)
   const sleepMenuRef = useRef<HTMLDivElement | null>(null)
+  const volumeMenuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       if (sleepMenuRef.current && !sleepMenuRef.current.contains(e.target as Node)) {
         setSleepMenuOpen(false)
       }
+      if (volumeMenuRef.current && !volumeMenuRef.current.contains(e.target as Node)) {
+        setVolumeMenuOpen(false)
+      }
     }
-    if (sleepMenuOpen) {
+    if (sleepMenuOpen || volumeMenuOpen) {
       document.addEventListener('mousedown', handleOutsideClick)
     }
     return () => {
       document.removeEventListener('mousedown', handleOutsideClick)
     }
-  }, [sleepMenuOpen])
+  }, [sleepMenuOpen, volumeMenuOpen])
 
   if (!currentTrack) return null
 
@@ -244,14 +250,24 @@ export function GlobalPlayerBar() {
         {/* Right: Volume & Tools matching Image #3 */}
         <div className="player-bar-tools">
           {/* Volume Control Bar matching Image #3 */}
-          <div className="player-bar-volume-group" title="音量控制，最高支持 300% 硬件增益">
+          <div
+            ref={volumeMenuRef}
+            className="player-bar-volume-group"
+            title="音量控制，最高支持 300% 硬件增益"
+          >
             <button
               type="button"
-              className="volume-mute-btn"
-              onClick={toggleMute}
-              aria-label={volume === 0 ? '恢复音量' : '静音'}
+              className={`volume-mute-btn ${volume > 1.0 ? 'is-boosted' : ''}`}
+              onClick={() => {
+                if (typeof window !== 'undefined' && window.innerWidth <= 1180) {
+                  setVolumeMenuOpen((prev) => !prev)
+                } else {
+                  toggleMute()
+                }
+              }}
+              aria-label="音量控制"
             >
-              {volume === 0 ? <VolumeX size={16} /> : <Volume1 size={16} />}
+              {volume === 0 ? <VolumeX size={16} /> : volume > 1.2 ? <Volume2 size={16} /> : <Volume1 size={16} />}
             </button>
             <div
               className="volume-slider-wrap"
@@ -271,7 +287,7 @@ export function GlobalPlayerBar() {
             </div>
             <button
               type="button"
-              className="volume-mute-btn"
+              className="volume-mute-btn volume-plus-btn"
               onClick={() => setVolume(Math.min(3.0, volume + 0.2))}
               title="增大音量"
               aria-label="增大音量"
@@ -279,12 +295,61 @@ export function GlobalPlayerBar() {
               <Volume2 size={16} />
             </button>
             <span className="volume-percent">{Math.round(volume * 100)}%</span>
+
+            {volumeMenuOpen && (
+              <div className="volume-popover" role="dialog" aria-label="音量增益控制">
+                <div className="volume-popover-header">
+                  <span>音量增益</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="volume-popover-pct">{Math.round(volume * 100)}%</span>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-ghost"
+                      onClick={toggleMute}
+                      aria-label={volume === 0 ? '恢复音量' : '静音'}
+                    >
+                      {volume === 0 ? '取消静音' : '静音'}
+                    </button>
+                  </div>
+                </div>
+                <div
+                  className="volume-popover-slider-wrap"
+                  style={{ '--vol-pct': `${volumePercent}%` } as React.CSSProperties}
+                >
+                  <input
+                    type="range"
+                    className="volume-slider"
+                    min={0}
+                    max={3.0}
+                    step={0.01}
+                    value={volume}
+                    onChange={(e) => setVolume(parseFloat(e.target.value))}
+                    aria-label="音量大小 (0% - 300%)"
+                  />
+                </div>
+                <div className="volume-popover-presets">
+                  {[1.0, 1.5, 2.0, 3.0].map((preset) => {
+                    const active = Math.abs(volume - preset) < 0.03
+                    return (
+                      <button
+                        key={preset}
+                        type="button"
+                        className={`volume-preset-pill ${active ? 'active' : ''}`}
+                        onClick={() => setVolume(preset)}
+                      >
+                        {Math.round(preset * 100)}%
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Loop / Repeat */}
           <button
             type="button"
-            className={`player-bar-btn ${loop ? 'active' : ''}`}
+            className={`player-bar-btn loop-btn ${loop ? 'active' : ''}`}
             onClick={toggleLoop}
             title={loop ? '循环播放：单曲循环' : '循环播放：列表顺序'}
             aria-label="循环播放"
@@ -363,19 +428,21 @@ export function GlobalPlayerBar() {
           </div>
 
           {/* Desktop Picture-in-Picture Lyrics */}
-          <button
-            type="button"
-            className={`player-bar-btn ${isDesktopPipActive ? 'active' : ''}`}
-            onClick={toggleDesktopPip}
-            title={
-              isDesktopPipActive
-                ? '关闭桌面歌词（独立置顶小窗）'
-                : '开启桌面歌词（独立置顶小窗，悬浮在其他应用与桌面之上）'
-            }
-            aria-label="独立桌面置顶歌词小窗"
-          >
-            <PictureInPicture size={16} />
-          </button>
+          {isDesktopPipSupported && (
+            <button
+              type="button"
+              className={`player-bar-btn desktop-pip-btn ${isDesktopPipActive ? 'active' : ''}`}
+              onClick={toggleDesktopPip}
+              title={
+                isDesktopPipActive
+                  ? '关闭桌面歌词（独立置顶小窗）'
+                  : '开启桌面歌词（独立置顶小窗，悬浮在其他应用与桌面之上）'
+              }
+              aria-label="独立桌面置顶歌词小窗"
+            >
+              <PictureInPicture size={16} />
+            </button>
+          )}
 
           {/* In-App Float Lyrics */}
           <button

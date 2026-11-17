@@ -3,7 +3,12 @@ import { NavLink, Link } from 'react-router-dom'
 import { useTasks } from '../../context/TaskContext'
 import subforgeLogo from '../../assets/subforge-icon.svg'
 
-export function Sidebar() {
+interface SidebarProps {
+  isOpen?: boolean
+  onClose?: () => void
+}
+
+export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
   const { activeTaskCount } = useTasks()
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     return (localStorage.getItem('sf.theme') as any) || 'dark'
@@ -126,8 +131,8 @@ export function Sidebar() {
   ]
 
   return (
-    <aside className="sidebar">
-      <Link className="brand" to="/">
+    <aside className={`sidebar ${isOpen ? 'is-open' : ''}`}>
+      <Link className="brand" to="/" onClick={onClose}>
         <img className="brand-icon" src={subforgeLogo} alt="SubForge" />
         <div className="brand-title-wrap">
           <span className="brand-text">SubForge</span>
@@ -142,6 +147,7 @@ export function Sidebar() {
             to={item.to}
             end={item.exact}
             className={({ isActive }) => (isActive ? 'active' : '')}
+            onClick={onClose}
           >
             {item.icon}
             {item.label}

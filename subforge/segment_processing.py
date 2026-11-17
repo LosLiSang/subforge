@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import asyncio
-import inspect
 import math
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from subforge.asr.engine import _audio_duration_seconds, transcribe
+from subforge.asr.audio import _audio_duration_seconds
 from subforge.models import SubtitleEntry
 
 _FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
@@ -86,7 +84,7 @@ def extract_audio_segment(
     handle.close()
     output = Path(handle.name)
     command = [
-        _FFMPEG, "-y",
+        _FFMPEG, "-y", "-threads", "1",
         "-ss", f"{clip_start:.3f}",
         "-i", str(request.media_path),
         "-t", f"{clip_end - clip_start:.3f}",
@@ -105,59 +103,3 @@ def extract_audio_segment(
         detail = (result.stderr or "ffmpeg failed").strip().splitlines()[-1][:300]
         raise SegmentProcessingError(f"音频片段截取失败：{detail}")
     return ExtractedAudio(output, round(clip_start, 3), round(clip_end, 3))
-
-
-TranslateFn = Callable[[list[SubtitleEntry], str, str], Awaitable[list[SubtitleEntry]] | list[SubtitleEntry]]
-
-
-class WhisperSegmentAdapter:
-    def __init__(
-        self,
-        *,
-        extractor: Callable[[SegmentRequest], ExtractedAudio] = extract_audio_segment,
-        transcribe_fn: Callable = transcribe,
-        translate_fn: TranslateFn | None = None,
-    ) -> None:
-        self._extractor = extractor
-        self._transcribe = transcribe_fn
-        self._translate = translate_fn
-
-    async def process(self, request: SegmentRequest) -> SegmentCandidate:
-        extracted = await asyncio.to_thread(self._extractor, request)
-        try:
-            options = dict(request.asr_options)
-            options.setdefault("language", request.source_language)
-            entries = await asyncio.to_thread(self._transcribe, extracted.path, **options)
-            source: list[SubtitleEntry] = []
-            for entry in entries:
-                absolute_start = extracted.start + float(entry.start)
-                absolute_end = extracted.start + float(entry.end)
-                if absolute_end <= request.target_start or absolute_start >= request.target_end:
-                    continue
-                start = max(request.target_start, absolute_start)
-                end = min(request.target_end, absolute_end)
-                text = entry.text.strip()
-                if text and start < end:
-                    source.append(SubtitleEntry(len(source) + 1, round(start, 3), round(end, 3), text))
-            if not source:
-                raise SegmentProcessingError("片段 ASR 未产生可用文本")
-
-            target: list[SubtitleEntry] = []
-            if self._translate is not None:
-                translated = self._translate(source, request.source_language, request.target_language)
-                target = await translated if inspect.isawaitable(translated) else translated
-                if len(target) != len(source) or any(not entry.text.strip() for entry in target):
-                    raise SegmentProcessingError("片段翻译未返回完整结果")
-                target = [
-                    SubtitleEntry(index, source[index - 1].start, source[index - 1].end, entry.text.strip())
-                    for index, entry in enumerate(target, start=1)
-                ]
-            return SegmentCandidate(
-                source_entries=source,
-                target_entries=target,
-                processor="whisper",
-                target_start=request.target_start,
-                target_end=request.target_end,
-            )
-        finally:
-            extracted.cleanup()

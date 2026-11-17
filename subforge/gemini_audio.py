@@ -123,15 +123,19 @@ class GeminiAudioProfile:
 
 def gemini_profile_from_mapping(profile: dict) -> GeminiAudioProfile:
     """从统一 ModelProfile 快照构造 Gemini 音频配置（adapter / 连通性测试共用）。"""
+    protocol = str(profile.get("protocol", "openai_compatible"))
+    max_seg = int(profile.get("max_request_seconds", profile.get("max_segment_seconds", 60)) or 60)
+    if protocol == "deepseek_asr":
+        max_seg = min(max_seg, 110)
     return GeminiAudioProfile(
         profile_id=str(profile.get("profile_id", "")),
         name=str(profile.get("name", "")),
-        protocol=str(profile.get("protocol", "openai_compatible")),
+        protocol=protocol,
         base_url=str(profile.get("base_url", "")),
         model=str(profile.get("model", "")),
         api_key=str(profile.get("api_key", "")),
         default_processing_mode=str(profile.get("default_processing_mode", "transcribe")),
-        max_segment_seconds=int(profile.get("max_request_seconds", profile.get("max_segment_seconds", 60)) or 60),
+        max_segment_seconds=max_seg,
         temperature=float(profile.get("temperature", 0.0) or 0.0),
         bilingual_prompt=str(profile.get("bilingual_prompt", "")),
         transcribe_prompt=str(profile.get("transcribe_prompt", "")),
@@ -285,7 +289,16 @@ class _BaseGeminiTransport:
             trust_env=False,
         )
 
-    async def _post(self, url: str, *, headers: dict, body: dict, parser: Callable[[dict], str]) -> str:
+    async def _post(
+        self,
+        url: str,
+        *,
+        headers: dict,
+        body: dict | None = None,
+        data: dict | None = None,
+        files: dict | None = None,
+        parser: Callable[[dict], str],
+    ) -> str:
         if not self.profile.api_key:
             raise GeminiAudioError("Gemini 音频配置缺少 API Key")
         client = self._client or self._new_client()
@@ -295,11 +308,18 @@ class _BaseGeminiTransport:
             attempts = len(self._retry_delays) + 1
             for attempt in range(attempts):
                 try:
+                    req_kwargs: dict[str, Any] = {"headers": headers}
+                    if files is not None:
+                        req_kwargs["files"] = files
+                        if data is not None:
+                            req_kwargs["data"] = data
+                    else:
+                        req_kwargs["json"] = body
                     if self._request_limiter is None:
-                        response = await client.post(url, headers=headers, json=body)
+                        response = await client.post(url, **req_kwargs)
                     else:
                         async with self._request_limiter.slot():
-                            response = await client.post(url, headers=headers, json=body)
+                            response = await client.post(url, **req_kwargs)
                     if response.status_code == 401:
                         raise GeminiAudioError("Gemini 音频鉴权失败（401）")
                     if response.status_code == 429 or response.status_code >= 500:
@@ -435,6 +455,90 @@ class OpenAICompatibleAudioTransport(_BaseGeminiTransport):
         )
 
 
+class OpenAIWhisperTransport(_BaseGeminiTransport):
+    """OpenAI-compatible `/audio/transcriptions` multipart transport (OpenAI, Groq, etc.)."""
+
+    async def generate(self, audio: bytes, mime_type: str, prompt: str) -> str:
+        ext = "wav" if mime_type == "audio/wav" else mime_type.split("/")[-1]
+        url = f"{self.profile.base_url.rstrip('/')}/audio/transcriptions"
+        data: dict[str, Any] = {
+            "model": self.profile.model,
+            "response_format": "verbose_json",
+            "timestamp_granularities[]": "segment",
+        }
+        if self.profile.temperature:
+            data["temperature"] = str(self.profile.temperature)
+
+        def parse(payload: dict) -> str:
+            raw_segments = payload.get("segments")
+            if isinstance(raw_segments, list) and raw_segments:
+                segments = []
+                for seg in raw_segments:
+                    if not isinstance(seg, dict):
+                        continue
+                    text = str(seg.get("text") or "").strip()
+                    if not text:
+                        continue
+                    segments.append({
+                        "start": float(seg.get("start", 0.0)),
+                        "end": float(seg.get("end", 0.0)),
+                        "text": text,
+                    })
+                if segments:
+                    return json.dumps({"segments": segments}, ensure_ascii=False)
+            return str(payload.get("text") or "").strip()
+
+        return await self._post(
+            url,
+            headers={"Authorization": f"Bearer {self.profile.api_key}"},
+            data=data,
+            files={"file": (f"audio.{ext}", audio, mime_type)},
+            parser=parse,
+        )
+
+
+class DeepSeekAsrTransport(_BaseGeminiTransport):
+    """DeepSeek official ASR (`POST /v1/tools/asr`, max 8 MiB & 120s per request)."""
+
+    async def generate(self, audio: bytes, mime_type: str, prompt: str) -> str:
+        base = self.profile.base_url.rstrip("/")
+        url = f"{base}/tools/asr" if base.endswith("/v1") else f"{base}/v1/tools/asr"
+        ext = "ogg" if "ogg" in mime_type else "wav"
+
+        def parse(payload: dict) -> str:
+            text = str(payload.get("text") or "").strip()
+            if not text:
+                return ""
+            duration_ms = payload.get("duration_ms")
+            if isinstance(duration_ms, (int, float)) and duration_ms > 0:
+                return json.dumps({
+                    "segments": [{"start": 0.0, "end": round(float(duration_ms) / 1000.0, 3), "text": text}]
+                }, ensure_ascii=False)
+            return text
+
+        return await self._post(
+            url,
+            headers={"Authorization": f"Bearer {self.profile.api_key}"},
+            files={"file": (f"audio.{ext}", audio, mime_type)},
+            parser=parse,
+        )
+
+
+def build_audio_transport(
+    profile: GeminiAudioProfile,
+    *,
+    request_limiter: RemoteAsrRequestLimiter | None = None,
+) -> GeminiAudioTransport:
+    """Build the appropriate cloud ASR transport for a profile protocol."""
+    if profile.protocol == "google_native":
+        return GoogleGeminiTransport(profile, request_limiter=request_limiter)
+    if profile.protocol == "openai_whisper":
+        return OpenAIWhisperTransport(profile, request_limiter=request_limiter)
+    if profile.protocol == "deepseek_asr":
+        return DeepSeekAsrTransport(profile, request_limiter=request_limiter)
+    return OpenAICompatibleAudioTransport(profile, request_limiter=request_limiter)
+
+
 TranslateFn = Callable[[list[SubtitleEntry], str, str], Awaitable[list[SubtitleEntry]] | list[SubtitleEntry]]
 MergeFn = Callable[[list[dict]], Awaitable[str]]
 
@@ -442,7 +546,7 @@ MergeFn = Callable[[list[dict]], Awaitable[str]]
 def detect_speech_regions(clip_path: Path, clip_duration: float) -> list[tuple[float, float]]:
     """用 ffmpeg silencedetect 找出语音区间（时间轴由 SubForge 产生，不依赖模型）。"""
     result = subprocess.run(
-        [_FFMPEG, "-i", str(clip_path),
+        [_FFMPEG, "-threads", "1", "-i", str(clip_path),
          "-af", "silencedetect=noise=-35dB:d=0.4", "-f", "null", "-"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
     )
@@ -528,7 +632,7 @@ def plan_fixed_chunks(clip_duration: float, max_seconds: float) -> list[tuple[fl
 def cut_wav_bytes(clip_path: Path, start: float, end: float) -> bytes:
     """从 16k mono wav 截取 [start, end) 并返回 wav 字节。"""
     result = subprocess.run(
-        [_FFMPEG, "-y", "-i", str(clip_path), "-ss", f"{start:.3f}",
+        [_FFMPEG, "-y", "-threads", "1", "-i", str(clip_path), "-ss", f"{start:.3f}",
          "-t", f"{end - start:.3f}", "-c:a", "pcm_s16le", "-f", "wav", "-"],
         capture_output=True, timeout=120,
     )

@@ -1869,8 +1869,9 @@ def test_local_import_without_title_defaults_to_stem(tmp_path):
     assert "my_track" in page.text
 
 
-def test_rj_folder_preview_and_background_import(tmp_path):
+def test_rj_folder_preview_and_background_import(tmp_path, monkeypatch):
     import time
+    monkeypatch.setattr("subforge.dlsite.fetch_dlsite_metadata", lambda *args, **kwargs: None)
     library = tmp_path / "Library"
     folder = tmp_path / "RJ01499022"
     (folder / "本篇").mkdir(parents=True)
@@ -1900,7 +1901,7 @@ def test_rj_folder_preview_and_background_import(tmp_path):
     deadline = time.time() + 5
     while time.time() < deadline:
         status = client.get(f"/api/imports/{task_id}").json()
-        if status["status"] != "running":
+        if status["status"] != "running" and status.get("auto_process_status") != "pending":
             break
         time.sleep(0.02)
     assert status["status"] == "done"

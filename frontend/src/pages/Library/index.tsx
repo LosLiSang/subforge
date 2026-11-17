@@ -422,7 +422,8 @@ export function LibraryPage() {
           </small>
         </div>
       ) : viewMode === 'list' ? (
-        <div className="works-table-container">
+        <>
+        <div className="works-table-container works-desktop-table">
           <table className="works-table">
             <thead>
               <tr>
@@ -522,6 +523,84 @@ export function LibraryPage() {
             </tbody>
           </table>
         </div>
+
+        <div className="works-mobile-list">
+          {filteredItems.map((item) => {
+            const coverSrc = item.cover_url
+              ? `${item.cover_url}${item.updated_at ? (item.cover_url.includes('?') ? `&v=${encodeURIComponent(item.updated_at)}` : `?v=${encodeURIComponent(item.updated_at)}`) : ''}`
+              : '/covers/default'
+            return (
+              <div key={item.item_id} className="work-mobile-item">
+                <Link to={`/items/${item.item_id}`} className="work-mobile-cover">
+                  <img
+                    src={coverSrc}
+                    alt=""
+                    onError={(e) => ((e.target as HTMLElement).style.opacity = '0.3')}
+                  />
+                </Link>
+                <div className="work-mobile-body">
+                  <Link to={`/items/${item.item_id}`} className="work-mobile-title" title={item.title}>
+                    {item.title}
+                  </Link>
+                  <div className="work-mobile-chips">
+                    {item.rj_code ? (
+                      <span className="chip chip-rj">{item.rj_code}</span>
+                    ) : item.kind === 'stream_archive' ? (
+                      <span
+                        className="chip"
+                        style={{
+                          background: 'rgba(14, 42, 71, 0.85)',
+                          color: '#38bdf8',
+                          borderColor: 'rgba(56, 189, 248, 0.3)',
+                        }}
+                      >
+                        录播
+                      </span>
+                    ) : null}
+                    {item.creators &&
+                      item.creators.slice(0, 3).map((c) => (
+                        <span
+                          key={c.creator_id}
+                          className={`chip ${c.kind === 'voice_actor' ? 'chip-creator' : 'chip-circle'}`}
+                        >
+                          {c.name}
+                        </span>
+                      ))}
+                  </div>
+                  <div className="work-mobile-footer">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
+                      {item.subtitle_status === 'bilingual' && (
+                        <span className="sub-badge sub-bilingual">双语 ✓</span>
+                      )}
+                      {item.subtitle_status === 'zh' && (
+                        <span className="sub-badge sub-zh">中字 ✓</span>
+                      )}
+                      {item.subtitle_status === 'jp' && (
+                        <span className="sub-badge sub-jp">日字 ✓</span>
+                      )}
+                      {item.subtitle_status === 'none' && (
+                        <span className="sub-badge sub-none">未转写</span>
+                      )}
+                      <span style={{ fontSize: 11.5, color: 'var(--fg-dim)', fontFamily: 'var(--font-mono)' }}>
+                        {item.track_count} 轨 · {formatBytes(item.total_size)}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary btn-circle"
+                      onClick={(e) => handleQuickPlay(e, item)}
+                      title="快捷播放"
+                      style={{ flexShrink: 0 }}
+                    >
+                      <Play size={13} fill="currentColor" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        </>
       ) : (
         <div className="works-grid">
           {filteredItems.map((item) => (

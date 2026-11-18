@@ -88,7 +88,26 @@ export function GlobalPlayerBar() {
 
   const coverUrl = currentItem ? `/covers/${currentItem.item_id}` : '/covers/default'
   const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0
-  const volumePercent = Math.min(100, Math.round((volume / 5.0) * 100))
+
+  const volumeToSlider = (val: number) => {
+    const clamped = Math.max(0, Math.min(50.0, val))
+    if (clamped <= 2.0) return (clamped / 2.0) * 40
+    return 40 + (60 * Math.log(clamped / 2.0)) / Math.log(25)
+  }
+
+  const sliderToVolume = (pos: number) => {
+    const clamped = Math.max(0, Math.min(100, pos))
+    if (clamped <= 40) return (clamped / 40) * 2.0
+    return 2.0 * Math.pow(25, (clamped - 40) / 60)
+  }
+
+  const nextVolumeStep = (val: number) => {
+    const step = val < 2.0 ? 0.25 : val < 10.0 ? 1.0 : 5.0
+    return Math.min(50.0, Math.round((val + step) * 100) / 100)
+  }
+
+  const sliderPos = volumeToSlider(volume)
+  const volumePercent = Math.min(100, Math.max(0, Math.round(sliderPos * 10) / 10))
 
   const handleCycleSpeed = () => {
     const rates = [1.0, 1.25, 1.5, 2.0, 0.75]
@@ -255,7 +274,7 @@ export function GlobalPlayerBar() {
           <div
             ref={volumeMenuRef}
             className="player-bar-volume-group"
-            title="音量控制，最高支持 500% 硬件增益"
+            title="音量控制，最高支持 5000% 硬件增益"
           >
             <button
               type="button"
@@ -279,10 +298,10 @@ export function GlobalPlayerBar() {
                 type="range"
                 className="volume-slider"
                 min={0}
-                max={5.0}
-                step={0.01}
-                value={volume}
-                onChange={(e) => setVolume(parseFloat(e.target.value))}
+                max={100}
+                step={0.5}
+                value={sliderPos}
+                onChange={(e) => setVolume(sliderToVolume(parseFloat(e.target.value)))}
                 title={`音量: ${Math.round(volume * 100)}%`}
                 aria-label="音量大小"
               />
@@ -290,7 +309,7 @@ export function GlobalPlayerBar() {
             <button
               type="button"
               className="volume-mute-btn volume-plus-btn"
-              onClick={() => setVolume(Math.min(5.0, volume + 0.2))}
+              onClick={() => setVolume(nextVolumeStep(volume))}
               title="增大音量"
               aria-label="增大音量"
             >
@@ -322,16 +341,16 @@ export function GlobalPlayerBar() {
                     type="range"
                     className="volume-slider"
                     min={0}
-                    max={5.0}
-                    step={0.01}
-                    value={volume}
-                    onChange={(e) => setVolume(parseFloat(e.target.value))}
-                    aria-label="音量大小 (0% - 500%)"
+                    max={100}
+                    step={0.5}
+                    value={sliderPos}
+                    onChange={(e) => setVolume(sliderToVolume(parseFloat(e.target.value)))}
+                    aria-label="音量大小 (0% - 5000%)"
                   />
                 </div>
                 <div className="volume-popover-presets">
-                  {[1.0, 1.5, 2.0, 3.0, 5.0].map((preset) => {
-                    const active = Math.abs(volume - preset) < 0.03
+                  {[1.0, 3.0, 10.0, 25.0, 50.0].map((preset) => {
+                    const active = Math.abs(volume - preset) < Math.max(0.03, preset * 0.015)
                     return (
                       <button
                         key={preset}

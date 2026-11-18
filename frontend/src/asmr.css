@@ -588,7 +588,7 @@
   position: absolute;
   bottom: calc(100% + 12px);
   right: -24px;
-  width: 240px;
+  width: 264px;
   max-width: calc(100vw - 24px);
   padding: 12px 14px;
   background: rgba(15, 20, 30, 0.96);
@@ -628,7 +628,7 @@
 .volume-popover-presets {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 5px;
+  gap: 4px;
 }
 .volume-preset-pill {
   padding: 4px 2px;
@@ -637,8 +637,10 @@
   background: rgba(255, 255, 255, 0.05);
   color: var(--fg-dim);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
+  white-space: nowrap;
+  text-align: center;
   cursor: pointer;
   transition: all 0.15s ease;
 }

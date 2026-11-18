@@ -67,7 +67,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [volume, setVolumeState] = useState(() => {
     const saved = localStorage.getItem('subforge_volume')
     const parsed = saved ? parseFloat(saved) : 1.0
-    return Number.isFinite(parsed) ? Math.max(0, Math.min(5.0, parsed)) : 1.0
+    return Number.isFinite(parsed) ? Math.max(0, Math.min(50.0, parsed)) : 1.0
   })
   const [playbackRate, setPlaybackRateState] = useState(1.0)
   const [loop, setLoop] = useState(false)
@@ -84,6 +84,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const audioCtxRef = useRef<AudioContext | null>(null)
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null)
   const gainNodeRef = useRef<GainNode | null>(null)
+  const levelerCompressorRef = useRef<DynamicsCompressorNode | null>(null)
   const volumeRef = useRef(volume)
   const pipWinRef = useRef<Window | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -280,25 +281,33 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         const source = ctx.createMediaElementSource(audioRef.current)
         const gain = ctx.createGain()
         gain.gain.value = volumeRef.current
-        const compressor = ctx.createDynamicsCompressor()
-        compressor.threshold.value = -0.5
-        compressor.knee.value = 0
-        compressor.ratio.value = 20
-        compressor.attack.value = 0.001
-        compressor.release.value = 0.05
+        const levelerCompressor = ctx.createDynamicsCompressor()
+        levelerCompressor.threshold.value = -18
+        levelerCompressor.knee.value = 12
+        levelerCompressor.ratio.value = volumeRef.current > 2.0 ? 5 : 1
+        levelerCompressor.attack.value = 0.005
+        levelerCompressor.release.value = 0.15
+        const safetyLimiter = ctx.createDynamicsCompressor()
+        safetyLimiter.threshold.value = -0.5
+        safetyLimiter.knee.value = 0
+        safetyLimiter.ratio.value = 20
+        safetyLimiter.attack.value = 0.001
+        safetyLimiter.release.value = 0.05
         source.connect(gain)
-        gain.connect(compressor)
-        compressor.connect(ctx.destination)
+        gain.connect(levelerCompressor)
+        levelerCompressor.connect(safetyLimiter)
+        safetyLimiter.connect(ctx.destination)
 
         audioCtxRef.current = ctx
         sourceNodeRef.current = source
         gainNodeRef.current = gain
+        levelerCompressorRef.current = levelerCompressor
         ctx.addEventListener('statechange', () => {
           if (audioCtxRef.current === ctx && gainNodeRef.current) {
             setGainStatus(ctx.state === 'running' ? 'active' : 'suspended')
           }
         })
-        // GainNode handles 0..5.0; keep element volume at 1.0 to avoid val^2 double-attenuation
+        // GainNode handles 0..50.0; keep element volume at 1.0 to avoid val^2 double-attenuation
         audioRef.current.volume = 1.0
         setGainStatus(ctx.state === 'running' ? 'active' : 'suspended')
       }
@@ -320,7 +329,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }
 
   const setVolume = (v: number) => {
-    const val = Math.max(0, Math.min(5.0, v))
+    const val = Math.max(0, Math.min(50.0, v))
     volumeRef.current = val
     setVolumeState(val)
     localStorage.setItem('subforge_volume', String(val))
@@ -330,13 +339,23 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         audioRef.current.volume = 1.0
       }
       const ctx = audioCtxRef.current
+      const levelerRatio = val > 2.0 ? 5 : 1
       if (ctx.state !== 'running') {
         gainNodeRef.current.gain.value = val
+        if (levelerCompressorRef.current) {
+          levelerCompressorRef.current.ratio.value = levelerRatio
+        }
       } else {
         try {
           gainNodeRef.current.gain.setTargetAtTime(val, ctx.currentTime, 0.015)
+          if (levelerCompressorRef.current) {
+            levelerCompressorRef.current.ratio.setTargetAtTime(levelerRatio, ctx.currentTime, 0.015)
+          }
         } catch {
           gainNodeRef.current.gain.value = val
+          if (levelerCompressorRef.current) {
+            levelerCompressorRef.current.ratio.value = levelerRatio
+          }
         }
       }
       resumeAudioContext()

@@ -86,7 +86,7 @@ export function GlobalPlayerBar() {
 
   const coverUrl = currentItem ? `/covers/${currentItem.item_id}` : '/covers/default'
   const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0
-  const volumePercent = Math.min(100, Math.round((volume / 3.0) * 100))
+  const volumePercent = Math.min(100, Math.round((volume / 5.0) * 100))
 
   const handleCycleSpeed = () => {
     const rates = [1.0, 1.25, 1.5, 2.0, 0.75]
@@ -253,7 +253,7 @@ export function GlobalPlayerBar() {
           <div
             ref={volumeMenuRef}
             className="player-bar-volume-group"
-            title="音量控制，最高支持 300% 硬件增益"
+            title="音量控制，最高支持 500% 硬件增益"
           >
             <button
               type="button"
@@ -277,7 +277,7 @@ export function GlobalPlayerBar() {
                 type="range"
                 className="volume-slider"
                 min={0}
-                max={3.0}
+                max={5.0}
                 step={0.01}
                 value={volume}
                 onChange={(e) => setVolume(parseFloat(e.target.value))}
@@ -288,7 +288,7 @@ export function GlobalPlayerBar() {
             <button
               type="button"
               className="volume-mute-btn volume-plus-btn"
-              onClick={() => setVolume(Math.min(3.0, volume + 0.2))}
+              onClick={() => setVolume(Math.min(5.0, volume + 0.2))}
               title="增大音量"
               aria-label="增大音量"
             >
@@ -320,15 +320,15 @@ export function GlobalPlayerBar() {
                     type="range"
                     className="volume-slider"
                     min={0}
-                    max={3.0}
+                    max={5.0}
                     step={0.01}
                     value={volume}
                     onChange={(e) => setVolume(parseFloat(e.target.value))}
-                    aria-label="音量大小 (0% - 300%)"
+                    aria-label="音量大小 (0% - 500%)"
                   />
                 </div>
                 <div className="volume-popover-presets">
-                  {[1.0, 1.5, 2.0, 3.0].map((preset) => {
+                  {[1.0, 1.5, 2.0, 3.0, 5.0].map((preset) => {
                     const active = Math.abs(volume - preset) < 0.03
                     return (
                       <button

@@ -64,7 +64,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [duration, setDuration] = useState(0)
   const [volume, setVolumeState] = useState(() => {
     const saved = localStorage.getItem('subforge_volume')
-    return saved ? parseFloat(saved) : 1.0
+    const parsed = saved ? parseFloat(saved) : 1.0
+    return Number.isFinite(parsed) ? Math.max(0, Math.min(5.0, parsed)) : 1.0
   })
   const [playbackRate, setPlaybackRateState] = useState(1.0)
   const [loop, setLoop] = useState(false)
@@ -79,6 +80,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const gainNodeRef = useRef<GainNode | null>(null)
+  const volumeRef = useRef(volume)
   const pipWinRef = useRef<Window | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -109,7 +111,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     isPlayingRef.current = isPlaying
     subtitlesRef.current = subtitles
     fontSettingsRef.current = fontSettings
-  }, [sleepTimerOption, currentItem, currentTrack, playlist, loop, currentTime, duration, isPlaying, subtitles, fontSettings])
+    volumeRef.current = volume
+  }, [sleepTimerOption, currentItem, currentTrack, playlist, loop, currentTime, duration, isPlaying, subtitles, fontSettings, volume])
 
   useEffect(() => {
     const audio = new Audio()
@@ -141,7 +144,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setDuration(audio.duration)
       }
     })
-    audio.addEventListener('play', () => setIsPlaying(true))
+    audio.addEventListener('play', () => {
+      setIsPlaying(true)
+      const ctx = audioCtxRef.current
+      if (ctx && ctx.state !== 'running') {
+        ctx.resume().catch(() => {})
+      }
+    })
     audio.addEventListener('pause', () => setIsPlaying(false))
     audio.addEventListener('ended', () => {
       if (sleepOptionRef.current === 'end-of-track') {
@@ -213,38 +222,84 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setSleepTimerRemaining(typeof option === 'number' ? option * 60 : null)
   }, [])
 
+  const resumeAudioContext = () => {
+    const ctx = audioCtxRef.current
+    if (ctx && ctx.state !== 'running') {
+      ctx.resume().catch(() => {})
+    }
+  }
+
+  useEffect(() => {
+    const handleGestureResume = () => {
+      if (!audioRef.current?.paused) {
+        resumeAudioContext()
+      }
+    }
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && !audioRef.current?.paused) {
+        resumeAudioContext()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('touchstart', handleGestureResume, { passive: true })
+    window.addEventListener('click', handleGestureResume, { passive: true })
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('touchstart', handleGestureResume)
+      window.removeEventListener('click', handleGestureResume)
+    }
+  }, [])
+
   const setupGainNode = () => {
     if (!audioRef.current) return
     try {
       if (!audioCtxRef.current) {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
         if (!AudioCtx) return
         const ctx = new AudioCtx()
         audioCtxRef.current = ctx
         const source = ctx.createMediaElementSource(audioRef.current)
         const gain = ctx.createGain()
-        gain.gain.value = volume
+        gain.gain.value = volumeRef.current
+        const compressor = ctx.createDynamicsCompressor()
+        compressor.threshold.value = -3
+        compressor.knee.value = 6
+        compressor.ratio.value = 12
+        compressor.attack.value = 0.003
+        compressor.release.value = 0.15
         source.connect(gain)
-        gain.connect(ctx.destination)
+        gain.connect(compressor)
+        compressor.connect(ctx.destination)
         gainNodeRef.current = gain
+        // GainNode handles 0..5.0; keep element volume at 1.0 to avoid val^2 double-attenuation
+        audioRef.current.volume = 1.0
       }
-      if (audioCtxRef.current.state === 'suspended') {
-        audioCtxRef.current.resume()
-      }
+      resumeAudioContext()
     } catch (e) {
       console.warn('Web Audio gain node setup failed:', e)
     }
   }
 
   const setVolume = (v: number) => {
-    const val = Math.max(0, Math.min(3.0, v))
+    const val = Math.max(0, Math.min(5.0, v))
+    volumeRef.current = val
     setVolumeState(val)
     localStorage.setItem('subforge_volume', String(val))
-    if (audioRef.current) {
+    setupGainNode()
+    if (gainNodeRef.current && audioCtxRef.current) {
+      if (audioRef.current) {
+        audioRef.current.volume = 1.0
+      }
+      try {
+        gainNodeRef.current.gain.setTargetAtTime(val, audioCtxRef.current.currentTime, 0.015)
+      } catch {
+        gainNodeRef.current.gain.value = val
+      }
+      resumeAudioContext()
+    } else if (audioRef.current) {
       audioRef.current.volume = Math.min(1.0, val)
-    }
-    if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = val
     }
   }
 

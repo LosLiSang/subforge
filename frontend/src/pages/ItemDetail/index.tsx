@@ -837,7 +837,7 @@ export function ItemDetailPage() {
       </div>
 
       {/* Overview Stats Grid */}
-      <div className="card-grid" style={{ marginBottom: 32 }}>
+      <div className="card-grid detail-stats-grid" style={{ marginBottom: 32 }}>
         <div className="stat-card">
           <span className="stat-value">{overview?.track_count ?? tracks.length}</span>
           <span className="stat-label">总音轨数</span>

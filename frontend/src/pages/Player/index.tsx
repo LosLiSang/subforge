@@ -323,21 +323,8 @@ export function PlayerPage() {
         </div>
 
         {/* Subtitles Mode & Controls Toolbar */}
-        <div
-          className="player-toolbar-card"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '12px 18px',
-            background: 'var(--bg-card)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 'var(--radius-md)',
-            gap: 16,
-            flexWrap: 'wrap',
-          }}
-        >
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="player-toolbar-card">
+          <div className="player-toolbar-group">
           <button
             type="button"
             className={`btn btn-sm ${displayMode === 'bilingual' ? 'btn-primary' : 'btn-ghost'}`}
@@ -360,7 +347,7 @@ export function PlayerPage() {
             仅中文
           </button>
 
-          <span style={{ width: 1, height: 18, background: 'var(--border-subtle)', margin: '0 4px', alignSelf: 'center' }} />
+          <span className="player-toolbar-divider" />
 
           {isDesktopPipSupported && (
             <button
@@ -391,7 +378,7 @@ export function PlayerPage() {
           </button>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="player-toolbar-group player-toolbar-group--actions">
           <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255, 255, 255, 0.05)', borderRadius: 'var(--radius-sm)', padding: 2 }}>
             <button
               type="button"

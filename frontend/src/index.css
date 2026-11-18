@@ -2446,6 +2446,38 @@ select optgroup {
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
+.player-toolbar-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.player-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.player-toolbar-group--actions {
+  gap: 10px;
+}
+
+.player-toolbar-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border-subtle);
+  margin: 0 4px;
+  align-self: center;
+  flex-shrink: 0;
+}
+
 .player-back-link {
   min-width: 0;
   max-width: 100%;
@@ -2850,9 +2882,65 @@ html[data-corner-table="sharp"] .task-progress-bar-fill {
   }
 
   .hero-meta-badges,
-  .hero-chips,
-  .hero-actions {
+  .hero-chips {
     justify-content: center;
+  }
+
+  .hero-actions {
+    width: 100%;
+    max-width: 100%;
+    flex-wrap: nowrap;
+    justify-content: safe center;
+    gap: 6px;
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .hero-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .hero-actions .btn {
+    padding: 6px 10px;
+    font-size: 12px;
+    gap: 5px;
+    min-height: 32px;
+  }
+
+  .detail-stats-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 20px !important;
+  }
+
+  .detail-stats-grid .stat-card {
+    padding: 10px 4px;
+    gap: 3px;
+    align-items: center;
+    text-align: center;
+    min-width: 0;
+  }
+
+  .detail-stats-grid .stat-value {
+    font-size: 13.5px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  .detail-stats-grid .stat-label {
+    font-size: 10px;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
   }
 
   .hero-title {
@@ -2966,6 +3054,43 @@ a {
     margin-top: -16px;
     padding-top: 16px;
     padding-bottom: 10px;
+  }
+
+  .player-toolbar-card {
+    padding: 8px 10px;
+    gap: 8px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .player-toolbar-group {
+    width: 100%;
+    max-width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 6px;
+  }
+
+  .player-toolbar-group::-webkit-scrollbar {
+    display: none;
+  }
+
+  .player-toolbar-group > * {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .player-toolbar-group .btn-sm {
+    padding: 4px 8px;
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+
+  .player-toolbar-divider {
+    height: 14px;
+    margin: 0 2px;
   }
 }
 

@@ -177,9 +177,14 @@ export function GlobalPlayerBar() {
               </span>
             )}
           </div>
+
+          <span className="player-bar-mobile-time" aria-label="播放时间">
+            {formatSeconds(currentTime)} / {formatSeconds(duration)}
+          </span>
         </div>
 
-        {/* Center: Controls matching Image #3 */}
+        <div className="player-bar-controls-row">
+          {/* Center: Controls matching Image #3 */}
         <div className="player-bar-center">
           {/* Main 5 Control Buttons */}
           <div className="player-bar-buttons">
@@ -503,6 +508,7 @@ export function GlobalPlayerBar() {
           >
             <Maximize2 size={16} />
           </Link>
+        </div>
         </div>
       </div>
     </div>

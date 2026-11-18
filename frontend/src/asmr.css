@@ -561,6 +561,12 @@
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
   cursor: pointer;
 }
+.player-bar-controls-row {
+  display: contents;
+}
+.player-bar-mobile-time {
+  display: none;
+}
 .player-bar-mobile-progress {
   display: none;
   position: absolute;
@@ -704,63 +710,143 @@
 }
 @media (max-width: 768px) {
   .player-bar {
-    height: calc(68px + env(safe-area-inset-bottom, 0px));
+    height: auto;
+    min-height: calc(106px + env(safe-area-inset-bottom, 0px));
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   .player-bar-row {
-    padding: 0 10px;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    padding: 10px 12px 8px;
     gap: 6px;
   }
   .player-bar-mobile-progress {
-    display: block;
+    display: flex;
+    align-items: center;
+    top: -10px;
+    height: 22px;
+    z-index: 5;
+    touch-action: none;
   }
-  .player-bar-center {
-    flex: 0 0 auto;
-    width: auto;
-    min-width: 0;
+  .player-bar-mobile-progress .player-bar-seek.mobile-seek {
+    position: static;
+    width: 100%;
+    height: 22px;
+    margin: 0;
+    padding: 0;
+    border-radius: 0;
+    background-size: 100% 4px;
+    background-position: center;
+    background-repeat: no-repeat;
+    touch-action: none;
   }
-  .player-bar-center .player-bar-progress-wrap,
-  .player-bar-center .player-bar-progress-block {
-    display: none;
+  .player-bar-mobile-progress .player-bar-seek.mobile-seek::-webkit-slider-thumb {
+    width: 14px;
+    height: 14px;
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.55);
   }
-  .player-bar-buttons {
-    gap: 2px;
-  }
-  .player-bar-buttons .skip-btn {
-    display: none;
-  }
-  .player-bar-btn {
-    padding: 4px;
-  }
-  .player-bar-toggle-round {
-    width: 34px;
-    height: 34px;
+  .player-bar-mobile-progress .player-bar-seek.mobile-seek::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: none;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.55);
   }
   .player-bar-info {
-    flex: 1;
+    flex: 0 0 auto;
     min-width: 0;
-    width: auto;
+    width: 100%;
     max-width: none;
-    gap: 8px;
+    gap: 10px;
   }
   .player-bar-cover {
     width: 38px;
     height: 38px;
   }
+  .player-bar-meta {
+    flex: 1;
+    min-width: 0;
+  }
   .player-bar-subtext {
     display: none;
   }
+  .player-bar-mobile-time {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-dim);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .player-bar-controls-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 4px;
+  }
+  .player-bar-center,
+  .player-bar-buttons,
+  .player-bar-tools {
+    display: contents;
+  }
+  .player-bar-center .player-bar-progress-wrap,
+  .player-bar-center .player-bar-progress-block,
+  .player-bar-buttons .skip-btn,
   .player-bar-tools .player-speed-btn,
   .player-bar-tools .sleep-timer-container,
   .player-bar-tools .loop-btn {
     display: none;
   }
-  .player-bar-tools {
-    width: auto;
-    flex-shrink: 0;
-    gap: 2px;
+  .player-bar-btn,
+  .player-bar-tools .lyrics-btn {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0;
+    border-radius: 10px;
+  }
+  .player-bar-tools .lyrics-btn {
+    font-size: 14px;
+  }
+  .player-bar-toggle-round {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .player-bar-volume-group {
+    position: static;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .volume-mute-btn {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 10px;
   }
   .volume-popover {
-    right: -44px;
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    bottom: calc(100% + 10px);
+    width: min(320px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+  }
+  .shell.has-player {
+    padding-bottom: calc(110px + env(safe-area-inset-bottom, 0px));
+  }
+  .float-lyrics-container {
+    bottom: calc(118px + env(safe-area-inset-bottom, 0px));
   }
 }

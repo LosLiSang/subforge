@@ -2664,12 +2664,47 @@ html[data-corner-table="sharp"] .task-progress-bar-fill {
 }
 
 .mobile-tasks-link {
+  position: relative;
   min-width: 40px;
   height: 40px;
+  padding: 0 10px;
+  gap: 6px;
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg-main);
   text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.mobile-tasks-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="light"] .mobile-tasks-link {
+  background: rgba(15, 23, 42, 0.03);
+}
+
+[data-theme="light"] .mobile-tasks-link:hover {
+  background: rgba(15, 23, 42, 0.07);
+}
+
+.mobile-tasks-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 99px;
+  background: var(--color-rose);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .sidebar-backdrop {
@@ -2813,6 +2848,15 @@ a {
     display: flex !important;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .tasks-search-wrap {
+    width: 100% !important;
+    flex: 1 1 100%;
+  }
+
+  .tasks-candidate-grid {
+    grid-template-columns: 1fr !important;
   }
 
   .works-desktop-table {
@@ -3199,6 +3243,17 @@ a {
 .track-mobile-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+.track-mobile-actions .btn-ghost {
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg-main);
+  min-height: 32px;
+}
+
+[data-theme="light"] .track-mobile-actions .btn-ghost {
+  background: rgba(15, 23, 42, 0.03);
 }

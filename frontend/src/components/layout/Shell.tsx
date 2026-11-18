@@ -1,6 +1,6 @@
 import React, { Component, useState, type ErrorInfo, type ReactNode } from 'react'
 import { Link, Outlet } from 'react-router-dom'
-import { Menu } from 'lucide-react'
+import { Menu, Inbox } from 'lucide-react'
 import { Sidebar } from './Sidebar'
 import { GlobalPlayerBar } from './GlobalPlayerBar'
 import { FloatLyrics } from './FloatLyrics'
@@ -90,8 +90,14 @@ export function Shell() {
               <img src={subforgeLogo} alt="SubForge" width={24} height={24} />
               <span>SubForge</span>
             </Link>
-            <Link className="mobile-tasks-link" to="/tasks">
-              {activeTaskCount > 0 ? <span className="nav-badge">{activeTaskCount}</span> : null}
+            <Link
+              className="mobile-tasks-link"
+              to="/tasks"
+              aria-label={activeTaskCount > 0 ? `任务中心（${activeTaskCount} 个进行中）` : '任务中心'}
+              title="任务中心"
+            >
+              <Inbox size={18} aria-hidden="true" />
+              {activeTaskCount > 0 ? <span className="mobile-tasks-badge">{activeTaskCount}</span> : null}
             </Link>
           </header>
           <main id="main-content" className="frame-main">

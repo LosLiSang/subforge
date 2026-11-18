@@ -152,6 +152,254 @@ export function TasksPage() {
   const completedCount = tasks.filter((t) => t.status === 'completed').length
   const failedCount = tasks.filter((t) => t.status === 'failed').length
 
+  const getSubtitleTaskFlags = (task: SubtitleTask) => {
+    const rawProgress = (task.progress !== undefined && task.progress !== null) ? task.progress : 0
+    const isSegment = task.kind === 'segment_reprocess'
+    const isRunning = task.status === 'running'
+    const isAwaitingReview = task.status === 'awaiting_review'
+    const isDone = task.status === 'completed'
+    const isFailed = task.status === 'failed'
+    const isCancelled = task.status === 'cancelled'
+    const isInterrupted = task.status === 'interrupted'
+    const isQueued = task.status === 'queued'
+    const isDiscarded = task.status === 'discarded'
+    const pct = (isDone || isAwaitingReview) ? 100 : Math.min(100, Math.max(0, Math.round(rawProgress <= 1 ? rawProgress * 100 : rawProgress)))
+    return { isSegment, isRunning, isAwaitingReview, isDone, isFailed, isCancelled, isInterrupted, isQueued, isDiscarded, pct }
+  }
+
+  const renderSubtitleStatusBadge = (task: SubtitleTask) => {
+    const { isSegment, isRunning, isAwaitingReview, isDone, isFailed, isCancelled, isInterrupted, isDiscarded } = getSubtitleTaskFlags(task)
+    const isMuted = isDiscarded || isCancelled
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+        <span
+          className={`task-status-badge task-status-${task.status}`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 11,
+            fontWeight: 700,
+            padding: '3px 8px',
+            borderRadius: 'var(--radius-sm)',
+            background: isRunning
+              ? 'var(--accent-soft)'
+              : isAwaitingReview
+              ? 'rgba(168, 85, 247, 0.15)'
+              : isDone
+              ? 'rgba(63, 185, 80, 0.15)'
+              : isFailed || isInterrupted
+              ? 'rgba(239, 68, 68, 0.15)'
+              : isMuted
+              ? 'rgba(148, 163, 184, 0.15)'
+              : 'rgba(245, 158, 11, 0.15)',
+            color: isRunning
+              ? 'var(--accent-base)'
+              : isAwaitingReview
+              ? '#a855f7'
+              : isDone
+              ? 'var(--color-green)'
+              : isFailed || isInterrupted
+              ? 'var(--color-red)'
+              : isMuted
+              ? 'var(--fg-dim)'
+              : 'var(--color-amber)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {isRunning && <Clock size={12} className="animate-spin" />}
+          {isAwaitingReview && <Sparkles size={12} />}
+          {isDone && <CheckCircle2 size={12} />}
+          {(isFailed || isInterrupted) && <AlertCircle size={12} />}
+          {isMuted && <XCircle size={12} />}
+          {!isRunning && !isAwaitingReview && !isDone && !isFailed && !isInterrupted && !isMuted && <Clock size={12} />}
+          {isRunning
+            ? '处理中'
+            : isAwaitingReview
+            ? '待确认'
+            : isDone
+            ? '已完成'
+            : isFailed
+            ? '失败'
+            : isInterrupted
+            ? '已中断'
+            : isCancelled
+            ? '已取消'
+            : isDiscarded
+            ? '已放弃'
+            : '排队中'}
+        </span>
+        {isSegment && (
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              padding: '1px 5px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(56, 189, 248, 0.15)',
+              color: '#38bdf8',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            局部疑难句
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  const renderSubtitleActions = (task: SubtitleTask, showFullLabels = false) => {
+    const { isSegment, isRunning, isQueued, isAwaitingReview, isDone, isFailed, isCancelled, isInterrupted } = getSubtitleTaskFlags(task)
+    const canRetry = isFailed || isCancelled || isInterrupted
+    return (
+      <>
+        {(isRunning || isQueued) && (
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={() => handleCancel(task.task_id)}
+            title="取消任务"
+          >
+            <XCircle size={13} />
+            取消
+          </button>
+        )}
+        {isAwaitingReview && (
+          <>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              onClick={() => handleOpenCandidate(task.task_id)}
+              title="查看候选台本与当前台本对比"
+            >
+              <Eye size={12} />
+              候选
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => handleConfirmCandidate(task.task_id)}
+              title="直接采纳并替换正式台本"
+            >
+              <Check size={13} />
+              {showFullLabels && '采纳'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => handleDiscardCandidate(task.task_id)}
+              title="放弃该候选"
+            >
+              <X size={13} />
+              {showFullLabels && '放弃'}
+            </button>
+          </>
+        )}
+        {canRetry && (
+          <>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => handleRetry(task.task_id)}
+              title="重试任务"
+            >
+              <RotateCcw size={13} />
+              重试
+            </button>
+            {!isSegment && (
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                onClick={() => handleRetranscribe(task)}
+                disabled={reprocessingId === task.task_id}
+                title="重新发起该音轨的语音识别与翻译任务"
+              >
+                <RefreshCw size={13} className={reprocessingId === task.task_id ? 'animate-spin' : ''} />
+                转写
+              </button>
+            )}
+          </>
+        )}
+        {isDone && !isSegment && (
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={() => handleRetranscribe(task)}
+            disabled={reprocessingId === task.task_id}
+            title="重新发起该音轨的语音识别与翻译任务"
+          >
+            <RotateCcw size={13} className={reprocessingId === task.task_id ? 'animate-spin' : ''} />
+            重新转写
+          </button>
+        )}
+      </>
+    )
+  }
+
+  const getDownloadFlags = (dl: DownloadTask) => {
+    const isDone = dl.status === 'done' || dl.status === 'completed'
+    const isPartial = dl.status === 'partial'
+    const isError = dl.status === 'error' || dl.status === 'failed'
+    const isCancelled = dl.status === 'cancelled'
+    const isRunning = dl.status === 'running' || dl.status === 'downloading'
+    const canRetry = isError && (dl.kind ?? 'download') === 'download'
+    const label = isDone ? '已完成' : isPartial ? '部分完成' : isError ? '失败' : isCancelled ? '已取消' : isRunning ? '进行中' : dl.status
+    const bg = isDone ? 'rgba(63, 185, 80, 0.15)' : isPartial ? 'rgba(245, 158, 11, 0.15)' : isError ? 'rgba(239, 68, 68, 0.15)' : isCancelled ? 'rgba(148, 163, 184, 0.15)' : 'var(--accent-soft)'
+    const fg = isDone ? 'var(--color-green)' : isPartial ? 'var(--color-amber)' : isError ? 'var(--color-red)' : isCancelled ? 'var(--fg-dim)' : 'var(--accent-base)'
+    const displayTitle = dl.title || dl.url || '未命名任务'
+    return { isDone, isPartial, isError, isCancelled, isRunning, canRetry, label, bg, fg, displayTitle }
+  }
+
+  const renderDownloadStatusBadge = (dl: DownloadTask) => {
+    const { isDone, isError, isCancelled, isRunning, label, bg, fg } = getDownloadFlags(dl)
+    return (
+      <span
+        className={`task-status-badge task-status-${dl.status}`}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '3px 8px',
+          borderRadius: 'var(--radius-sm)',
+          background: bg,
+          color: fg,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {isDone ? <CheckCircle2 size={12} /> : isError ? <AlertCircle size={12} /> : isCancelled ? <XCircle size={12} /> : isRunning ? <Clock size={12} className="animate-spin" /> : <Download size={12} />}
+        {label}
+      </span>
+    )
+  }
+
+  const renderDownloadActions = (dl: DownloadTask) => {
+    const { isRunning, canRetry } = getDownloadFlags(dl)
+    return (
+      <>
+        {isRunning && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleCancelDownload(dl.task_id)} title="取消下载">
+            <XCircle size={13} />
+            取消
+          </button>
+        )}
+        {canRetry && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleRetryDownload(dl.task_id)} title="重试下载">
+            <RotateCcw size={13} />
+            重试
+          </button>
+        )}
+        {dl.item_id && (
+          <Link to={`/items/${dl.item_id}`} className="btn btn-sm btn-ghost" title="查看导入的作品">
+            <Eye size={13} />
+            查看
+          </Link>
+        )}
+      </>
+    )
+  }
+
   const filteredTasks = tasks.filter((t) => {
     if (statusFilter !== 'all' && t.status !== statusFilter) return false
     if (!searchQuery.trim()) return true
@@ -239,7 +487,7 @@ export function TasksPage() {
               ))}
             </div>
 
-            <div style={{ position: 'relative', width: 240 }}>
+            <div className="tasks-search-wrap" style={{ position: 'relative', width: 240 }}>
               <Search size={14} style={{ position: 'absolute', left: 10, top: 9, color: 'var(--fg-faint)' }} />
               <input
                 type="text"
@@ -281,89 +529,12 @@ export function TasksPage() {
                   </tr>
                 ) : (
                   filteredTasks.map((task) => {
-                    const rawProgress = (task.progress !== undefined && task.progress !== null) ? task.progress : 0
-                    const isSegment = task.kind === 'segment_reprocess'
-                    const isRunning = task.status === 'running'
-                    const isAwaitingReview = task.status === 'awaiting_review'
-                    const isDone = task.status === 'completed'
-                    const isFailed = task.status === 'failed'
-                    const isQueued = task.status === 'queued'
-                    const isDiscarded = task.status === 'discarded'
-                    const pct = (isDone || isAwaitingReview) ? 100 : Math.min(100, Math.max(0, Math.round(rawProgress <= 1 ? rawProgress * 100 : rawProgress)))
+                    const { isAwaitingReview, isDone, isFailed, pct } = getSubtitleTaskFlags(task)
 
                     return (
                       <tr key={task.task_id} className={`task-row task-row-${task.status}`}>
                         <td style={{ verticalAlign: 'top', paddingTop: 14 }}>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
-                            <span
-                              className={`task-status-badge task-status-${task.status}`}
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4,
-                                fontSize: 11,
-                                fontWeight: 700,
-                                padding: '3px 8px',
-                                borderRadius: 'var(--radius-sm)',
-                                background: isRunning
-                                  ? 'var(--accent-soft)'
-                                  : isAwaitingReview
-                                  ? 'rgba(168, 85, 247, 0.15)'
-                                  : isDone
-                                  ? 'rgba(63, 185, 80, 0.15)'
-                                  : isFailed
-                                  ? 'rgba(239, 68, 68, 0.15)'
-                                  : isDiscarded
-                                  ? 'rgba(148, 163, 184, 0.15)'
-                                  : 'rgba(245, 158, 11, 0.15)',
-                                color: isRunning
-                                  ? 'var(--accent-base)'
-                                  : isAwaitingReview
-                                  ? '#a855f7'
-                                  : isDone
-                                  ? 'var(--color-green)'
-                                  : isFailed
-                                  ? 'var(--color-red)'
-                                  : isDiscarded
-                                  ? 'var(--fg-dim)'
-                                  : 'var(--color-amber)',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {isRunning && <Clock size={12} className="animate-spin" />}
-                              {isAwaitingReview && <Sparkles size={12} />}
-                              {isDone && <CheckCircle2 size={12} />}
-                              {isFailed && <AlertCircle size={12} />}
-                              {isDiscarded && <XCircle size={12} />}
-                              {isQueued && <Clock size={12} />}
-                              {isRunning
-                                ? '处理中'
-                                : isAwaitingReview
-                                ? '待确认'
-                                : isDone
-                                ? '已完成'
-                                : isFailed
-                                ? '失败'
-                                : isDiscarded
-                                ? '已放弃'
-                                : '排队中'}
-                            </span>
-                            {isSegment && (
-                              <span
-                                style={{
-                                  fontSize: 10,
-                                  fontWeight: 600,
-                                  padding: '1px 5px',
-                                  borderRadius: 'var(--radius-sm)',
-                                  background: 'rgba(56, 189, 248, 0.15)',
-                                  color: '#38bdf8',
-                                  whiteSpace: 'nowrap',
-                                }}
-                              >
-                                局部疑难句
-                              </span>
-                            )}
-                          </div>
+                          {renderSubtitleStatusBadge(task)}
                         </td>
 
                         <td style={{ verticalAlign: 'top', paddingTop: 14 }}>
@@ -473,83 +644,7 @@ export function TasksPage() {
 
                         <td style={{ verticalAlign: 'top', paddingTop: 14, textAlign: 'right' }}>
                           <div style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap' }}>
-                            {isRunning && (
-                              <button
-                                type="button"
-                                className="btn btn-sm btn-ghost"
-                                onClick={() => handleCancel(task.task_id)}
-                                title="取消任务"
-                              >
-                                <XCircle size={13} />
-                                取消
-                              </button>
-                            )}
-                            {isAwaitingReview && (
-                              <>
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-primary"
-                                  onClick={() => handleOpenCandidate(task.task_id)}
-                                  title="查看候选台本与当前台本对比"
-                                >
-                                  <Eye size={12} />
-                                  候选
-                                </button>
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-ghost"
-                                  onClick={() => handleConfirmCandidate(task.task_id)}
-                                  title="直接采纳并替换正式台本"
-                                >
-                                  <Check size={13} />
-                                </button>
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-ghost"
-                                  onClick={() => handleDiscardCandidate(task.task_id)}
-                                  title="放弃该候选"
-                                >
-                                  <X size={13} />
-                                </button>
-                              </>
-                            )}
-                            {isFailed && (
-                              <>
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-ghost"
-                                  onClick={() => handleRetry(task.task_id)}
-                                  title="重试任务"
-                                >
-                                  <RotateCcw size={13} />
-                                  重试
-                                </button>
-                                {!isSegment && (
-                                  <button
-                                    type="button"
-                                    className="btn btn-sm btn-ghost"
-                                    onClick={() => handleRetranscribe(task)}
-                                    disabled={reprocessingId === task.task_id}
-                                    title="重新发起该音轨的语音识别与翻译任务"
-                                  >
-                                    <RefreshCw size={13} className={reprocessingId === task.task_id ? 'animate-spin' : ''} />
-                                    转写
-                                  </button>
-                                )}
-                              </>
-                            )}
-                            {isDone && !isSegment && (
-                              <button
-                                type="button"
-                                className="btn btn-sm btn-ghost"
-                                onClick={() => handleRetranscribe(task)}
-                                disabled={reprocessingId === task.task_id}
-                                title="重新发起该音轨的语音识别与翻译任务"
-                              >
-                                <RotateCcw size={13} className={reprocessingId === task.task_id ? 'animate-spin' : ''} />
-                                重新转写
-                              </button>
-                            )}
+                            {renderSubtitleActions(task)}
                           </div>
                         </td>
                       </tr>
@@ -567,30 +662,12 @@ export function TasksPage() {
               </div>
             ) : (
               filteredTasks.map((task) => {
-                const rawProgress = (task.progress !== undefined && task.progress !== null) ? task.progress : 0
-                const isSegment = task.kind === 'segment_reprocess'
-                const isRunning = task.status === 'running'
-                const isAwaitingReview = task.status === 'awaiting_review'
-                const isDone = task.status === 'completed'
-                const isFailed = task.status === 'failed'
-                const pct = (isDone || isAwaitingReview) ? 100 : Math.min(100, Math.max(0, Math.round(rawProgress <= 1 ? rawProgress * 100 : rawProgress)))
+                const { isAwaitingReview, isDone, isFailed, pct } = getSubtitleTaskFlags(task)
                 return (
                   <div key={task.task_id} className="track-mobile-card">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span
-                        className={`task-status-badge task-status-${task.status}`}
-                        style={{
-                          fontSize: 11,
-                          fontWeight: 700,
-                          padding: '3px 8px',
-                          borderRadius: 'var(--radius-sm)',
-                          background: isRunning ? 'var(--accent-soft)' : isAwaitingReview ? 'rgba(168, 85, 247, 0.15)' : isDone ? 'rgba(63, 185, 80, 0.15)' : isFailed ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                          color: isRunning ? 'var(--accent-base)' : isAwaitingReview ? '#a855f7' : isDone ? 'var(--color-green)' : isFailed ? 'var(--color-red)' : 'var(--color-amber)',
-                        }}
-                      >
-                        {task.status}
-                      </span>
-                      <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--fg-dim)' }}>{pct}%</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+                      {renderSubtitleStatusBadge(task)}
+                      <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--fg-dim)' }}>{pct}%</span>
                     </div>
                     <div style={{ fontWeight: 600, fontSize: 13.5, wordBreak: 'break-word' }}>
                       {task.item_id ? (
@@ -601,48 +678,43 @@ export function TasksPage() {
                         task.track_title || task.item_title || task.track_id
                       )}
                     </div>
+                    {(task.item_title || task.range || task.asr || task.translation) && (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 11.5, color: 'var(--fg-dim)' }}>
+                        {task.item_title && task.track_title && (
+                          <span>作品: {task.item_title}</span>
+                        )}
+                        {task.range && (
+                          <span style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '1px 5px', borderRadius: 'var(--radius-sm)' }}>
+                            片段: {task.range}
+                          </span>
+                        )}
+                        {task.asr && (
+                          <span style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '1px 5px', borderRadius: 'var(--radius-sm)' }}>
+                            <strong style={{ color: 'var(--accent-base)', fontSize: 10, marginRight: 4 }}>ASR</strong>
+                            {task.asr}
+                          </span>
+                        )}
+                        {task.translation && (
+                          <span style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '1px 5px', borderRadius: 'var(--radius-sm)' }}>
+                            <strong style={{ color: '#a855f7', fontSize: 10, marginRight: 4 }}>翻译</strong>
+                            {task.translation}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 11.5, color: 'var(--fg-dim)', wordBreak: 'break-word' }}>
+                      {task.message || task.stage || (isDone ? '处理完成' : isAwaitingReview ? '候选已就绪' : '等待处理…')}
+                    </div>
                     <div style={{ width: '100%', height: 5, background: 'rgba(255, 255, 255, 0.08)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
                       <div style={{ width: `${pct}%`, height: '100%', background: isFailed ? 'var(--color-red)' : isAwaitingReview ? '#a855f7' : isDone ? 'var(--color-green)' : 'var(--accent-base)' }} />
                     </div>
                     {task.error && (
-                      <div style={{ fontSize: 11, color: 'var(--color-red)', wordBreak: 'break-all' }}>{task.error}</div>
+                      <div style={{ fontSize: 11, color: 'var(--color-red)', background: 'rgba(239, 68, 68, 0.08)', padding: '4px 6px', borderRadius: 'var(--radius-sm)', wordBreak: 'break-all' }}>
+                        {task.error}
+                      </div>
                     )}
                     <div className="track-mobile-actions">
-                      {isRunning && (
-                        <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleCancel(task.task_id)}>
-                          <XCircle size={13} /> 取消
-                        </button>
-                      )}
-                      {isAwaitingReview && (
-                        <>
-                          <button type="button" className="btn btn-sm btn-primary" onClick={() => handleOpenCandidate(task.task_id)}>
-                            <Eye size={12} /> 候选
-                          </button>
-                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleConfirmCandidate(task.task_id)}>
-                            <Check size={13} />
-                          </button>
-                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleDiscardCandidate(task.task_id)}>
-                            <X size={13} />
-                          </button>
-                        </>
-                      )}
-                      {isFailed && (
-                        <>
-                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleRetry(task.task_id)}>
-                            <RotateCcw size={13} /> 重试
-                          </button>
-                          {!isSegment && (
-                            <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleRetranscribe(task)} disabled={reprocessingId === task.task_id}>
-                              <RefreshCw size={13} /> 转写
-                            </button>
-                          )}
-                        </>
-                      )}
-                      {isDone && !isSegment && (
-                        <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleRetranscribe(task)} disabled={reprocessingId === task.task_id}>
-                          <RotateCcw size={13} /> 重新转写
-                        </button>
-                      )}
+                      {renderSubtitleActions(task, true)}
                     </div>
                   </div>
                 )
@@ -674,37 +746,11 @@ export function TasksPage() {
                 </tr>
               ) : (
                 downloads.map((dl) => {
-                  const isDone = dl.status === 'done' || dl.status === 'completed'
-                  const isPartial = dl.status === 'partial'
-                  const isError = dl.status === 'error' || dl.status === 'failed'
-                  const isCancelled = dl.status === 'cancelled'
-                  const isRunning = dl.status === 'running' || dl.status === 'downloading'
-                  const canRetry = isError && (dl.kind ?? 'download') === 'download'
-                  const label = isDone ? '已完成' : isPartial ? '部分完成' : isError ? '失败' : isCancelled ? '已取消' : isRunning ? '进行中' : dl.status
-                  const bg = isDone ? 'rgba(63, 185, 80, 0.15)' : isPartial ? 'rgba(245, 158, 11, 0.15)' : isError ? 'rgba(239, 68, 68, 0.15)' : isCancelled ? 'rgba(148, 163, 184, 0.15)' : 'var(--accent-soft)'
-                  const fg = isDone ? 'var(--color-green)' : isPartial ? 'var(--color-amber)' : isError ? 'var(--color-red)' : isCancelled ? 'var(--fg-dim)' : 'var(--accent-base)'
-                  const displayTitle = dl.title || dl.url || '未命名任务'
+                  const { isDone, isError, isRunning, canRetry, displayTitle } = getDownloadFlags(dl)
                   return (
                   <tr key={dl.task_id}>
                     <td>
-                      <span
-                        className={`task-status-badge task-status-${dl.status}`}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 4,
-                          fontSize: 11,
-                          fontWeight: 700,
-                          padding: '3px 8px',
-                          borderRadius: 'var(--radius-sm)',
-                          background: bg,
-                          color: fg,
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {isDone ? <CheckCircle2 size={12} /> : isError ? <AlertCircle size={12} /> : isCancelled ? <XCircle size={12} /> : isRunning ? <Clock size={12} className="animate-spin" /> : <Download size={12} />}
-                        {label}
-                      </span>
+                      {renderDownloadStatusBadge(dl)}
                     </td>
                     <td>
                       <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--fg-main)', wordBreak: 'break-all' }} title={displayTitle}>
@@ -723,24 +769,7 @@ export function TasksPage() {
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <div style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                        {isRunning && (
-                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleCancelDownload(dl.task_id)} title="取消下载">
-                            <XCircle size={13} />
-                            取消
-                          </button>
-                        )}
-                        {canRetry && (
-                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleRetryDownload(dl.task_id)} title="重试下载">
-                            <RotateCcw size={13} />
-                            重试
-                          </button>
-                        )}
-                        {dl.item_id && (
-                          <Link to={`/items/${dl.item_id}`} className="btn btn-sm btn-ghost" title="查看导入的作品">
-                            <Eye size={13} />
-                            查看
-                          </Link>
-                        )}
+                        {renderDownloadActions(dl)}
                         {!isRunning && !canRetry && !dl.item_id && (
                           <span style={{ color: 'var(--fg-faint)', fontSize: 12 }}>-</span>
                         )}
@@ -758,35 +787,25 @@ export function TasksPage() {
             <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--fg-dim)' }}>暂无下载任务记录</div>
           ) : (
             downloads.map((dl) => {
-              const isDone = dl.status === 'done' || dl.status === 'completed'
-              const isError = dl.status === 'error' || dl.status === 'failed'
-              const isRunning = dl.status === 'running' || dl.status === 'downloading'
-              const canRetry = isError && (dl.kind ?? 'download') === 'download'
-              const displayTitle = dl.title || dl.url || '未命名任务'
+              const { isDone, isError, isRunning, displayTitle } = getDownloadFlags(dl)
               return (
                 <div key={dl.task_id} className="track-mobile-card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    {renderDownloadStatusBadge(dl)}
+                  </div>
                   <div style={{ fontWeight: 600, fontSize: 13.5, wordBreak: 'break-all' }}>
                     {dl.item_id ? <Link to={`/items/${dl.item_id}`} style={{ color: 'var(--fg-main)' }}>{displayTitle}</Link> : displayTitle}
                   </div>
+                  {dl.url && dl.url !== displayTitle && (
+                    <div style={{ fontSize: 11.5, color: 'var(--fg-dim)', wordBreak: 'break-all' }}>
+                      {/^https?:\/\//.test(dl.url) ? <a href={dl.url} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>{dl.url}</a> : dl.url}
+                    </div>
+                  )}
                   <div style={{ fontSize: 12, color: isError ? 'var(--color-red)' : 'var(--fg-dim)', wordBreak: 'break-all' }}>
                     {dl.message || (isDone ? '下载完成' : isRunning ? '下载中…' : dl.status)}
                   </div>
                   <div className="track-mobile-actions">
-                    {isRunning && (
-                      <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleCancelDownload(dl.task_id)}>
-                        <XCircle size={13} /> 取消
-                      </button>
-                    )}
-                    {canRetry && (
-                      <button type="button" className="btn btn-sm btn-ghost" onClick={() => handleRetryDownload(dl.task_id)}>
-                        <RotateCcw size={13} /> 重试
-                      </button>
-                    )}
-                    {dl.item_id && (
-                      <Link to={`/items/${dl.item_id}`} className="btn btn-sm btn-ghost">
-                        <Eye size={13} /> 查看
-                      </Link>
-                    )}
+                    {renderDownloadActions(dl)}
                   </div>
                 </div>
               )
@@ -823,7 +842,7 @@ export function TasksPage() {
               </button>
             </div>
 
-            <div className="modal-body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div className="modal-body tasks-candidate-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               {/* Current */}
             <div style={{ background: 'var(--bg-card-inset)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
                 <h4 style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, color: 'var(--fg-dim)' }}>

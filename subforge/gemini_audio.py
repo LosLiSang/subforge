@@ -742,6 +742,8 @@ class GeminiAudioAdapter:
                 len(chunks),
                 self._remote_limiter.limit if self._remote_limiter is not None else self._chunk_concurrency,
             )
+            for _ in range(concurrency_count):
+                chunk_queue.put_nowait(None)
 
             def _report(completed: int, total: int, ratio: float, message: str | None = None) -> None:
                 if not self._progress:
@@ -766,24 +768,37 @@ class GeminiAudioAdapter:
                 nonlocal done_count
                 while True:
                     item = await chunk_queue.get()
-                    try:
-                        if item is None:
-                            return
-                        res = await process_chunk(*item)
-                        results.append(res)
-                        done_count += 1
-                        if len(chunks) > 0:
-                            ratio = min(0.99, done_count / len(chunks))
-                            msg = f"ASR 转写中（分片 {done_count}/{len(chunks)} · 并发 {concurrency_count}）"
-                            _report(done_count, len(chunks), ratio, msg)
-                    finally:
-                        chunk_queue.task_done()
+                    if item is None:
+                        return
+                    res = await process_chunk(*item)
+                    results.append(res)
+                    done_count += 1
+                    if len(chunks) > 0:
+                        ratio = min(0.99, done_count / len(chunks))
+                        msg = f"ASR 转写中（分片 {done_count}/{len(chunks)} · 并发 {concurrency_count}）"
+                        _report(done_count, len(chunks), ratio, msg)
 
             workers = [asyncio.create_task(consume_chunks()) for _ in range(concurrency_count)]
-            await chunk_queue.join()
-            for _ in workers:
-                chunk_queue.put_nowait(None)
-            await asyncio.gather(*workers)
+            try:
+                pending: set[asyncio.Task[None]] = set(workers)
+                while pending:
+                    done, pending = await asyncio.wait(
+                        pending, return_when=asyncio.FIRST_EXCEPTION,
+                    )
+                    for task in done:
+                        exc = task.exception()
+                        if exc is not None:
+                            for other in pending:
+                                other.cancel()
+                            if pending:
+                                await asyncio.gather(*pending, return_exceptions=True)
+                            raise exc
+            except BaseException:
+                for worker in workers:
+                    if not worker.done():
+                        worker.cancel()
+                await asyncio.gather(*workers, return_exceptions=True)
+                raise
             source_entries = []
             target_entries = []
             fallback_used = False

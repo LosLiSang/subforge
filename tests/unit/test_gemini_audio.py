@@ -550,3 +550,40 @@ async def test_deepseek_asr_transport_and_110s_clamp():
     assert data["segments"] == [{"start": 0.0, "end": 4.5, "text": "深呼吸してください"}]
 
 
+@pytest.mark.asyncio
+async def test_gemini_adapter_fails_fast_without_deadlock_when_chunks_error(tmp_path):
+    import asyncio
+    from subforge.gemini_audio import GeminiAudioError
+
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"RIFF")
+    calls = 0
+
+    class FailingTransport:
+        async def generate(self, audio: bytes, mime_type: str, prompt: str) -> str:
+            nonlocal calls
+            calls += 1
+            raise GeminiAudioError("Gemini 音频鉴权失败（401）")
+
+    profile = GeminiAudioProfile("p1", "Gemini", "google_native", "https://example.com", "gemini-2.5-flash", "k", max_segment_seconds=10)
+    adapter = GeminiAudioAdapter(
+        profile,
+        FailingTransport(),
+        extractor=lambda req: ExtractedAudio(audio, 0.0, 60.0),
+        speech_regions=lambda _p, _d: [(0.0, 60.0)],
+        chunk_cutter=lambda _p, _s, _e: b"RIFF",
+        chunk_concurrency=2,
+    )
+    req = SegmentRequest(
+        media_path=tmp_path / "source.m4a",
+        target_start=0.0,
+        target_end=60.0,
+        source_language="ja",
+        target_language="zh",
+        processing_mode="transcribe",
+    )
+    with pytest.raises(GeminiAudioError, match="401"):
+        await asyncio.wait_for(adapter.process(req), timeout=2.0)
+    assert calls <= 2
+
+

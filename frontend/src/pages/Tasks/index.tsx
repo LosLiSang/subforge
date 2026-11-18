@@ -422,8 +422,8 @@ export function TasksPage() {
           </span>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--fg-dim)', cursor: 'pointer' }}>
+        <div className="tasks-header-actions">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--fg-dim)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
             <input
               type="checkbox"
               checked={autoRefresh}
@@ -439,7 +439,7 @@ export function TasksPage() {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 24, borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12 }}>
+      <div className="tasks-tabs-bar">
         <button
           type="button"
           className={`btn btn-sm ${activeTab === 'subtitles' ? 'btn-primary' : 'btn-ghost'}`}
@@ -467,8 +467,8 @@ export function TasksPage() {
       {activeTab === 'subtitles' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {/* Filter and search toolbar */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <div className="tasks-filter-toolbar">
+            <div className="tasks-status-pills">
               {[
                 { id: 'all', label: `全部 (${tasks.length})` },
                 { id: 'running', label: `处理中 (${runningCount})` },

@@ -32,6 +32,8 @@ interface PlayerContextType {
   skipBackward: (seconds?: number) => void
   skipForward: (seconds?: number) => void
   setVolume: (v: number) => void
+  gainStatus: 'idle' | 'active' | 'suspended' | 'fallback'
+  resumeAudio: () => void
   setPlaybackRate: (rate: number) => void
   toggleLoop: () => void
   toggleFloatLyrics: () => void
@@ -76,9 +78,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [sleepTimerOption, setSleepTimerOption] = useState<number | 'end-of-track' | null>(null)
   const [sleepTimerRemaining, setSleepTimerRemaining] = useState<number | null>(null)
   const [playlist, setPlaylist] = useState<Track[]>([])
+  const [gainStatus, setGainStatus] = useState<'idle' | 'active' | 'suspended' | 'fallback'>('idle')
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
+  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null)
   const gainNodeRef = useRef<GainNode | null>(null)
   const volumeRef = useRef(volume)
   const pipWinRef = useRef<Window | null>(null)
@@ -224,8 +228,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const resumeAudioContext = () => {
     const ctx = audioCtxRef.current
-    if (ctx && ctx.state !== 'running') {
-      ctx.resume().catch(() => {})
+    if (!ctx) return
+    if (ctx.state !== 'running') {
+      ctx.resume()
+        .then(() => {
+          if (audioCtxRef.current === ctx && gainNodeRef.current) {
+            setGainStatus(ctx.state === 'running' ? 'active' : 'suspended')
+          }
+        })
+        .catch(() => {})
+    } else if (gainNodeRef.current) {
+      setGainStatus('active')
     }
   }
 
@@ -252,34 +265,58 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const setupGainNode = () => {
     if (!audioRef.current) return
+    let createdCtx: AudioContext | null = null
     try {
       if (!audioCtxRef.current) {
         const AudioCtx =
           window.AudioContext ||
           (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-        if (!AudioCtx) return
+        if (!AudioCtx) {
+          setGainStatus('fallback')
+          return
+        }
         const ctx = new AudioCtx()
-        audioCtxRef.current = ctx
+        createdCtx = ctx
         const source = ctx.createMediaElementSource(audioRef.current)
         const gain = ctx.createGain()
         gain.gain.value = volumeRef.current
         const compressor = ctx.createDynamicsCompressor()
-        compressor.threshold.value = -3
-        compressor.knee.value = 6
-        compressor.ratio.value = 12
-        compressor.attack.value = 0.003
-        compressor.release.value = 0.15
+        compressor.threshold.value = -0.5
+        compressor.knee.value = 0
+        compressor.ratio.value = 20
+        compressor.attack.value = 0.001
+        compressor.release.value = 0.05
         source.connect(gain)
         gain.connect(compressor)
         compressor.connect(ctx.destination)
+
+        audioCtxRef.current = ctx
+        sourceNodeRef.current = source
         gainNodeRef.current = gain
+        ctx.addEventListener('statechange', () => {
+          if (audioCtxRef.current === ctx && gainNodeRef.current) {
+            setGainStatus(ctx.state === 'running' ? 'active' : 'suspended')
+          }
+        })
         // GainNode handles 0..5.0; keep element volume at 1.0 to avoid val^2 double-attenuation
         audioRef.current.volume = 1.0
+        setGainStatus(ctx.state === 'running' ? 'active' : 'suspended')
       }
       resumeAudioContext()
     } catch (e) {
       console.warn('Web Audio gain node setup failed:', e)
+      if (createdCtx && audioCtxRef.current !== createdCtx) {
+        createdCtx.close().catch(() => {})
+      }
+      if (!gainNodeRef.current) {
+        setGainStatus('fallback')
+      }
     }
+  }
+
+  const resumeAudio = () => {
+    setupGainNode()
+    resumeAudioContext()
   }
 
   const setVolume = (v: number) => {
@@ -292,10 +329,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (audioRef.current) {
         audioRef.current.volume = 1.0
       }
-      try {
-        gainNodeRef.current.gain.setTargetAtTime(val, audioCtxRef.current.currentTime, 0.015)
-      } catch {
+      const ctx = audioCtxRef.current
+      if (ctx.state !== 'running') {
         gainNodeRef.current.gain.value = val
+      } else {
+        try {
+          gainNodeRef.current.gain.setTargetAtTime(val, ctx.currentTime, 0.015)
+        } catch {
+          gainNodeRef.current.gain.value = val
+        }
       }
       resumeAudioContext()
     } else if (audioRef.current) {
@@ -1039,6 +1081,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         skipBackward,
         skipForward,
         setVolume,
+        gainStatus,
+        resumeAudio,
         setPlaybackRate,
         toggleLoop,
         toggleFloatLyrics,

@@ -50,6 +50,8 @@ export function GlobalPlayerBar() {
     skipBackward,
     skipForward,
     setVolume,
+    gainStatus,
+    resumeAudio,
     setPlaybackRate,
     toggleLoop,
     toggleFloatLyrics,
@@ -341,6 +343,25 @@ export function GlobalPlayerBar() {
                       </button>
                     )
                   })}
+                </div>
+                <div className={`volume-popover-status status-${gainStatus}`}>
+                  {gainStatus === 'active' && (
+                    <span>
+                      增益引擎: 运行中
+                      {volume > 1.0 ? ` (+${(20 * Math.log10(volume)).toFixed(1)} dB)` : ''}
+                    </span>
+                  )}
+                  {gainStatus === 'suspended' && (
+                    <button
+                      type="button"
+                      className="volume-status-resume-btn"
+                      onClick={resumeAudio}
+                    >
+                      增益已挂起 (点此恢复)
+                    </button>
+                  )}
+                  {gainStatus === 'fallback' && <span>原生回退 (上限100%)</span>}
+                  {gainStatus === 'idle' && <span>增益引擎: 待机</span>}
                 </div>
               </div>
             )}

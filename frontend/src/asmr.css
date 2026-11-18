@@ -651,6 +651,37 @@
 [data-theme="light"] .volume-preset-pill {
   background: rgba(15, 23, 42, 0.04);
 }
+.volume-popover-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-dim);
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+.volume-popover-status.status-active {
+  color: #34d399;
+}
+.volume-popover-status.status-fallback {
+  color: #f87171;
+}
+.volume-status-resume-btn {
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+}
+.volume-status-resume-btn:hover {
+  background: rgba(251, 191, 36, 0.22);
+}
 @media (max-width: 1180px) {
   .player-bar-row {
     padding: 0 14px;

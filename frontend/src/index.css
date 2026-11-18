@@ -2637,6 +2637,7 @@ html[data-corner-table="sharp"] .task-progress-bar-fill {
   background: var(--bg-sidebar);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
+  overflow: visible;
   z-index: 30;
 }
 
@@ -2665,10 +2666,9 @@ html[data-corner-table="sharp"] .task-progress-bar-fill {
 
 .mobile-tasks-link {
   position: relative;
-  min-width: 40px;
+  width: 40px;
   height: 40px;
-  padding: 0 10px;
-  gap: 6px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2693,18 +2693,23 @@ html[data-corner-table="sharp"] .task-progress-bar-fill {
 }
 
 .mobile-tasks-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 99px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  border: 2px solid var(--bg-sidebar);
   background: var(--color-rose);
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  line-height: 1;
+  line-height: 16px;
+  pointer-events: none;
 }
 
 .sidebar-backdrop {

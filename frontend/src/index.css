@@ -2995,6 +2995,7 @@ a {
   .settings-tab-btn {
     padding: 6px 11px;
     font-size: 12.5px;
+    min-height: 36px;
   }
 
   .tasks-tabs-bar {
@@ -3002,6 +3003,13 @@ a {
     margin-bottom: 16px;
     padding-bottom: 10px;
     flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .tasks-tabs-bar::-webkit-scrollbar {
+    display: none;
   }
 
   .tasks-filter-toolbar {
@@ -3023,10 +3031,128 @@ a {
   }
 
   .tasks-status-pills .btn-sm,
-  .tasks-tabs-bar .btn-sm,
-  .track-mobile-actions .btn-sm {
+  .tasks-tabs-bar .btn-sm {
     padding: 5px 9px;
     font-size: 11.5px;
+    min-height: 36px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .track-mobile-actions .btn-sm {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 11.5px;
+  }
+
+  .btn-circle {
+    width: 36px;
+    height: 36px;
+  }
+
+  .track-mobile-top .btn-circle,
+  .track-mobile-actions .btn-circle {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+  }
+
+  .search-clear-btn {
+    position: absolute;
+    width: 36px;
+    height: 36px;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--fg-dim);
+    cursor: pointer;
+  }
+
+  .library-search-wrap .input-field,
+  .tasks-search-wrap .input-field {
+    padding-right: 40px !important;
+  }
+
+  .accent-picker button {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+  }
+
+  .float-lyrics-close-btn,
+  .float-lyrics-tool-btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .tasks-modal-footer {
+    flex-wrap: wrap !important;
+    gap: 8px;
+  }
+
+  .profiles-modal-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .page-header-actions {
+    flex-wrap: wrap;
+    gap: 8px;
+    max-width: 100%;
+  }
+
+  .page-header-actions .btn {
+    padding: 7px 12px;
+    min-height: 36px;
+  }
+
+  .library-filter-secondary {
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+
+  .library-sub-filters {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .library-sub-filters::-webkit-scrollbar {
+    display: none;
+  }
+
+  .library-sub-filters .btn-sm {
+    min-height: 36px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .settings-cover-modes {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .settings-cover-modes .btn-sm {
+    min-height: 36px;
+    justify-content: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 6px 6px;
   }
 
   .tasks-candidate-grid {

@@ -155,6 +155,12 @@
   opacity: 1;
   transform: scale(1);
 }
+@media (hover: none) {
+  .asmr-card-quick-play {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
 .asmr-card-quick-play:hover {
   background: #ffffff;
   color: #0f172a;
@@ -195,6 +201,9 @@
   display: inline-flex;
   align-items: center;
   transition: all 0.15s ease;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .asmr-tag-clickable {
   cursor: pointer;
@@ -309,6 +318,26 @@
     order: 3;
     width: 100%;
     margin-top: 4px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .vas-type-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .vas-tab {
+    flex: 1;
+    justify-content: center;
+    min-height: 36px;
+    white-space: nowrap;
+  }
+  .vas-cell-btn {
+    width: 36px;
+    height: 36px;
+  }
+  .vas-sort-btn {
+    min-height: 36px;
+    padding: 6px 8px;
   }
 }
 .vas-search-bar-wrap {

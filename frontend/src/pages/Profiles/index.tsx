@@ -138,7 +138,9 @@ function cleanBaseUrl(url?: string) {
 
 export function ProfilesPage() {
   const [activeTab, setActiveTab] = useState<'asr' | 'llm'>('llm')
-  const [viewMode, setViewMode] = useState<'table' | 'grid'>('grid')
+  const [viewMode, setViewMode] = useState<'table' | 'grid'>(() =>
+    typeof window !== 'undefined' && window.innerWidth <= 768 ? 'grid' : 'table'
+  )
   const [asrProfiles, setAsrProfiles] = useState<ModelProfile[]>([])
   const [llmProfiles, setLlmProfiles] = useState<ModelProfile[]>([])
   const [loading, setLoading] = useState(true)
@@ -407,7 +409,7 @@ export function ProfilesPage() {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 24, borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12 }}>
+      <div className="settings-tabs">
         <button
           type="button"
           className={`btn btn-sm ${activeTab === 'llm' ? 'btn-primary' : 'btn-ghost'}`}
@@ -1065,7 +1067,7 @@ export function ProfilesPage() {
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="profiles-modal-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                   <div>
                     <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 6 }}>
                       温度 (Temperature)

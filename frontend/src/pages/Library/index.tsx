@@ -181,7 +181,7 @@ export function LibraryPage() {
           </span>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div className="page-header-actions" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <button type="button" className="btn btn-primary" onClick={() => setImportOpen(true)}>
             <Plus size={16} />
             导入音频
@@ -258,7 +258,7 @@ export function LibraryPage() {
             <input
               type="text"
               className="input-field"
-              style={{ paddingLeft: 32, paddingRight: searchQuery ? 28 : 10, width: '100%' }}
+              style={{ paddingLeft: 32, paddingRight: searchQuery ? 34 : 10, width: '100%' }}
               placeholder="搜索标题、RJ 号、声优、社团、标签(#tag)…"
               value={searchQuery}
               onChange={(e) => {
@@ -269,20 +269,23 @@ export function LibraryPage() {
             {searchQuery && (
               <button
                 type="button"
+                className="search-clear-btn"
                 onClick={() => {
                   setSearchQuery('')
                   setPage(1)
                 }}
                 style={{
                   position: 'absolute',
-                  right: 8,
-                  top: 9,
+                  right: 4,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
                   background: 'none',
                   border: 'none',
                   cursor: 'pointer',
                   color: 'var(--fg-faint)',
-                  padding: 0,
                   display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
                 title="清除搜索"
               >
@@ -339,7 +342,7 @@ export function LibraryPage() {
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', maxWidth: '100%' }}>
+        <div className="library-filter-secondary" style={{ display: 'flex', gap: 10, alignItems: 'center', maxWidth: '100%' }}>
           {/* Work kind pills (RJ作品 / 录播作品 / 全部) */}
           <div
             style={{
@@ -373,7 +376,7 @@ export function LibraryPage() {
           </div>
 
           {/* Subtitle status pills */}
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <div className="library-sub-filters" style={{ display: 'flex', gap: 6 }}>
             {[
               { key: 'all', label: '全部' },
               { key: 'bilingual', label: '双语已就绪 ✓' },

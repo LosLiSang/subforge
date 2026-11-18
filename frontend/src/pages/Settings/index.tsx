@@ -641,7 +641,7 @@ export function SettingsPage() {
                 <label style={{ display: 'block', fontSize: 12, color: 'var(--fg-dim)', marginBottom: 8 }}>
                   封面提供方式
                 </label>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <div className="settings-cover-modes" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   {[
                     { key: 'preset', label: '内置艺术预设', icon: <Sparkles size={14} /> },
                     { key: 'upload', label: '上传本地图片', icon: <UploadCloud size={14} /> },
@@ -1452,7 +1452,6 @@ export function SettingsPage() {
                     type="button"
                     className="btn btn-sm btn-ghost btn-danger"
                     onClick={handleDeleteDeepgramKey}
-                    style={{ padding: '2px 8px' }}
                   >
                     <Trash2 size={12} />
                     清除已存密钥

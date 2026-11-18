@@ -492,7 +492,7 @@ export function TasksPage() {
               <input
                 type="text"
                 className="input-field"
-                style={{ paddingLeft: 30, paddingRight: 26, fontSize: 12 }}
+                style={{ paddingLeft: 30, paddingRight: 32, fontSize: 12 }}
                 placeholder="搜索音轨、作品名、RJ号…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -500,8 +500,10 @@ export function TasksPage() {
               {searchQuery && (
                 <button
                   type="button"
-                  style={{ position: 'absolute', right: 8, top: 8, background: 'none', border: 'none', color: 'var(--fg-dim)', cursor: 'pointer', padding: 0 }}
+                  className="search-clear-btn"
+                  style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--fg-dim)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   onClick={() => setSearchQuery('')}
+                  title="清除搜索"
                 >
                   <X size={13} />
                 </button>
@@ -892,7 +894,7 @@ export function TasksPage() {
               </div>
             )}
 
-            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="modal-footer tasks-modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <button
                 type="button"
                 className="btn btn-ghost"

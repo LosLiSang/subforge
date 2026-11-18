@@ -1148,7 +1148,7 @@ export function ItemDetailPage() {
                   <button
                     type="button"
                     className="btn btn-sm btn-ghost btn-circle"
-                    style={{ width: 30, height: 30, padding: 0 }}
+                    style={{ padding: 0 }}
                     onClick={() => setSubImportTrack(track)}
                     title="导入外部字幕 (.srt / .vtt / .lrc / .ass)"
                   >
@@ -1159,7 +1159,7 @@ export function ItemDetailPage() {
                       href={`/tracks/${track.track_id}/subtitles/zh/download`}
                       download
                       className="btn btn-sm btn-ghost btn-circle"
-                      style={{ width: 30, height: 30, padding: 0 }}
+                      style={{ padding: 0 }}
                       title="下载中文字幕 (.srt)"
                     >
                       <Download size={13} />
@@ -1397,6 +1397,8 @@ export function ItemDetailPage() {
                 background: 'rgba(255, 255, 255, 0.02)',
                 gap: 8,
                 flexShrink: 0,
+                overflowX: 'auto',
+                whiteSpace: 'nowrap',
               }}
             >
               {[
